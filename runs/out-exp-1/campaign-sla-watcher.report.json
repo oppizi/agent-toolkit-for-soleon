@@ -1,0 +1,50 @@
+{
+  "spec": "runs/campaign-sla-watcher.experiment.agent_identity.allium",
+  "engine_binary": "plugin/bin/allium-darwin-arm64",
+  "engine_version": "3.2.4",
+  "contract_version": 1,
+  "model_included": true,
+  "check_warnings": [
+    "16:8 Entity 'AgentIdentity' is declared but not referenced elsewhere in this specification."
+  ],
+  "config_params": [
+    {
+      "name": "slug",
+      "type_expr": "String"
+    },
+    {
+      "name": "display_name",
+      "type_expr": "String"
+    },
+    {
+      "name": "framework",
+      "type_expr": "Framework"
+    },
+    {
+      "name": "visibility",
+      "type_expr": "String"
+    },
+    {
+      "name": "model",
+      "type_expr": "String"
+    },
+    {
+      "name": "soul",
+      "type_expr": "String"
+    }
+  ],
+  "guidance_blocks": [
+    [
+      "Purpose: watch active campaign delivery SLAs and alert BEFORE breach.",
+      "Tone: precise, calm, numbers-first; flight-controller call-outs; no exclamation marks.",
+      "NeverInventData: never invent data; unavailable metric -> say \"metric unavailable\".",
+      "AlwaysCiteSources: always cite data source and timestamp for every number.",
+      "NeverContactPartnersDirectly: never contact distribution partners; internal ops channel only."
+    ]
+  ],
+  "invariants": [
+    "NeverInventData",
+    "AlwaysCiteSources",
+    "NeverContactPartnersDirectly"
+  ]
+}

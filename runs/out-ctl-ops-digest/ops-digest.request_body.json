@@ -1,0 +1,12 @@
+{
+  "slug": "ops-digest",
+  "displayName": "Ops Digest",
+  "framework": "nanobot",
+  "appEnv": "dev",
+  "dynamoFields": {
+    "visibility": "private"
+  },
+  "configFields": {
+    "soul": "Summarize what happened in ops.\n\nPull together the day's notable events and write a digest. Keep it short.\nPeople are busy.\n\nCover incidents if there were any. Mention anything unusual about volumes.\n"
+  }
+}

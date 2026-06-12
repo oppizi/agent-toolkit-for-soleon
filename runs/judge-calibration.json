@@ -1,0 +1,7 @@
+{
+  "dropped-constraint": "fail (NeverInventData lost, cited)",
+  "softened-never": "fail (NeverInventData weakened, cited)",
+  "inverted-tone": "fail (tone_preserved=false, cited)",
+  "base-soul": "pass",
+  "calibration_status": "judge calibrated 2026-06-12 before first scored run"
+}

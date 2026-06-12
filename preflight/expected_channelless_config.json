@@ -1,0 +1,61 @@
+{
+  "_contract": "Golden fixture for bet-1 schema_match. See SCHEMA_CONTRACT.md in this directory for derivation, variable-field rules, and code citations. An allium-to-json output MATCHES iff: (1) every key in `required_exact` is present with exactly this value, (2) every key in `required_variable` is present and satisfies its rule, (3) NO key in `forbidden` is present, (4) no other keys are present unless listed in `optional`.",
+  "required_exact": {
+    "SK": "CONFIG",
+    "agentType": "slack",
+    "appId": "",
+    "secretName": "",
+    "runtimeArn": "",
+    "endpointId": "",
+    "slackAuthorized": false,
+    "registrationOpen": "false",
+    "visibility": "private"
+  },
+  "required_variable": {
+    "PK": "string matching ^APPENV#(dev|staging|prod)#AGENT#[a-z0-9-]+$ — compose via shared_keys.agent_pk(app_env, slug), never a raw literal",
+    "appEnv": "string, one of dev|staging|prod; must equal the {app_env} segment of PK",
+    "displayName": "non-empty string, 1-256 chars",
+    "framework": "string, one of maverick|nanobot|openclaw (lambda/ui_admin/index.py _FRAMEWORK_VALUES)",
+    "createdAt": "ISO-8601 UTC timestamp formatted %Y-%m-%dT%H:%M:%SZ"
+  },
+  "optional": {
+    "owner_sub": "Cognito sub of the creating caller — present when created via POST /agents with a JWT; server-controlled, never client-settable",
+    "createdBy": "caller email when resolvable from the JWT claims"
+  },
+  "forbidden": [
+    "channels",
+    "slackDefaultChannelId",
+    "soul",
+    "model",
+    "config",
+    "skills",
+    "tools",
+    "etag",
+    "slug",
+    "version",
+    "updatedAt",
+    "deployStatus",
+    "deployId",
+    "deployMode",
+    "deployStartedAt",
+    "deployStages",
+    "runtimeReady",
+    "currentCommitSha"
+  ],
+  "example_concrete_item": {
+    "PK": "APPENV#dev#AGENT#campaign-sla-watcher",
+    "SK": "CONFIG",
+    "appEnv": "dev",
+    "displayName": "Campaign SLA Watcher",
+    "framework": "maverick",
+    "agentType": "slack",
+    "appId": "",
+    "secretName": "",
+    "runtimeArn": "",
+    "endpointId": "",
+    "slackAuthorized": false,
+    "registrationOpen": "false",
+    "visibility": "private",
+    "createdAt": "2026-06-10T12:00:00Z"
+  }
+}

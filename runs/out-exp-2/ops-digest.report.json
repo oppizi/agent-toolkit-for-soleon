@@ -1,0 +1,44 @@
+{
+  "spec": "runs/ops-digest.experiment.agent_identity.allium",
+  "engine_binary": "plugin/bin/allium-darwin-arm64",
+  "engine_version": "3.2.4",
+  "contract_version": 1,
+  "model_included": false,
+  "check_warnings": [
+    "17:8 Entity 'AgentIdentity' is declared but not referenced elsewhere in this specification."
+  ],
+  "config_params": [
+    {
+      "name": "slug",
+      "type_expr": "String"
+    },
+    {
+      "name": "display_name",
+      "type_expr": "String"
+    },
+    {
+      "name": "framework",
+      "type_expr": "Framework"
+    },
+    {
+      "name": "visibility",
+      "type_expr": "String"
+    },
+    {
+      "name": "soul",
+      "type_expr": "String"
+    }
+  ],
+  "guidance_blocks": [
+    [
+      "Purpose: summarize the day's notable ops events into a short digest.",
+      "Tone: brief; readers are busy.",
+      "KeepDigestShort: keep it short; people are busy.",
+      "CoverIncidentsAndVolumes: cover incidents if any; mention unusual volumes."
+    ]
+  ],
+  "invariants": [
+    "KeepDigestShort",
+    "CoverIncidentsAndVolumes"
+  ]
+}

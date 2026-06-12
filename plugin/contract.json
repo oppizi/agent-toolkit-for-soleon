@@ -1,0 +1,73 @@
+{
+  "app_env_pattern": "^[a-z][a-z0-9-]{1,20}$",
+  "app_envs": [
+    "dev",
+    "staging",
+    "prod"
+  ],
+  "config_allowed": [
+    "config",
+    "skills",
+    "soul"
+  ],
+  "contract_version": 1,
+  "display_name": {
+    "max_len": 256,
+    "must_be_nonempty_stripped": true
+  },
+  "dynamo_allowed": [
+    "displayName",
+    "framework",
+    "grantUsers",
+    "registrationOpen",
+    "revokeUsers",
+    "slackDefaultChannelId",
+    "visibility"
+  ],
+  "engine_version": "3.2.4",
+  "framework_glosses": {
+    "maverick": "Oppizi's in-house framework \u2014 the default choice; pick this unless told otherwise.",
+    "nanobot": "Lightweight third-party framework for minimal single-purpose agents.",
+    "openclaw": "Full-featured third-party framework matching the OpenClaw reference implementation."
+  },
+  "frameworks": [
+    "maverick",
+    "nanobot",
+    "openclaw"
+  ],
+  "max_soul_bytes": 262144,
+  "model_aliases": [
+    "fable",
+    "opus",
+    "sonnet",
+    "haiku",
+    "inherit",
+    "default"
+  ],
+  "pk_template": "APPENV#{app_env}#AGENT#{slug}",
+  "projection_constants": {
+    "SK": "CONFIG",
+    "agentType": "slack",
+    "appId": "",
+    "endpointId": "",
+    "registrationOpen": "false",
+    "runtimeArn": "",
+    "secretName": "",
+    "slackAuthorized": false,
+    "visibility": "private"
+  },
+  "slug_pattern": "^[a-z0-9][a-z0-9-]{0,62}[a-z0-9]$",
+  "source": {
+    "files": [
+      "lambda/ui_admin/index.py",
+      "scripts/agent_manager/registry.py",
+      "shared_keys.py"
+    ],
+    "repo": "oppizi/agent-infra"
+  },
+  "visibility_values": [
+    "private",
+    "public",
+    "restricted"
+  ]
+}

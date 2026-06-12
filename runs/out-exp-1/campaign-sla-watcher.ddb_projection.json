@@ -1,0 +1,16 @@
+{
+  "PK": "APPENV#dev#AGENT#campaign-sla-watcher",
+  "appEnv": "dev",
+  "displayName": "Campaign SLA Watcher",
+  "framework": "maverick",
+  "createdAt": "2026-06-12T16:45:16Z",
+  "SK": "CONFIG",
+  "agentType": "slack",
+  "appId": "",
+  "endpointId": "",
+  "registrationOpen": "false",
+  "runtimeArn": "",
+  "secretName": "",
+  "slackAuthorized": false,
+  "visibility": "private"
+}

@@ -1,0 +1,5 @@
+{
+  "_meta": "Pre-registered 2026-06-12 BEFORE any distill/elicit run. Keyed by canonical gap-id. An elicit question matching no key is an automatic run finding (markdown-answerable or hallucinated gap) — never improvised-answered.",
+  "_expected_questions": ["framework"],
+  "framework": "maverick"
+}

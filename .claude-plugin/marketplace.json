@@ -1,0 +1,13 @@
+{
+  "name": "agent-toolkit-for-soleon",
+  "owner": {
+    "name": "Oppizi — Soleon Headless Toolkit"
+  },
+  "plugins": [
+    {
+      "name": "soleon-deploy-agent",
+      "source": "./plugin",
+      "description": "Deploy a local Claude Code agent identity to agent-infra: identity markdown → Allium spec → validated POST /agents JSON. Offline; nothing is deployed without you."
+    }
+  ]
+}

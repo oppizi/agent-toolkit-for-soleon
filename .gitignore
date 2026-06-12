@@ -1,0 +1,17 @@
+# Internal bet review/results docs — never committed to this repository
+PLAN.md
+PROPOSAL.md
+
+# Local run scratch outputs
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Internal-content exclusions for the public repository (kept locally as bet telemetry)
+samples/soleon-fde-real.md
+transcripts/soleon-fde-real.*
+runs/soleon-fde-real.*
+runs/out-exp-4/
+runs/out-ctl-soleon-fde/
+runs/judge-fidelity-verdicts.json
+preflight/SCHEMA_CONTRACT.md

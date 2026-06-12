@@ -1,0 +1,24 @@
+{
+  "sample": "samples/campaign-sla-watcher.md",
+  "arm": "experiment",
+  "skill_steps": [
+    "selfcheck:pass",
+    "read",
+    "distill",
+    "elicit",
+    "check",
+    "convert",
+    "echo"
+  ],
+  "elicit": [
+    {
+      "gap_id": "framework",
+      "question": "Your agent file's frontmatter has no `framework` key (Claude Code agent definitions never carry one), and the platform requires one of maverick | nanobot | openclaw. maverick: Oppizi's in-house framework \u2014 the default choice. nanobot: lightweight, for minimal single-purpose agents. openclaw: full-featured, matches the OpenClaw reference. Which framework should campaign-sla-watcher deploy on?",
+      "citation": "frontmatter keys present: name, description, model, color \u2014 no framework key",
+      "answer_source": "scripted:transcripts/campaign-sla-watcher.answers.json",
+      "answer": "maverick"
+    }
+  ],
+  "unmatched_questions": [],
+  "notes": "model frontmatter is an explicit Bedrock catalog id (us.anthropic.claude-opus-4-6-v1) -> passed through without a question. All other deploy fields derivable from the file."
+}

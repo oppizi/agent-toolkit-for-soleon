@@ -1,0 +1,5 @@
+{
+  "questions_audited": 6,
+  "bar2_violations": 0,
+  "detail": "every question targets a missing framework key (x4), a contradiction (x1), or an unusable slug (x1)"
+}

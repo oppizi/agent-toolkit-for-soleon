@@ -1,0 +1,28 @@
+{
+  "sample": "samples/ops-digest.md",
+  "arm": "control",
+  "skill_steps": [
+    "read",
+    "elicit",
+    "emit-direct",
+    "echo"
+  ],
+  "elicit": [
+    {
+      "gap_id": "slug",
+      "question": "The frontmatter name `ops_digest` cannot be used as the deploy slug \u2014 the platform pattern ^[a-z0-9][a-z0-9-]{0,62}[a-z0-9]$ forbids underscores. Shall I use `ops-digest`?",
+      "citation": "frontmatter: name: ops_digest \u2014 underscore violates SLUG_PATTERN",
+      "answer_source": "scripted:transcripts/ops-digest.answers.json",
+      "answer": "ops-digest"
+    },
+    {
+      "gap_id": "framework",
+      "question": "The file's frontmatter has no `framework` key; the platform requires one of maverick | nanobot | openclaw (glosses per contract.json). Which framework should ops-digest deploy on?",
+      "citation": "frontmatter keys present: name, model \u2014 no framework key",
+      "answer_source": "scripted:transcripts/ops-digest.answers.json",
+      "answer": "nanobot"
+    }
+  ],
+  "unmatched_questions": [],
+  "notes": "model: fable is a Claude Code alias -> DROPPED without a question (the file answers the question; the answer is unusable as a catalog id). Recorded as spec comment. No description field; purpose derived from body. Identity is thin but determinable - no vague-identity question warranted. CONTROL: no Allium spec, no check gate, no mechanical constraint extraction; JSON emitted directly."
+}

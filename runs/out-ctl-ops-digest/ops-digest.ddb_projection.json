@@ -1,0 +1,16 @@
+{
+  "PK": "APPENV#dev#AGENT#ops-digest",
+  "appEnv": "dev",
+  "displayName": "Ops Digest",
+  "framework": "nanobot",
+  "createdAt": "2026-06-12T16:48:32Z",
+  "SK": "CONFIG",
+  "agentType": "slack",
+  "appId": "",
+  "secretName": "",
+  "runtimeArn": "",
+  "endpointId": "",
+  "slackAuthorized": false,
+  "registrationOpen": "false",
+  "visibility": "private"
+}

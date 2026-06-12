@@ -1,0 +1,6 @@
+{
+  "_meta": "Pre-registered 2026-06-12 BEFORE any distill/elicit run. inventory-reconciler is the contradiction sample: 'never write to the production inventory database' (Operating rules) vs workflow step 4 'auto-correct the production inventory database'. Elicit must surface it quoting BOTH passages.",
+  "_expected_questions": ["framework", "contradiction-1"],
+  "framework": "maverick",
+  "contradiction-1": "Read-only wins. Step 4 must emit a PROPOSED correction for human approval instead of writing to the database. Amend the soul accordingly and keep the never-write constraint."
+}

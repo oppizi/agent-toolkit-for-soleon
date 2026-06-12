@@ -1,0 +1,28 @@
+{
+  "sample": "samples/inventory-reconciler.md",
+  "arm": "control",
+  "skill_steps": [
+    "read",
+    "elicit",
+    "emit-direct",
+    "echo"
+  ],
+  "elicit": [
+    {
+      "gap_id": "contradiction-1",
+      "question": "Your file contradicts itself. Operating rules say: 'You are a READ-ONLY auditor: never write to the production inventory database under any circumstances.' But Reconciliation workflow step 4 says: 'For deltas under 2%, auto-correct the production inventory database to the warehouse value so the systems stay in sync.' Which behavior should the deployed agent have?",
+      "citation": "Operating rules bullet 1 vs Reconciliation workflow step 4 \u2014 direct write prohibition vs instructed write",
+      "answer_source": "scripted:transcripts/inventory-reconciler.answers.json",
+      "answer": "Read-only wins. Step 4 must emit a PROPOSED correction for human approval instead of writing to the database. Amend the soul accordingly and keep the never-write constraint."
+    },
+    {
+      "gap_id": "framework",
+      "question": "The file's frontmatter has no `framework` key; the platform requires one of maverick | nanobot | openclaw (glosses per contract.json). Which framework should inventory-reconciler deploy on?",
+      "citation": "frontmatter keys present: name, description, color \u2014 no framework key",
+      "answer_source": "scripted:transcripts/inventory-reconciler.answers.json",
+      "answer": "maverick"
+    }
+  ],
+  "unmatched_questions": [],
+  "notes": "Soul is NOT verbatim: workflow step 4 amended per the contradiction resolution. Judge must verify NeverWriteProductionDb is preserved AND the amendment matches the resolution. CONTROL: no Allium spec, no check gate, no mechanical constraint extraction; JSON emitted directly."
+}

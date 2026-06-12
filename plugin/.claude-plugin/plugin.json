@@ -1,0 +1,16 @@
+{
+  "name": "soleon-deploy-agent",
+  "description": "Convert a local Claude Code agent identity (.claude/agents/<name>.md) into a validated, deploy-ready agent-infra POST /agents request via an Allium specification. Distill, elicit gaps, validate offline. Does NOT call any live API.",
+  "version": "0.1.0",
+  "author": {
+    "name": "Oppizi — Soleon Headless Toolkit (bet-1)"
+  },
+  "keywords": [
+    "agent-deployment",
+    "allium",
+    "agent-infra",
+    "soleon",
+    "identity-to-config"
+  ],
+  "license": "MIT (bundled allium engine also MIT, see LICENSES/)"
+}

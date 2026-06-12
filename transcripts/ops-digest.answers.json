@@ -1,0 +1,6 @@
+{
+  "_meta": "Pre-registered 2026-06-12 BEFORE any distill/elicit run. ops-digest is the gappy sample: frontmatter name has an underscore (slug-invalid), no description, model is the `fable` alias (must be dropped WITHOUT a question — the file answers it, the answer is just unusable).",
+  "_expected_questions": ["framework", "slug"],
+  "framework": "nanobot",
+  "slug": "ops-digest"
+}

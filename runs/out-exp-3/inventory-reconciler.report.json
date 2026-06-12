@@ -1,0 +1,44 @@
+{
+  "spec": "runs/inventory-reconciler.experiment.agent_identity.allium",
+  "engine_binary": "plugin/bin/allium-darwin-arm64",
+  "engine_version": "3.2.4",
+  "contract_version": 1,
+  "model_included": false,
+  "check_warnings": [
+    "16:8 Entity 'AgentIdentity' is declared but not referenced elsewhere in this specification."
+  ],
+  "config_params": [
+    {
+      "name": "slug",
+      "type_expr": "String"
+    },
+    {
+      "name": "display_name",
+      "type_expr": "String"
+    },
+    {
+      "name": "framework",
+      "type_expr": "Framework"
+    },
+    {
+      "name": "visibility",
+      "type_expr": "String"
+    },
+    {
+      "name": "soul",
+      "type_expr": "String"
+    }
+  ],
+  "guidance_blocks": [
+    [
+      "Purpose: audit flyer stock levels across warehouse and planner; report discrepancies.",
+      "Tone: terse and tabular; lead with the worst discrepancy.",
+      "NeverWriteProductionDb: READ-ONLY auditor; never write to the production inventory database.",
+      "FlagDiscrepanciesOver2Pct: flag any discrepancy over 2% with both systems' raw numbers."
+    ]
+  ],
+  "invariants": [
+    "NeverWriteProductionDb",
+    "FlagDiscrepanciesOver2Pct"
+  ]
+}
