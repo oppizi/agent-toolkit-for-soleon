@@ -208,4 +208,5 @@ Third-party open source projects this software bundles, adapts, or is informed
 by are attributed per their respective license in the [`NOTICE`](NOTICE) file:
 
 - **MIT** — spec engine [juxt/allium-tools](https://github.com/juxt/allium-tools) (bundled as the `allium` binary)
+- **MIT** — installed skills from [mattpocock/skills](https://github.com/mattpocock/skills) (`git-guardrails-claude-code`, `grill-with-docs`, `to-prd`)
 - **Apache-2.0** — packaging pattern adapted from [aws/agent-toolkit-for-aws](https://github.com/aws/agent-toolkit-for-aws)
