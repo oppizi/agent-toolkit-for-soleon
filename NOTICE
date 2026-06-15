@@ -1,0 +1,32 @@
+Copyright (c) 2026 Oppizi
+
+This Software includes software developed at Oppizi (https://www.oppizi.com/)
+and its use is subject to the included LICENSE file.
+
+This Software incorporates, adapts, or is informed by the following open
+source projects, grouped below by their respective license. Each project
+remains the property of its respective copyright holders and is governed by
+its own license terms.
+
+--------------------------------------------------------------------------------
+
+This Software bundles binary code from the following open source project,
+licensed under the MIT license (https://opensource.org/license/mit):
+
+allium-tools - https://github.com/juxt/allium-tools
+Copyright (c) 2026 JUXT Ltd.
+  Vendored as the `allium` engine binary at plugin/bin/allium-darwin-arm64,
+  built from tag v3.2.4 (commit 8e90f2e29740ef7203e1d36d1cdac5173366717b).
+  The verbatim MIT license and the binary's full provenance chain
+  (source tag, commit, sha256) ship in
+  plugin/LICENSES/allium-tools-MIT.txt.
+
+--------------------------------------------------------------------------------
+
+This Software adapts patterns from the following open source project,
+licensed under the Apache License 2.0
+(https://www.apache.org/licenses/LICENSE-2.0):
+
+agent-toolkit-for-aws - https://github.com/aws/agent-toolkit-for-aws
+Copyright Amazon.com, Inc. or its affiliates.
+  The plugin/harness packaging boundary is adapted from this project's layout.
