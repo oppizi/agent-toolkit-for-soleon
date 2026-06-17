@@ -34,6 +34,239 @@ def _load(path: Path) -> dict:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+# ---------------------------------------------------------------------------
+# Server-mirrored render helpers + structural validators. COPIED (not imported
+# from the converter) so the validator stays independent of converter bugs —
+# falsifiability is enforced by tests/test_validator_negative.py. The render
+# copies are guarded against the live source by test_skill_render_parity.
+# ---------------------------------------------------------------------------
+
+def _yaml_escape(s: str) -> str:
+    if s == "":
+        return '""'
+    if any(c in s for c in (":", "#", "\n", "\r", "\t")):
+        return json.dumps(s)
+    if s[0] in ("-", " ", "\t") or s[-1] in (" ", "\t"):
+        return json.dumps(s)
+    return s
+
+
+def _skill_to_markdown(skill: dict) -> str:
+    enabled_val = "true" if skill.get("enabled", True) else "false"
+    display_name = skill.get("name", "") or ""
+    lines = ["---", f"name: {skill['id']}"]
+    if display_name and display_name != skill["id"]:
+        lines.append(f"displayName: {_yaml_escape(display_name)}")
+    lines.extend([
+        f"description: {_yaml_escape(skill.get('description', '') or '')}",
+        f"enabled: {enabled_val}",
+        "---",
+        "",
+    ])
+    return "\n".join(lines) + (skill.get("content", "") or "")
+
+
+def _validate_skills_envelope(skills, contract: dict) -> list[str]:
+    errs: list[str] = []
+    if not isinstance(skills, list):
+        return ["configFields.skills must be a list"]
+    if len(skills) > contract["max_skills_per_agent"]:
+        errs.append(f"too many skills (max {contract['max_skills_per_agent']})")
+    skill_fields = set(contract["skill_fields"])
+    seen: set[str] = set()
+    for i, s in enumerate(skills):
+        if not isinstance(s, dict):
+            errs.append(f"skills[{i}] must be an object")
+            continue
+        unknown = set(s) - skill_fields
+        if unknown:
+            errs.append(f"skills[{i}] has unknown fields: {sorted(unknown)}")
+        for key in ("id", "name", "description", "content"):
+            if key in s and not isinstance(s[key], str):
+                errs.append(f"skills[{i}].{key} must be a string")
+        for key in ("id", "name"):
+            if not str(s.get(key, "")).strip():
+                errs.append(f"skills[{i}].{key} required")
+        if isinstance(s.get("id"), str):
+            if not re.match(contract["skill_slug_pattern"], s["id"]):
+                errs.append(f"skills[{i}].id {s['id']!r} invalid slug")
+            elif s["id"] in seen:
+                errs.append(f"duplicate skill id {s['id']!r}")
+            else:
+                seen.add(s["id"])
+        if "enabled" in s and not isinstance(s["enabled"], bool):
+            errs.append(f"skills[{i}].enabled must be bool")
+        if isinstance(s.get("id"), str) and isinstance(s.get("name", ""), str):
+            try:
+                rendered = len(_skill_to_markdown(s).encode("utf-8"))
+                if rendered > contract["max_skill_bytes"]:
+                    errs.append(
+                        f"skills[{i}] renders to {rendered} bytes; cap {contract['max_skill_bytes']}"
+                    )
+            except Exception:  # noqa: BLE001 — malformed skill already reported above
+                pass
+    return errs
+
+
+def _validate_config_envelope(cfg, contract: dict) -> list[str]:
+    errs: list[str] = []
+    if not isinstance(cfg, dict):
+        return ["configFields.config must be an object"]
+    if "schedules" in cfg:
+        errs.append("config.schedules is unsupported in this version (deferred) — must be omitted")
+    if len(json.dumps(cfg).encode("utf-8")) > contract["max_config_bytes"]:
+        errs.append(f"config exceeds {contract['max_config_bytes']} bytes")
+    model_id = cfg.get("model")
+    if model_id is not None:
+        if not isinstance(model_id, str) or not model_id.strip():
+            errs.append("config.model must be a non-empty string")
+        elif model_id in set(contract["model_aliases"]):
+            errs.append(f"config.model {model_id!r} is a Claude Code alias — breaks at runtime")
+    g = cfg.get("guardrails")
+    if g is not None:
+        if not isinstance(g, dict):
+            errs.append("config.guardrails must be an object")
+        else:
+            for k in contract["guardrail_enabled_keys"]:
+                if k in g and not isinstance(g[k], bool):
+                    errs.append(f"config.guardrails.{k} must be boolean")
+            cf = g.get("contentFilters")
+            if isinstance(cf, dict):
+                for k, val in cf.items():
+                    if val not in contract["guardrail_strengths"]:
+                        errs.append(f"config.guardrails.contentFilters.{k}={val!r} bad strength")
+            pii = g.get("piiEntities")
+            if isinstance(pii, dict):
+                for k, val in pii.items():
+                    if val not in contract["pii_actions"]:
+                        errs.append(f"config.guardrails.piiEntities.{k}={val!r} bad action")
+            rgx = g.get("regexFilters")
+            if isinstance(rgx, list):
+                for i, r in enumerate(rgx):
+                    if isinstance(r, dict) and "action" in r and r["action"] not in contract["regex_actions"]:
+                        errs.append(f"config.guardrails.regexFilters[{i}].action bad")
+            if "requiredTopics" in g:
+                rt = g["requiredTopics"]
+                if not isinstance(rt, list) or not all(isinstance(t, str) and t.strip() for t in rt):
+                    errs.append("config.guardrails.requiredTopics must be non-empty strings")
+            if "requiredTopicsStrictness" in g and g["requiredTopicsStrictness"] not in contract["required_topic_strictness"]:
+                errs.append("config.guardrails.requiredTopicsStrictness bad value")
+    if "promptCaching" in cfg and not isinstance(cfg["promptCaching"], bool):
+        errs.append("config.promptCaching must be a boolean")
+    if "promptCacheTtl" in cfg and cfg["promptCacheTtl"] not in contract["prompt_cache_ttl_values"]:
+        errs.append(f"config.promptCacheTtl must be one of {contract['prompt_cache_ttl_values']}")
+    if "user_schedules_enabled" in cfg and not isinstance(cfg["user_schedules_enabled"], bool):
+        errs.append("config.user_schedules_enabled must be a boolean")
+    tools = cfg.get("tools")
+    if tools is not None:
+        if isinstance(tools, list):
+            for entry in tools:
+                if not isinstance(entry, dict) or not isinstance(entry.get("id"), str) or not entry.get("id"):
+                    errs.append("config.tools list entries must be {id: str}")
+                    continue
+                if "subagent" in entry and not isinstance(entry["subagent"], bool):
+                    errs.append("config.tools[].subagent must be bool")
+                if "systemPrompt" in entry and not isinstance(entry["systemPrompt"], str):
+                    errs.append("config.tools[].systemPrompt must be a string")
+                ov = entry.get("upstreamOverrides")
+                if ov is not None:
+                    if not isinstance(ov, dict):
+                        errs.append("config.tools[].upstreamOverrides must be an object")
+                    else:
+                        for un, uv in ov.items():
+                            if not isinstance(un, str) or not un or not isinstance(uv, dict):
+                                errs.append("config.tools[].upstreamOverrides bad entry")
+                                continue
+                            if uv.get("type") is not None and uv["type"] not in contract["tool_upstream_override_types"]:
+                                errs.append("config.tools[].upstreamOverrides.type bad")
+                            if uv.get("approval") is not None and not isinstance(uv["approval"], bool):
+                                errs.append("config.tools[].upstreamOverrides.approval must be bool")
+                            if uv.get("enabled") is not None and not isinstance(uv["enabled"], bool):
+                                errs.append("config.tools[].upstreamOverrides.enabled must be bool")
+        elif isinstance(tools, dict):
+            allow = tools.get("mcpToolAllowlist")
+            if allow is not None:
+                if not isinstance(allow, dict):
+                    errs.append("config.tools.mcpToolAllowlist must be an object")
+                else:
+                    for iid, names in allow.items():
+                        if not isinstance(iid, str) or not iid:
+                            errs.append("config.tools.mcpToolAllowlist keys must be non-empty strings")
+                        elif not isinstance(names, list) or not all(isinstance(n, str) and n for n in names):
+                            errs.append(f"config.tools.mcpToolAllowlist[{iid}] bad")
+        else:
+            errs.append("config.tools must be an object or list of tool refs")
+    evals = cfg.get("evals")
+    if evals is not None:
+        if not isinstance(evals, dict):
+            errs.append("config.evals must be an object")
+        else:
+            items = evals.get("standardEvals")
+            if items is not None:
+                if not isinstance(items, list):
+                    errs.append("config.evals.standardEvals must be a list")
+                else:
+                    seen_ev: set[str] = set()
+                    for i, ev in enumerate(items):
+                        loc = f"config.evals.standardEvals[{i}]"
+                        if not isinstance(ev, dict):
+                            errs.append(f"{loc} must be an object")
+                            continue
+                        if not isinstance(ev.get("id"), str) or not ev["id"]:
+                            errs.append(f"{loc}.id required")
+                        elif ev["id"] in seen_ev:
+                            errs.append(f"{loc}.id duplicate")
+                        else:
+                            seen_ev.add(ev["id"])
+                        nm = ev.get("name")
+                        if not isinstance(nm, str) or not nm:
+                            errs.append(f"{loc}.name required")
+                        elif len(nm) > contract["eval_name_max"]:
+                            errs.append(f"{loc}.name too long")
+                        if "inputs" in ev:
+                            inp = ev["inputs"]
+                            if not isinstance(inp, list) or not inp:
+                                errs.append(f"{loc}.inputs must be a non-empty list")
+                            else:
+                                for j, turn in enumerate(inp):
+                                    if not isinstance(turn, dict):
+                                        errs.append(f"{loc}.inputs[{j}] must be an object")
+                                    elif turn.get("role") not in contract["eval_turn_roles"]:
+                                        errs.append(f"{loc}.inputs[{j}].role bad")
+                                    elif not isinstance(turn.get("content"), str):
+                                        errs.append(f"{loc}.inputs[{j}].content must be a string")
+                                if isinstance(inp[-1], dict) and inp[-1].get("role") != "user":
+                                    errs.append(f"{loc}.inputs final turn must be role='user'")
+                        elif "inputPrompt" in ev:
+                            if not isinstance(ev["inputPrompt"], str):
+                                errs.append(f"{loc}.inputPrompt must be a string")
+                        else:
+                            errs.append(f"{loc} must have inputs or inputPrompt")
+                        if not isinstance(ev.get("expectedOutput"), str):
+                            errs.append(f"{loc}.expectedOutput must be a string")
+                        sc = ev.get("scoringMode")
+                        if sc not in contract["eval_scoring_modes"]:
+                            errs.append(f"{loc}.scoringMode bad")
+                        elif sc == "score" and "scoreThreshold" in ev:
+                            t = ev["scoreThreshold"]
+                            if not isinstance(t, (int, float)) or isinstance(t, bool) or t < 0 or t > 100:
+                                errs.append(f"{loc}.scoreThreshold must be a number in [0,100]")
+                        jm = ev.get("judgeModel")
+                        if jm is not None and jm not in contract["eval_judge_model_allowlist"]:
+                            errs.append(f"{loc}.judgeModel not in allowlist")
+                        etc = ev.get("expectedToolCalls")
+                        if etc is not None:
+                            if not isinstance(etc, list):
+                                errs.append(f"{loc}.expectedToolCalls must be a list")
+                            else:
+                                for j, call in enumerate(etc):
+                                    if not isinstance(call, dict) or not isinstance(call.get("name"), str) or not call["name"]:
+                                        errs.append(f"{loc}.expectedToolCalls[{j}].name required")
+                                    elif "args" in call and not isinstance(call["args"], dict):
+                                        errs.append(f"{loc}.expectedToolCalls[{j}].args must be an object")
+    return errs
+
+
 def validate_projection(projection: dict, fixture: dict, contract: dict) -> list[str]:
     errors: list[str] = []
 
@@ -134,17 +367,15 @@ def validate_envelope(body: dict, contract: dict) -> list[str]:
         bad = set(config) - set(contract["config_allowed"])
         if bad:
             errors.append(f"configFields keys {sorted(bad)} not in _CONFIG_ALLOWED")
-        model_id = (config.get("config") or {}).get("model") if isinstance(config.get("config"), dict) else None
-        if model_id in set(contract["model_aliases"]):
-            errors.append(
-                f"config.model {model_id!r} is a Claude Code alias — registers cleanly, "
-                "breaks at runtime"
-            )
         soul = config.get("soul")
         if not isinstance(soul, str) or not soul.strip():
             errors.append("configFields.soul missing or empty")
         elif len(soul.encode("utf-8")) > contract["max_soul_bytes"]:
             errors.append("soul exceeds 256KB byte cap")
+        if "config" in config:
+            errors.extend(_validate_config_envelope(config["config"], contract))
+        if "skills" in config:
+            errors.extend(_validate_skills_envelope(config["skills"], contract))
 
     for field in ("slug", "displayName", "framework", "appEnv"):
         if not isinstance(body.get(field), str) or not body.get(field, "").strip():

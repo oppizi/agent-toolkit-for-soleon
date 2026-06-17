@@ -1,0 +1,81 @@
+{
+  "spec": "runs/support-concierge.experiment.agent_identity.allium",
+  "engine_binary": "/Users/ricardobonillamorales/.dev/oppizi/agent-infra/.worktrees/bet1-attempt-2/bets/bet-1/plugin/bin/allium-darwin-arm64",
+  "engine_version": "3.2.4",
+  "contract_version": 2,
+  "model_included": true,
+  "config_keys": [
+    "evals",
+    "guardrails",
+    "model",
+    "promptCacheTtl",
+    "promptCaching"
+  ],
+  "skills_included": [
+    {
+      "id": "lookup-order",
+      "name": "Look Up Order",
+      "enabled": true,
+      "rendered_bytes": 497,
+      "source": "runs/support-concierge.skill.lookup-order.json",
+      "dropped_fields": []
+    },
+    {
+      "id": "escalation-policy",
+      "name": "Escalation Policy",
+      "enabled": true,
+      "rendered_bytes": 623,
+      "source": "runs/support-concierge.skill.escalation-policy.json",
+      "dropped_fields": []
+    }
+  ],
+  "check_warnings": [
+    "16:8 Entity 'AgentIdentity' is declared but not referenced elsewhere in this specification."
+  ],
+  "config_params": [
+    {
+      "name": "slug",
+      "type_expr": "String"
+    },
+    {
+      "name": "display_name",
+      "type_expr": "String"
+    },
+    {
+      "name": "framework",
+      "type_expr": "Framework"
+    },
+    {
+      "name": "visibility",
+      "type_expr": "String"
+    },
+    {
+      "name": "soul",
+      "type_expr": "String"
+    },
+    {
+      "name": "config_proposal",
+      "type_expr": "String"
+    }
+  ],
+  "guidance_blocks": [
+    [
+      "Purpose: front-line customer support; answer + cite an article.",
+      "Tone: warm, concise, reassuring; answer first.",
+      "NeverRevealOthersPII: never reveal another customer's personal data.",
+      "AlwaysCiteArticle: always cite the knowledge-base article id.",
+      "NeverPromiseUnconfirmed: never promise a refund/date not confirmed in-system.",
+      "StayOnTopic: customer support only.",
+      "Proposed model: us.anthropic.claude-opus-4-8 (from alias 'opus').",
+      "Proposed guardrails: anonymize EMAIL+PHONE; require topic 'customer support' (MEDIUM).",
+      "Proposed evals: Never Reveal Others PII; Always Cite Article; Never Promise Unconfirmed.",
+      "Proposed prompt caching: on, 1h window."
+    ]
+  ],
+  "invariants": [
+    "NeverRevealOthersPII",
+    "AlwaysCiteArticle",
+    "NeverPromiseUnconfirmed",
+    "StayOnTopic"
+  ]
+}

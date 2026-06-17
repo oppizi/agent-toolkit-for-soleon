@@ -10,7 +10,7 @@
     "skills",
     "soul"
   ],
-  "contract_version": 1,
+  "contract_version": 2,
   "display_name": {
     "max_len": 256,
     "must_be_nonempty_stripped": true
@@ -25,6 +25,20 @@
     "visibility"
   ],
   "engine_version": "3.2.4",
+  "eval_judge_model_allowlist": [
+    "claude-haiku-4-5-20251001",
+    "claude-sonnet-4-6",
+    "claude-opus-4-7"
+  ],
+  "eval_name_max": 80,
+  "eval_scoring_modes": [
+    "pass_fail",
+    "score"
+  ],
+  "eval_turn_roles": [
+    "user",
+    "agent"
+  ],
   "framework_glosses": {
     "maverick": "Oppizi's in-house framework \u2014 the default choice; pick this unless told otherwise.",
     "nanobot": "Lightweight third-party framework for minimal single-purpose agents.",
@@ -35,7 +49,32 @@
     "nanobot",
     "openclaw"
   ],
+  "guardrail_enabled_keys": [
+    "enabled",
+    "contentEnabled",
+    "topicsEnabled",
+    "wordsEnabled",
+    "piiEnabled",
+    "regexEnabled",
+    "requiredTopicsEnabled"
+  ],
+  "guardrail_strengths": [
+    "HIGH",
+    "LOW",
+    "MEDIUM",
+    "NONE"
+  ],
+  "max_config_bytes": 262144,
+  "max_skill_bytes": 65536,
+  "max_skills_per_agent": 20,
   "max_soul_bytes": 262144,
+  "model_alias_map": {
+    "_note": "point-in-time suggestions (snapshot 2026-06); the elicit step MUST confirm against the live model catalog \u2014 these are NOT validated offline",
+    "fable": "us.anthropic.claude-fable-5",
+    "haiku": "us.anthropic.claude-haiku-4-5-20251001",
+    "opus": "us.anthropic.claude-opus-4-8",
+    "sonnet": "us.anthropic.claude-sonnet-4-6"
+  },
   "model_aliases": [
     "fable",
     "opus",
@@ -43,6 +82,11 @@
     "haiku",
     "inherit",
     "default"
+  ],
+  "pii_actions": [
+    "ANONYMIZE",
+    "BLOCK",
+    "NONE"
   ],
   "pk_template": "APPENV#{app_env}#AGENT#{slug}",
   "projection_constants": {
@@ -56,15 +100,41 @@
     "slackAuthorized": false,
     "visibility": "private"
   },
+  "prompt_cache_ttl_values": [
+    "5m",
+    "1h"
+  ],
+  "regex_actions": [
+    "ANONYMIZE",
+    "BLOCK"
+  ],
+  "required_topic_strictness": [
+    "HIGH",
+    "LOW",
+    "MEDIUM"
+  ],
+  "skill_fields": [
+    "content",
+    "description",
+    "enabled",
+    "id",
+    "name"
+  ],
+  "skill_slug_pattern": "^[a-z0-9][a-z0-9-]{0,49}$",
   "slug_pattern": "^[a-z0-9][a-z0-9-]{0,62}[a-z0-9]$",
   "source": {
     "files": [
       "lambda/ui_admin/index.py",
+      "lambda/ui_admin_agents/index.py",
       "scripts/agent_manager/registry.py",
       "shared_keys.py"
     ],
     "repo": "oppizi/agent-infra"
   },
+  "tool_upstream_override_types": [
+    "read",
+    "write"
+  ],
   "visibility_values": [
     "private",
     "public",

@@ -2,14 +2,22 @@
 
 Turn a local Claude Code agent definition (`.claude/agents/<name>.md`) into a
 **validated, deploy-ready agent-infra record** — without re-describing your
-agent in a web form. The skill distills your agent's identity into an Allium
-spec, asks only about genuine gaps the file can't answer, and emits the exact
-`POST /agents` request body plus the predicted DynamoDB CONFIG row.
+agent in a web form. The skill distills your agent's identity (soul + a
+proposed `config`) into an Allium spec, asks only about genuine gaps the file
+can't answer (and confirms the proposed config in plain language), and emits
+the exact `POST /agents` request body plus the predicted DynamoDB CONFIG row.
 
-**What this plugin does NOT do (v0.1 — PoC):** it does **not** call any live
-API, create agents in any environment, or deploy anything. The output is two
-validated JSON files you (or a later pipeline phase) submit. Visibility is
-emitted as `private` only in this slice; public visibility is out of scope.
+**v0.2 — what's now covered:** the request body carries the full `configFields`
+the No-channel create path accepts — `soul`, a distilled-then-confirmed `config`
+(model mapped from your alias, `evals` derived from your hard constraints,
+`guardrails` inferred from your safety language, prompt caching), and bundled
+`skills`. Every emitted field is validated offline against the live server
+rules (offline-green ⇒ live-200).
+
+**What this plugin does NOT do:** it does **not** call any live API, create
+agents, or deploy anything — the output is JSON you (or a later phase) submit.
+`config.schedules` and `config.tools` are deferred (no honest identity signal /
+a dependency the plugin avoids); visibility is `private` only in this slice.
 
 ## Install
 
@@ -36,10 +44,17 @@ Or from a local checkout of [oppizi/agent-toolkit-for-soleon](https://github.com
 /deploy-agent .claude/agents/my-agent.md
 ```
 
-The skill will: run a 2-second selfcheck → distill your identity file into an
-Allium spec → ask you only what the file cannot answer (typically one
-question: the target framework) → validate → write three files beside the
-spec:
+To also bundle local skills, name their directories:
+
+```
+/deploy-agent .claude/agents/my-agent.md --skill .claude/skills/cite-sources
+```
+
+The skill will: run a 2-second selfcheck → distill your identity file (soul +
+a proposed config) into an Allium spec → ask you only what the file cannot
+answer (the framework) and confirm the proposed config in plain language (the
+model mapping, guardrails, evals, prompt caching) plus a display name for each
+bundled skill → validate → write three files beside the spec:
 
 - `<slug>.request_body.json` — the `POST /agents` body (top-level
   `slug/displayName/framework/appEnv` + `dynamoFields` + `configFields`)
@@ -50,7 +65,8 @@ spec:
 Direct converter invocation (no LLM, spec already in hand):
 
 ```
-python3 skills/deploy-agent/assets/allium_to_json.py spec.allium --app-env dev --out-dir out/
+python3 skills/deploy-agent/assets/allium_to_json.py spec.allium --app-env dev --out-dir out/ \
+  --skill .claude/skills/cite-sources
 ```
 
 ## Supported platforms (bundled engine)
@@ -75,10 +91,16 @@ output contract is verified against 3.2.4 exactly). Set
 | Override | How | Default |
 |---|---|---|
 | Deploy target app env | skill argument / `--app-env` converter flag | `dev` |
-| Bedrock model id | state an explicit catalog id in your identity file or when asked; Claude Code aliases (`fable`, `haiku`, …) are always dropped | omitted — platform template default |
+| Bedrock model id | your frontmatter `model:` alias is mapped to a catalog id and **confirmed** at the elicit; aliases are never emitted raw | mapped from alias, or omitted (platform default) |
+| Config (model/evals/guardrails/prompt caching) | distilled from the identity, confirmed in plain language; nothing you must learn the schema for | proposed conservatively from honest signals only |
+| Skills | name local skill dirs with `--skill <path>` (repeatable); display name confirmed per skill | none bundled |
 | Framework | stated in the file or invocation → no question asked; otherwise one elicit turn | always asked (never silently defaulted) |
 | Engine version pin | `ALLIUM_ENGINE_UNPINNED=1` | pinned to `contract.json.engine_version` |
-| Visibility | not overridable in v0.1 — `private` only | `private` |
+| Visibility | not overridable in this slice — `private` only | `private` |
+
+> **Upgrading from v0.1:** the bundled `contract.json` is now version 2. A
+> stale v1 contract fails the selfcheck loudly (by design) — reinstall the
+> plugin so the converter and contract ship from the same bundle.
 
 ## Health check
 

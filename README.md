@@ -1,8 +1,8 @@
 # bet-1 — Agent-Identity → Allium → JSON Pipeline
 
-> **Status: Prototype (v0).** This is a proof-of-concept built to answer one
+> **Status: Prototype (v0.2).** This is a proof-of-concept built to answer one
 > question, offline, with evidence. It is not production software. It works —
-> 8/8 logged runs validated green, 66/66 tests passing — but it is the
+> 9 logged runs validated green, 99/99 tests passing — but it is the
 > *foundation we will extend*, not the finished product. Expect sharp edges,
 > a single supported platform for the bundled engine, and APIs that will
 > change as capabilities grow on top of it.
@@ -10,10 +10,11 @@
 Convert an **existing local Claude Code agent** (`.claude/agents/<name>.md`)
 into a **validated, deploy-ready agent-infra record** — without re-describing
 the agent in a web form. The pipeline distills the agent's identity markdown
-into an [Allium](https://github.com/juxt/allium-tools) specification, asks the
-user only about genuine gaps the file cannot answer, and emits the exact
-`POST /agents` request body plus the predicted DynamoDB CONFIG row, validated
-offline against a frozen schema oracle.
+(soul + a proposed `config`) into an [Allium](https://github.com/juxt/allium-tools)
+specification, asks the user only about genuine gaps the file cannot answer (and
+confirms the proposed config in plain language), bundles any operator-named
+skills, and emits the exact `POST /agents` request body plus the predicted
+DynamoDB CONFIG row, validated offline against a frozen schema oracle.
 
 ```
 .claude/agents/my-agent.md
@@ -72,11 +73,11 @@ agent-toolkit-for-soleon/
 │   ├── LICENSES/            MIT notice + binary provenance chain
 │   └── skills/deploy-agent/ the skill (SKILL.md state machine + converter assets)
 ├── preflight/               frozen correctness oracle (schema fixture + contract doc)
-├── harness/                 offline validator, judge rubric, 66 tests — never ships
-├── samples/                 3 authored identity files (a 4th real, unsanitized
-│                            sample was used in the experiment and kept internal)
+├── harness/                 offline validator, judge rubric, 99 tests — never ships
+├── samples/                 4 authored identity files (+ skill fixtures under
+│                            samples/skills/; a 5th real sample stayed internal)
 ├── transcripts/             pre-registered elicit answers + per-run transcripts
-├── runs/ + runs.jsonl       generated specs, outputs, judge verdicts, 8 logged runs
+├── runs/ + runs.jsonl       generated specs, outputs, judge verdicts, 9 logged runs
 └── (PLAN.md / PROPOSAL.md)  internal review + results docs — deliberately NOT
                              committed to this repository
 ```
@@ -140,7 +141,7 @@ Full usage, escape hatches, and troubleshooting: [`plugin/README.md`](plugin/REA
 
 ```bash
 ~/.asdf/installs/python/3.14.2/bin/python3 -m pytest harness/tests -o addopts=""
-# 66 passed
+# 99 passed
 ```
 
 (Any Python ≥3.10 with pytest works; `-o addopts=""` bypasses the parent
@@ -152,7 +153,7 @@ The suite is deliberately paranoid: the validator is proven falsifiable by
 deliberately corrupted souls it must reject, and the packaging boundary is
 verified behaviorally, not by convention.
 
-## What v0 deliberately does NOT do
+## What v0.2 deliberately does NOT do
 
 Managing expectations — these are design boundaries, not oversights:
 
@@ -160,10 +161,13 @@ Managing expectations — these are design boundaries, not oversights:
   `POST /agents` endpoint; the round-trip happens in a later phase.
 - **One bundled engine platform** (darwin-arm64). Others fall back to a
   version-pinned PATH install with a copy-paste recipe.
-- **Visibility is `private` only.** Public/restricted agents are out of scope
-  for this slice.
-- **Verbatim soul carriage.** The agent's system prompt travels byte-exact;
-  summarization, knowledge bases, evals, and MCP wiring are future capability.
+- **Visibility is `private` only.** Public/restricted agents are out of scope.
+- **`config.schedules` and `config.tools` deferred.** Schedules need faithful
+  cron validation (a third-party dep that would break the stdlib-only
+  guarantee); Claude Code's `tools:` are built-ins, not platform MCP refs — no
+  honest identity signal. Everything else in `config` (model, evals,
+  guardrails, prompt caching) is distilled + confirmed.
+- **Knowledge bases and MCP wiring** are future capability.
 - **The validation contract is a build-time snapshot** of platform source.
   At real distribution scale it must become server-published (named in
   the internal proposal as the product path).
@@ -177,8 +181,8 @@ v0 is the foundation. The seams for growth are already in place:
 | Live `POST /agents` round-trip + deploy status polling | the emitted request body (validated against the real envelope rules) |
 | CI cross-build of the engine for linux/x86_64 + linux/arm64 + darwin-x86_64 | the resolver's existing full-platform matrix (`engine.py`) |
 | Server-published validation contract with version handshake | `contract.json` + its drift test |
-| Structured behavior entities (knowledge, evals, guardrails) in the spec | the invariant/constraint carriage and the additive migration sketched in the internal proposal |
-| Governance-consumption scoring (the open Allium question) | the per-run constraint inventory in `<slug>.report.json` |
+| Knowledge bases + `config.tools` (MCP) + `config.schedules` distillation | the v0.2 config-distill-then-confirm seam (`config_proposal`) |
+| Governance-consumption scoring (the open Allium question) | the per-run constraint inventory + distilled evals in `<slug>.report.json` |
 | Engine swap (wasm or pure-Python) if the platform matrix bites | the `CliEngine` seam — a new implementation, not surgery |
 
 ## Contributing
@@ -191,7 +195,7 @@ This is an internal prototype in a bet worktree, so the loop is lightweight:
    `plugin/`; anything else is harness. The packaging tests enforce this.
 3. Regenerate the contract after touching platform validation code:
    `python3 harness/sync_contract.py` (the drift test fails loudly otherwise).
-4. All 66 tests green before handing off. New failure modes get a negative
+4. All 99 tests green before handing off. New failure modes get a negative
    test, not a workaround.
 
 ## License

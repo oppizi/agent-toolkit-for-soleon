@@ -1,0 +1,67 @@
+{
+  "sample": "samples/support-concierge.md",
+  "arm": "experiment",
+  "skill_steps": [
+    "selfcheck:pass",
+    "read",
+    "distill",
+    "elicit",
+    "bundle-skills",
+    "check",
+    "convert",
+    "echo"
+  ],
+  "elicit": [
+    {
+      "gap_id": "framework",
+      "question": "Frontmatter has no `framework` key; platform needs maverick|nanobot|openclaw.",
+      "citation": "frontmatter keys: name, description, model, color \u2014 no framework",
+      "answer_source": "scripted:transcripts/support-concierge.answers.json",
+      "answer": "maverick"
+    },
+    {
+      "gap_id": "config-model",
+      "question": "Your file says model: opus \u2014 deploy on us.anthropic.claude-opus-4-8? [confirm/other/omit]",
+      "citation": "frontmatter model: opus (a Claude Code alias, not a catalog id)",
+      "answer_source": "scripted",
+      "answer": "confirm us.anthropic.claude-opus-4-8"
+    },
+    {
+      "gap_id": "config-guardrails",
+      "question": "Proposed protections: anonymize EMAIL+PHONE; require topic 'customer support' (MEDIUM). Confirm?",
+      "citation": "soul: 'Never reveal another customer's personal data \u2014 email addresses, phone numbers'; 'Stay on topic: customer support only'",
+      "answer_source": "scripted",
+      "answer": "confirm"
+    },
+    {
+      "gap_id": "config-evals",
+      "question": "Proposed checks: Never Reveal Others PII; Always Cite Article; Never Promise Unconfirmed. Confirm all?",
+      "citation": "the three hard-constraint invariants distilled from the soul",
+      "answer_source": "scripted",
+      "answer": "confirm all three"
+    },
+    {
+      "gap_id": "config-prompt-caching",
+      "question": "Enable prompt caching to cut cost? Window?",
+      "citation": "not distilled \u2014 offered as a default",
+      "answer_source": "scripted",
+      "answer": "yes, 1h"
+    },
+    {
+      "gap_id": "skill-name:lookup-order",
+      "question": "Display name for skill `lookup-order`? (default: Lookup Order)",
+      "citation": "Claude Code SKILL.md has no name field; platform requires one",
+      "answer_source": "scripted",
+      "answer": "Look Up Order"
+    },
+    {
+      "gap_id": "skill-name:escalation-policy",
+      "question": "Display name for skill `escalation-policy`? (default: Escalation Policy)",
+      "citation": "Claude Code SKILL.md has no name field; platform requires one",
+      "answer_source": "scripted",
+      "answer": "Escalation Policy"
+    }
+  ],
+  "unmatched_questions": [],
+  "notes": "config DISTILLED then confirmed in plain language (model mapped from opus alias; evals from invariants; guardrails from PII+topic language). skills operator-supplied with per-skill name elicit. schedules/tools not proposed (no honest signal). soul carried byte-exact (post-frontmatter body)."
+}

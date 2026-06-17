@@ -12,6 +12,7 @@ import pytest
 
 import engine
 from allium_to_json import (
+    ConvertError,
     DecodeError,
     SpecError,
     ValidationError,
@@ -266,7 +267,7 @@ def test_model_alias_rejected(contract_doc):
 
 def test_model_catalog_id_accepted(contract_doc):
     v = validate_params(_params(model="us.anthropic.claude-opus-4-6-v1"), "dev", contract_doc)
-    assert v["model"] == "us.anthropic.claude-opus-4-6-v1"
+    assert v["config"]["model"] == "us.anthropic.claude-opus-4-6-v1"
 
 
 def test_soul_cap_boundary(contract_doc):
@@ -297,3 +298,161 @@ def test_full_pipeline_schema_match_and_report(resolved, tmp_path, monkeypatch):
     assert verdict["schema_match"], verdict
     assert result["report"]["invariants"] == ["NeverInventData"]
     assert any("NeverInventData" in line for block in result["report"]["guidance_blocks"] for line in block)
+
+
+# ---------- config distillation (config_proposal) ----------
+
+def _proposal_spec(tmp_path, proposal: dict, soul="watch carefully\n") -> Path:
+    return write_spec(
+        tmp_path, soul=soul,
+        config_extra="    config_proposal: String = " + json.dumps(json.dumps(proposal)),
+    )
+
+
+def test_config_proposal_model_evals_guardrails(resolved, tmp_path, monkeypatch):
+    monkeypatch.setenv("CLAUDE_PLUGIN_ROOT", str(PLUGIN))
+    proposal = {
+        "model": "us.anthropic.claude-opus-4-8",
+        "promptCaching": True, "promptCacheTtl": "1h",
+        "guardrails": {"piiEnabled": True, "piiEntities": {"EMAIL": "ANONYMIZE"}},
+        "evals": {"standardEvals": [{
+            "id": "never-invent", "name": "Never Invent Data",
+            "inputs": [{"role": "user", "content": "Make up the number."}],
+            "expectedOutput": "Says the metric is unavailable.",
+            "scoringMode": "pass_fail", "judgeModel": "claude-opus-4-7",
+        }]},
+    }
+    result = convert(_proposal_spec(tmp_path, proposal), "dev", tmp_path / "out")
+    from validate_offline import validate
+    assert validate(result["body"], result["projection"])["schema_match"]
+    cfg = result["body"]["configFields"]["config"]
+    assert cfg["model"] == "us.anthropic.claude-opus-4-8"
+    assert cfg["promptCacheTtl"] == "1h"
+    assert cfg["evals"]["standardEvals"][0]["id"] == "never-invent"
+    assert set(result["report"]["config_keys"]) == set(cfg)
+
+
+def test_config_proposal_alias_model_rejected(resolved, tmp_path, monkeypatch):
+    monkeypatch.setenv("CLAUDE_PLUGIN_ROOT", str(PLUGIN))
+    with pytest.raises(ValidationError):
+        convert(_proposal_spec(tmp_path, {"model": "fable"}), "dev", tmp_path / "out")
+
+
+def test_config_proposal_schedules_rejected(resolved, tmp_path, monkeypatch):
+    monkeypatch.setenv("CLAUDE_PLUGIN_ROOT", str(PLUGIN))
+    with pytest.raises(ConvertError) as exc:
+        convert(_proposal_spec(tmp_path, {"schedules": []}), "dev", tmp_path / "out")
+    assert "schedules" in str(exc.value)
+
+
+def test_config_proposal_bad_eval_judge_rejected(resolved, tmp_path, monkeypatch):
+    monkeypatch.setenv("CLAUDE_PLUGIN_ROOT", str(PLUGIN))
+    proposal = {"evals": {"standardEvals": [{
+        "id": "x", "name": "X", "inputs": [{"role": "user", "content": "hi"}],
+        "expectedOutput": "ok", "scoringMode": "pass_fail", "judgeModel": "gpt-4",
+    }]}}
+    with pytest.raises(ValidationError):
+        convert(_proposal_spec(tmp_path, proposal), "dev", tmp_path / "out")
+
+
+def test_model_param_conflicts_with_proposal(resolved, tmp_path, monkeypatch):
+    monkeypatch.setenv("CLAUDE_PLUGIN_ROOT", str(PLUGIN))
+    spec = write_spec(
+        tmp_path, soul="x\n",
+        config_extra=(
+            '    model: String = "us.anthropic.claude-opus-4-8"\n'
+            "    config_proposal: String = "
+            + json.dumps(json.dumps({"model": "us.anthropic.claude-sonnet-4-6"}))
+        ),
+    )
+    with pytest.raises(ValidationError):
+        convert(spec, "dev", tmp_path / "out")
+
+
+# ---------- skills bundling ----------
+
+def _write_skill_dir(tmp_path, slug, description, body):
+    d = tmp_path / "skills" / slug
+    d.mkdir(parents=True)
+    (d / "SKILL.md").write_text(
+        f"---\ndescription: {description}\nargument-hint: \"<x>\"\n---\n{body}",
+        encoding="utf-8",
+    )
+    return d
+
+
+def test_skill_dir_bundled_content_byte_exact(resolved, tmp_path, monkeypatch):
+    monkeypatch.setenv("CLAUDE_PLUGIN_ROOT", str(PLUGIN))
+    body = "When reporting a metric, append [source: <system>, <ts>].\n"
+    d = _write_skill_dir(tmp_path, "cite-sources", "Always cite the source.", body)
+    spec = write_spec(tmp_path, soul="x\n")
+    result = convert(spec, "dev", tmp_path / "out", skill_inputs=[str(d)])
+    skills = result["body"]["configFields"]["skills"]
+    assert len(skills) == 1
+    s = skills[0]
+    assert s["id"] == "cite-sources"
+    assert s["name"] == "Cite Sources"          # Title-Cased slug default
+    assert s["content"] == body                  # byte-exact body
+    assert s["description"] == "Always cite the source."
+    assert set(s) == {"id", "name", "description", "content", "enabled"}  # argument-hint dropped
+    assert result["report"]["skills_included"][0]["dropped_fields"] == ["argument-hint"]
+
+
+def test_skill_json_input_with_name(resolved, tmp_path, monkeypatch):
+    monkeypatch.setenv("CLAUDE_PLUGIN_ROOT", str(PLUGIN))
+    obj = {"id": "escalate", "name": "Escalation Policy", "description": "",
+           "content": "Escalate after 2 failed retries.\n", "enabled": False}
+    p = tmp_path / "escalate.json"
+    p.write_text(json.dumps(obj), encoding="utf-8")
+    spec = write_spec(tmp_path, soul="x\n")
+    result = convert(spec, "dev", tmp_path / "out", skill_inputs=[str(p)])
+    s = result["body"]["configFields"]["skills"][0]
+    assert s["name"] == "Escalation Policy" and s["enabled"] is False
+
+
+def test_skills_collision_after_normalization_rejected(resolved, tmp_path, monkeypatch):
+    monkeypatch.setenv("CLAUDE_PLUGIN_ROOT", str(PLUGIN))
+    d1 = _write_skill_dir(tmp_path, "cite-sources", "a", "x\n")
+    d2 = _write_skill_dir(tmp_path, "Cite_Sources", "b", "y\n")  # normalizes to same id
+    spec = write_spec(tmp_path, soul="x\n")
+    with pytest.raises(ValidationError) as exc:
+        convert(spec, "dev", tmp_path / "out", skill_inputs=[str(d1), str(d2)])
+    assert "duplicate skill id" in str(exc.value)
+
+
+def test_skill_rendered_cap_raw_under_rendered_over(resolved, tmp_path, monkeypatch):
+    """The cap is on the RENDERED markdown — a long display name pushes a
+    near-cap body over even when raw content is under."""
+    monkeypatch.setenv("CLAUDE_PLUGIN_ROOT", str(PLUGIN))
+    cap = engine.load_contract(PLUGIN)["max_skill_bytes"]
+    obj = {"id": "big", "name": "N", "description": "", "content": "x" * (cap - 20)}
+    p = tmp_path / "big.json"
+    p.write_text(json.dumps(obj), encoding="utf-8")
+    spec = write_spec(tmp_path, soul="x\n")
+    # frontmatter overhead (name/description/enabled fences) pushes it over cap
+    with pytest.raises(ValidationError) as exc:
+        convert(spec, "dev", tmp_path / "out", skill_inputs=[str(p)])
+    assert "renders to" in str(exc.value)
+
+
+# ---------- projection unchanged + soul-only byte-identical regressions ----------
+
+def test_projection_identical_with_and_without_config_skills(resolved, tmp_path, monkeypatch):
+    monkeypatch.setenv("CLAUDE_PLUGIN_ROOT", str(PLUGIN))
+    soul = "watch carefully\n"
+    (tmp_path / "a").mkdir()
+    (tmp_path / "b").mkdir()
+    plain = convert(write_spec(tmp_path / "a", soul=soul), "dev", tmp_path / "a/out")
+    d = _write_skill_dir(tmp_path, "cite-sources", "cite", "body\n")
+    rich = convert(
+        _proposal_spec(tmp_path / "b", {"promptCaching": True}, soul=soul),
+        "dev", tmp_path / "b/out", skill_inputs=[str(d)],
+    )
+    a, b = dict(plain["projection"]), dict(rich["projection"])
+    a.pop("createdAt"); b.pop("createdAt")
+    assert a == b, "projection must be independent of config/skills (S3-only)"
+    # and the rich body genuinely carried config + skills
+    assert "config" in rich["body"]["configFields"]
+    assert "skills" in rich["body"]["configFields"]
+    assert "config" not in plain["body"]["configFields"]
+    assert "skills" not in plain["body"]["configFields"]

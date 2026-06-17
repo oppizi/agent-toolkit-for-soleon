@@ -89,7 +89,14 @@ def load_contract(root: Path | None = None) -> dict:
         "contract_version", "engine_version", "pk_template", "slug_pattern",
         "app_envs", "dynamo_allowed", "config_allowed", "frameworks",
         "visibility_values", "max_soul_bytes", "display_name",
-        "model_aliases", "projection_constants",
+        "model_aliases", "model_alias_map", "projection_constants",
+        # v2 — skills + full config parity
+        "skill_fields", "skill_slug_pattern", "max_skill_bytes",
+        "max_skills_per_agent", "max_config_bytes", "prompt_cache_ttl_values",
+        "guardrail_strengths", "pii_actions", "regex_actions",
+        "required_topic_strictness", "guardrail_enabled_keys",
+        "eval_scoring_modes", "eval_turn_roles", "eval_judge_model_allowlist",
+        "eval_name_max", "tool_upstream_override_types",
     }
     missing = required - contract.keys()
     if missing:
@@ -98,10 +105,10 @@ def load_contract(root: Path | None = None) -> dict:
             "Fix: reinstall the plugin from its source. "
             "Maintainers: regenerate with harness/sync_contract.py."
         )
-    if contract["contract_version"] != 1:
+    if contract["contract_version"] != 2:
         raise ContractError(
             f"contract.json version {contract['contract_version']} is not supported "
-            "by this converter (expects 1). Fix: reinstall the plugin so the "
+            "by this converter (expects 2). Fix: reinstall the plugin so the "
             "converter and contract ship from the same bundle."
         )
     return contract

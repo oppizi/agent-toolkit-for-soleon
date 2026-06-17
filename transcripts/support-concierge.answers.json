@@ -1,0 +1,11 @@
+{
+  "_meta": "Pre-registered 2026-06-17 BEFORE distilling. Keyed by canonical gap-id. Config gap-ids confirm DISTILLED proposals in plain language (model mapping, guardrails, evals, prompt caching); skill-name gap-ids confirm the platform display name CC SKILL.md lacks. A question matching no gap-id is an automatic run finding.",
+  "_expected_questions": ["config-model", "config-guardrails", "config-evals", "config-prompt-caching", "skill-name:lookup-order", "skill-name:escalation-policy"],
+  "framework": "maverick",
+  "config-model": "confirm us.anthropic.claude-opus-4-8 (mapped from the `opus` alias)",
+  "config-guardrails": "confirm: anonymize EMAIL + PHONE; require topic 'customer support' at MEDIUM strictness",
+  "config-evals": "confirm all three (Never Reveal Others PII, Always Cite Article, Never Promise Unconfirmed)",
+  "config-prompt-caching": "yes, 1h window",
+  "skill-name:lookup-order": "Look Up Order",
+  "skill-name:escalation-policy": "Escalation Policy"
+}

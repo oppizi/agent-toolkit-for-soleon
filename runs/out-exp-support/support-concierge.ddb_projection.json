@@ -1,0 +1,16 @@
+{
+  "PK": "APPENV#dev#AGENT#support-concierge",
+  "appEnv": "dev",
+  "displayName": "Support Concierge",
+  "framework": "maverick",
+  "createdAt": "2026-06-17T23:41:06Z",
+  "SK": "CONFIG",
+  "agentType": "slack",
+  "appId": "",
+  "endpointId": "",
+  "registrationOpen": "false",
+  "runtimeArn": "",
+  "secretName": "",
+  "slackAuthorized": false,
+  "visibility": "private"
+}

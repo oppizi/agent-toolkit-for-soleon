@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-A prototype (v0) Claude Code plugin (`soleon-deploy-agent`) that converts an existing local agent identity file (`.claude/agents/<name>.md`) into a validated, deploy-ready `POST /agents` request for the Soleon/agent-infra platform — **offline, emitting JSON, never calling a live API**. The pipeline is: identity markdown → distill into an [Allium](https://github.com/juxt/allium-tools) spec → elicit only genuine gaps → validate against a frozen contract → emit three JSON files.
+A prototype (v0.2) Claude Code plugin (`soleon-deploy-agent`) that converts an existing local agent identity file (`.claude/agents/<name>.md`) into a validated, deploy-ready `POST /agents` request for the Soleon/agent-infra platform — **offline, emitting JSON, never calling a live API**. The pipeline is: identity markdown → distill (soul + a proposed `config`) into an [Allium](https://github.com/juxt/allium-tools) spec → elicit only genuine gaps + confirm the proposed config in plain language → bundle any operator-named `skills` → validate against a frozen contract → emit three JSON files. The full `configFields` the No-channel create path accepts (`soul`, `config`, `skills`) is emitted and faithfully validated offline.
 
 The work splits into an **LLM head** (the skill state machine, which does distillation/elicitation) and a **deterministic core** (a stdlib-only Python converter). The split is deliberate: the converter is the testable, reproducible part; the skill prose is the nondeterministic part.
 
@@ -25,7 +25,7 @@ samples/ runs/ transcripts/ runs.jsonl   ← experiment telemetry. NEVER ships.
 
 - **`plugin/skills/deploy-agent/assets/engine.py`** — `CliEngine`, the single seam to the `allium` binary. Resolution is bundled-binary-first (`bin/allium-{os}-{arch}`), PATH-fallback second; the PATH fallback is **version-pinned** to `contract.json`'s `engine_version` (override with `ALLIUM_ENGINE_UNPINNED=1`). Exposes `check`/`model`/`parse`/`selfcheck`. A future engine swap (wasm, pure-Python) is a new implementation of this module, not surgery elsewhere.
 
-- **`plugin/skills/deploy-agent/assets/allium_to_json.py`** — the deterministic converter. Pipeline order is load-bearing: `check` (gate on parsed `severity=="error"` only — the exit code is 1 even for warnings-only specs and is meaningless), then `model` (config params; hard-fail only if the `config` array is absent), then `parse` (`@guidance`/`invariant` walk, report-only), then local validation against `contract.json`, then emit. Produces `<slug>.request_body.json`, `<slug>.ddb_projection.json`, `<slug>.report.json`.
+- **`plugin/skills/deploy-agent/assets/allium_to_json.py`** — the deterministic converter. Pipeline order is load-bearing: `check` (gate on parsed `severity=="error"` only — the exit code is 1 even for warnings-only specs and is meaningless), then `model` (config params, incl. the JSON-escaped `config_proposal`; hard-fail only if the `config` array is absent), then `parse` (`@guidance`/`invariant` walk, report-only), then local validation against `contract.json` — incl. **full-parity** mirrors of the server's `_validate_config_fields` sub-validators (guardrails/evals/tools/scalars) and `_validate_skills` (with the 64 KB **rendered** cap) — then emit. Skills are operator-supplied via `--skill` (a `.claude/skills/<dir>/`, a `SKILL.md`, or a skill-object JSON), never distilled. `config.schedules` is rejected loudly (deferred). Produces `<slug>.request_body.json`, `<slug>.ddb_projection.json`, `<slug>.report.json`. The DDB projection is **independent of config/skills** (they are S3-only server-side) — regression-tested.
 
 - **`plugin/contract.json`** — the frozen platform-validation contract (slug pattern, allowed dynamo/config keys, frameworks, soul byte cap, model aliases, PK template, projection constants). **It is generated, not hand-edited** — see contract-as-data below.
 
@@ -34,11 +34,11 @@ samples/ runs/ transcripts/ runs.jsonl   ← experiment telemetry. NEVER ships.
 ### Two traps the code is built to avoid (know these before changing the converter or validator)
 
 1. **Offline-green / live-400 envelope nesting.** `slug`/`displayName`/`framework`/`appEnv` are **top-level** keys in the request body. Nesting them inside `dynamoFields` passes naive offline checks but 400s against the live API. `build_request_body` and `harness/validate_offline.py` both guard this.
-2. **Model alias leak.** Claude Code frontmatter `model:` values (`fable`, `opus`, `sonnet`, `haiku`, `inherit`, `default`) are **not** Bedrock catalog ids. They register cleanly and silently break the agent at runtime, so they are dropped (recorded in the report), never passed through. Only an explicit catalog id (contains a `.`) survives.
+2. **Model alias leak.** Claude Code frontmatter `model:` values (`fable`, `opus`, `sonnet`, `haiku`, `inherit`, `default`) are **not** Bedrock catalog ids — they register cleanly and silently break the agent at runtime. The skill head **maps** the alias to a catalog id via `contract.json` `model_alias_map` and **confirms it at the elicit** (the map is point-in-time and unverifiable offline, so confirmation is mandatory; `inherit`/`default`/unmapped → propose no model / ask). The converter and validator both **reject any raw alias** that reaches `config.model` — only an explicit catalog id survives.
 
 ## Contract-as-data — single source of truth
 
-`plugin/contract.json` is extracted from agent-infra platform **source text** (`lambda/ui_admin/index.py`, `scripts/agent_manager/registry.py`, `shared_keys.py`) by `harness/sync_contract.py`. After touching any platform validation logic, regenerate:
+`plugin/contract.json` (version 2) is extracted from agent-infra platform **source text** (`lambda/ui_admin/index.py` + its byte-identical split `lambda/ui_admin_agents/index.py` — both are extracted and asserted equal for dual-index parity, `scripts/agent_manager/registry.py`, `shared_keys.py`) by `harness/sync_contract.py`. It carries the skill caps, config sub-validator enums (guardrails/evals/tools), and a `model_alias_map`. After touching any platform validation logic, regenerate:
 
 ```bash
 python3 harness/sync_contract.py
@@ -63,7 +63,7 @@ Offline validation of generated output (harness):
 python3 harness/validate_offline.py <request_body.json> <ddb_projection.json>
 ```
 
-Run the full test suite (66 tests; 63 pass + 3 contract-drift skips outside the monorepo):
+Run the full test suite (99 tests; 93 pass + 6 contract-drift/render-parity skips outside the monorepo):
 ```bash
 ~/.asdf/installs/python/3.14.2/bin/python3 -m pytest harness/tests -o addopts=""
 ```
@@ -90,9 +90,11 @@ The suite is deliberately paranoid — match this when adding tests:
 
 The **soul-fidelity judge** (`harness/soul_fidelity.md`) is an LLM rubric, not code; it is calibrated against three deliberately corrupted souls in `harness/calibration/` that it must reject before any results count.
 
-## v0 scope boundaries (design decisions, not bugs)
+## v0.2 scope boundaries (design decisions, not bugs)
 
 - No live deployment — output stops at validated JSON.
 - One bundled engine platform: `darwin-arm64`. Other platforms fall back to a version-pinned `cargo install` of `allium-cli@v3.2.4`.
 - Visibility is `private` only.
-- Soul (system prompt) travels **byte-exact** — no summarization.
+- Soul (system prompt) and skill content travel **byte-exact** — no summarization.
+- `config` distillation covers **model, evals, guardrails, prompt caching** (distilled then confirmed). `config.schedules` (needs a third-party cron dep that would break stdlib-only) and `config.tools` (Claude Code `tools:` are built-ins, not platform MCP refs) are **deferred** — the converter rejects `schedules` loudly.
+- Skills are **operator-supplied** bundles (Claude Code has no `skills:` frontmatter key), with one elicit per skill for the display name the platform requires.

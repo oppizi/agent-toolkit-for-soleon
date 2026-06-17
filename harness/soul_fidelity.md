@@ -38,6 +38,33 @@ Per run, from validator output + report:
 4. `forbidden_key` — fail if the validator reports any forbidden/unlisted key.
 5. `envelope_nesting` — fail if the validator reports top-level fields nested
    in dynamoFields.
+6. `skill_content_carriage` (v0.2, MECHANICAL) — fail if any bundled skill's
+   `content`/`description` in `configFields.skills` diverges byte-for-byte from
+   its source `.claude/skills/<id>/SKILL.md` (body / frontmatter description).
+   Skills are carried verbatim like soul, so this is a diff, not a judgment.
+
+## config_fidelity (v0.2, LLM-judge — config IS inferred, so it needs judgment)
+
+Distilled `config` (model / evals / guardrails) is NOT verbatim — it is
+inferred from the identity, so a separate judge verdict is required. The judge
+sees the original identity markdown + the emitted `configFields.config` and
+records:
+
+```json
+{
+  "verdict": "pass | fail",
+  "model_mapping_ok": true,          // mechanical: alias → catalog id via the map (not invented)
+  "evals_trace_to_invariants": true, // each standardEval maps to a real hard-constraint invariant
+  "guardrails_supported_by_text": true, // each guardrail is clearly stated in the identity, no over-reach
+  "overreach": ["<any config item the identity does NOT support, cited>"],
+  "underreach": ["<any clear constraint with no corresponding eval/guardrail, cited>"]
+}
+```
+
+**Pass requires:** model mapping correct, every eval traceable to an invariant,
+every guardrail grounded in the identity text, and zero uncited over/under-reach.
+The confirm step is the runtime guard; this judge is the offline audit that the
+proposal faithfully reflected the identity.
 
 ## Negative calibration cases (the judge must FAIL each — F10)
 
