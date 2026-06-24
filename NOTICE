@@ -42,3 +42,9 @@ licensed under the Apache License 2.0
 agent-toolkit-for-aws - https://github.com/aws/agent-toolkit-for-aws
 Copyright Amazon.com, Inc. or its affiliates.
   The plugin/harness packaging boundary is adapted from this project's layout.
+
+omnigent - https://github.com/omnigent-ai/omnigent
+Copyright Omnigent AI.
+  The v1 Agent DSL vocabulary documented in CONTEXT.md is adopted from this
+  project's Agent YAML specification (docs/AGENT_YAML_SPEC.md). Terminology
+  only — no source code is incorporated.
