@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "soleon-agent-toolkit": {
+      "type": "http",
+      "url": "https://us33jh28gi.execute-api.us-east-1.amazonaws.com/prod/mcp",
+      "headers": {
+        "Authorization": "Bearer ${user_config.soleon_token}"
+      }
+    }
+  }
+}

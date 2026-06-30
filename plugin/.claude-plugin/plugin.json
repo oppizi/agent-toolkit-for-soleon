@@ -1,7 +1,7 @@
 {
   "name": "soleon-deploy-agent",
-  "description": "Convert a local Claude Code agent identity (.claude/agents/<name>.md) into a validated, deploy-ready agent-infra POST /agents request via an Allium specification. Distill, elicit gaps, validate offline. Does NOT call any live API.",
-  "version": "0.2.0",
+  "description": "Convert a local Claude Code agent identity (.claude/agents/<name>.md) into a validated, deploy-ready agent-infra POST /agents request via an Allium specification. Distill, elicit gaps, and validate fully offline; then deploy the confirmed assets via the Soleon MCP server.",
+  "version": "0.2.1",
   "author": {
     "name": "Oppizi — Soleon Headless Toolkit (bet-1)"
   },
@@ -12,5 +12,14 @@
     "soleon",
     "identity-to-config"
   ],
-  "license": "MIT (bundled allium engine also MIT, see LICENSES/)"
+  "license": "MIT (bundled allium engine also MIT, see LICENSES/)",
+  "userConfig": {
+    "soleon_token": {
+      "type": "string",
+      "title": "Soleon access token",
+      "description": "Temporal JWT for the Soleon MCP Server while the OAuth 2.1 infrastructure is built",
+      "sensitive": true,
+      "required": true
+    }
+  }
 }

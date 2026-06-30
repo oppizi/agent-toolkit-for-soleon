@@ -14,10 +14,30 @@ the No-channel create path accepts — `soul`, a distilled-then-confirmed `confi
 `skills`. Every emitted field is validated offline against the live server
 rules (offline-green ⇒ live-200).
 
-**What this plugin does NOT do:** it does **not** call any live API, create
-agents, or deploy anything — the output is JSON you (or a later phase) submit.
+**Deploy is the final, confirmed step.** Distillation, elicitation, and
+validation all run **offline** — the skill builds and validates the JSON on
+your machine without touching the network, so the prototype never pays the
+token cost of loading a complex remote server's full tool catalog just to
+interview you. Only after you review the assets and explicitly confirm does the
+skill deploy them, by calling the `private_deploy_agent` tool on the bundled
+`soleon-agent-toolkit` MCP server (a stateless HTTP server, authenticated with
+your Soleon access token — see *Authentication* below). Nothing is sent until
+you say so.
+
+**What this plugin does NOT do:** it does not deploy anything *without your
+explicit confirmation*, and it does not create agents during distillation or
+elicitation — those phases are offline and produce only local JSON.
 `config.schedules` and `config.tools` are deferred (no honest identity signal /
 a dependency the plugin avoids); visibility is `private` only in this slice.
+
+## Authentication
+
+The `soleon-agent-toolkit` MCP server requires an `Authorization: Bearer <JWT>`.
+On install, the plugin prompts you for a **Soleon access token** (a temporal JWT
+issued while the OAuth 2.1 infrastructure is built). The value is masked and
+stored in your system keychain — never in `settings.json` — and is injected
+into the server's request header at connect time. Reconfigure the plugin to
+rotate it.
 
 ## Install
 
@@ -61,6 +81,11 @@ bundled skill → validate → write three files beside the spec:
 - `<slug>.ddb_projection.json` — the predicted create-time CONFIG row
 - `<slug>.report.json` — audit trail: dropped model aliases, extracted
   constraints, decode decisions, resolved engine version
+
+Then it shows you exactly what will be deployed and, **only on your explicit
+confirmation**, deploys the validated `request_body.json` by calling
+`private_deploy_agent` on the `soleon-agent-toolkit` MCP server. Decline and the
+JSON files simply stay on disk — nothing is sent.
 
 Direct converter invocation (no LLM, spec already in hand):
 
