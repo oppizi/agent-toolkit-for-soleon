@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "soleon-agent-toolkit": {
+      "type": "http",
+      "url": "https://REPLACE-WITH-YOUR-SOLEON-MCP-HOST/mcp",
+      "headers": {
+        "Authorization": "Bearer ${user_config.soleon_token}"
+      }
+    }
+  }
+}
