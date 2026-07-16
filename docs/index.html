@@ -70,8 +70,8 @@
     and usage. Tools are served live from the platform: install once, and new
     capabilities appear automatically.</p>
     <div class="pill-row">
-      <span class="pill">28 tools live</span>
-      <span class="pill">3 pending</span>
+      <span class="pill">34 tools</span>
+      <span class="pill">draft-first</span>
       <span class="pill">Cognito bearer auth</span>
       <span class="pill">Claude Code plugin</span>
     </div>
@@ -92,9 +92,13 @@
     <div class="tool"><code>get_agent</code><span>One agent's configuration summary and runtime identifiers.</span></div>
     <div class="tool"><code>get_agent_config</code><span>The deployed soul, config, and schedules from the deployed artifact.</span></div>
     <div class="tool"><code>private_deploy_agent</code><span>Create a private, owner-only agent from a validated request body.</span></div>
-    <div class="tool"><code>update_agent_soul</code><span>Update an agent's soul through the platform's validators.</span></div>
-    <div class="tool"><code>update_agent_config</code><span>Update soul / config / skills with optimistic concurrency (dev tier).</span></div>
-    <div class="tool"><code>update_agent_metadata</code><span>Update display metadata.</span></div>
+    <div class="tool"><code>get_agent_draft</code><span>Your per-user edit draft, with its concurrency token.</span></div>
+    <div class="tool"><code>update_agent_draft</code><span>Stage changes in the draft — the only content-edit path (conflict-protected).</span></div>
+    <div class="tool"><code>deploy_agent_draft</code><span>Deploy exactly what's staged in your draft to dev — no content inputs.</span></div>
+    <div class="tool"><code>promote_agent</code><span>Promote one tier (dev → staging → prod), sequential and version-bound.</span></div>
+    <div class="tool"><code>update_agent_soul</code><span>Retired — returns guidance to use the draft flow.</span><span class="badge pending">retired</span></div>
+    <div class="tool"><code>update_agent_config</code><span>Retired — returns guidance to use the draft flow.</span><span class="badge pending">retired</span></div>
+    <div class="tool"><code>update_agent_metadata</code><span>Retired — returns guidance to use the draft flow.</span><span class="badge pending">retired</span></div>
     <div class="tool"><code>delete_agent</code><span>Delete an agent (cascades across promoted tiers).</span></div>
     <div class="tool"><code>list_agent_collaborators</code><span>Who holds a role on an agent.</span></div>
   </div>
@@ -104,7 +108,9 @@
     <div class="tool"><code>list_custom_mcp_servers</code><span>User-defined custom MCP servers: name, status, version, draft presence.</span></div>
     <div class="tool"><code>get_custom_mcp_server</code><span>One server: pointer metadata, draft overlay, published tool definitions.</span></div>
     <div class="tool"><code>list_custom_mcp_connections</code><span>Data-source connections (credentials never returned).</span></div>
+    <div class="tool"><code>update_custom_mcp_draft</code><span>Save tool changes to a server's draft without publishing.</span></div>
     <div class="tool"><code>publish_custom_mcp</code><span>Publish a server's draft as the next version via the platform pipeline.</span></div>
+    <div class="tool"><code>promote_custom_mcp</code><span>Promote a server one tier, sequential and version-bound.</span></div>
   </div>
 
   <h3>Channels</h3>
@@ -138,14 +144,14 @@
     <div class="tool"><code>list_role_change_audit</code><span>The role-change audit trail.</span></div>
   </div>
 
-  <h2>Coming next — the draft-first workflow</h2>
-  <p class="muted">Edit safely in a draft, review, then publish deliberately.
-  Built and tested; awaiting deployment. No plugin update needed — tools appear
-  automatically when the server ships them.</p>
+  <h2>The draft-first workflow</h2>
+  <p class="muted">The toolkit never edits a live agent directly — in any tier, including
+  dev. Stage changes in your draft, review, then go live deliberately.</p>
   <div class="card">
-    <div class="tool"><code>update_custom_mcp_draft</code><span>Save changes to a custom MCP server's draft without publishing.</span><span class="badge pending">pending</span></div>
-    <div class="tool"><code>get_agent_draft</code><span>Fetch your edit draft for an agent, with its concurrency token.</span><span class="badge pending">pending</span></div>
-    <div class="tool"><code>update_agent_draft</code><span>Save an agent edit draft without deploying, with conflict protection.</span><span class="badge pending">pending</span></div>
+    <div class="tool"><code>1 · stage</code><span>update_agent_draft / update_custom_mcp_draft</span></div>
+    <div class="tool"><code>2 · review</code><span>get_agent_draft / get_custom_mcp_server</span></div>
+    <div class="tool"><code>3 · go live (dev)</code><span>deploy_agent_draft / publish_custom_mcp</span></div>
+    <div class="tool"><code>4 · promote</code><span>promote_agent / promote_custom_mcp — sequential, version-bound</span></div>
   </div>
 
   <footer>

@@ -9,7 +9,7 @@ tool the server publishes, automatically.
 server. Access follows platform roles (platform admins see everything; members see the
 agents they hold a role on).
 
-## Current tools (28)
+## Current tools (31 live + 3 arriving with agent-infra PR #336)
 
 ### Agents
 
@@ -19,9 +19,13 @@ agents they hold a role on).
 | `get_agent` | One agent's configuration summary + runtime identifiers. |
 | `get_agent_config` | The agent's **deployed** soul (SOUL.md), config.json, and schedules from the deployed artifact. |
 | `private_deploy_agent` | Create a private, owner-only agent from a validated request body. |
-| `update_agent_soul` | Update an agent's soul through the platform's validators (live mutation). |
-| `update_agent_config` | Update soul/config/skills with optimistic concurrency (live mutation, dev tier only). |
-| `update_agent_metadata` | Update display metadata (live mutation). |
+| `get_agent_draft` | Your per-user edit draft (document + concurrency token). |
+| `update_agent_draft` | Stage changes in the draft — the ONLY content-edit path (conflict-protected; 409 returns the current draft to reconcile). |
+| `deploy_agent_draft` | Deploy exactly what's staged in your draft to dev (no content inputs). *Arrives with #336.* |
+| `promote_agent` | Promote one tier (dev→staging→prod), sequential + version-bound. *Arrives with #336.* |
+| `update_agent_soul` | ⚠️ **Retired (draft-first)** — returns guidance to use the draft flow. |
+| `update_agent_config` | ⚠️ **Retired (draft-first)** — returns guidance to use the draft flow. |
+| `update_agent_metadata` | ⚠️ **Retired (draft-first)** — returns guidance to use the draft flow. |
 | `delete_agent` | Delete an agent (cascades across promoted tiers). |
 | `list_agent_collaborators` | Who holds a role on an agent. |
 
@@ -32,7 +36,9 @@ agents they hold a role on).
 | `list_custom_mcp_servers` | The user-defined custom MCP servers in an environment (name, status, version, draft presence). |
 | `get_custom_mcp_server` | One server by slug: pointer metadata, draft overlay, published tool definitions. |
 | `list_custom_mcp_connections` | The data-source connections (credentials never returned). |
+| `update_custom_mcp_draft` | Save tool changes to a server's draft without publishing. |
 | `publish_custom_mcp` | Publish a server's draft as the next version via the platform's publish pipeline. |
+| `promote_custom_mcp` | Promote a server one tier (sequential + version-bound). *Arrives with #336.* |
 
 ### Channels
 
@@ -69,20 +75,20 @@ agents they hold a role on).
 |---|---|
 | `list_role_change_audit` | The role-change audit trail. |
 
-## Pending tools — awaiting publish in Soleon
+## The draft-first workflow (business rule, 2026-07-16)
 
-These complete the **draft-first workflow** (see change in agent-infra: branch
-`mcp-draft-tools`): edit safely in a draft, review the diff, publish deliberately —
-instead of mutating live agents or falling back to direct admin-API calls.
+The toolkit never mutates a live agent directly — in any tier, including dev.
 
-| Tool | What it will do | Status |
-|---|---|---|
-| `update_custom_mcp_draft` | Save changes to a custom MCP server's draft **without publishing** (complement to `publish_custom_mcp`). | built + tested, awaiting PR → dev deploy |
-| `get_agent_draft` | Fetch the caller's edit draft for an agent (per-user), with the concurrency token for safe updates. | built + tested, awaiting PR → dev deploy |
-| `update_agent_draft` | Save an agent edit draft **without deploying** (complement to `update_agent_config`), with conflict protection. | built + tested, awaiting PR → dev deploy |
+1. **Stage** — `update_agent_draft` (agents) / `update_custom_mcp_draft` (tool servers)
+2. **Review** — `get_agent_draft` / `get_custom_mcp_server` (draft overlay)
+3. **Go live on dev** — `deploy_agent_draft` / `publish_custom_mcp`
+4. **Promote tiers** — `promote_agent` / `promote_custom_mcp` (dev → staging → prod,
+   sequential-only, version-bound; per-stage platform permissions apply)
 
-No plugin update is needed when these ship — MCP clients discover tools live from the
-server on every connection.
+The retired direct-edit tools (`update_agent_soul`, `update_agent_config`,
+`update_agent_metadata`) keep their schemas but fail loudly with directions to this
+flow. No plugin update is needed as tools change — clients discover the toolset live
+from the server on every connection.
 
 ## Known gaps / wishlist
 

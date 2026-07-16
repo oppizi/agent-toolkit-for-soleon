@@ -91,8 +91,8 @@ everything else is experiment telemetry.
 ### Documentation
 
 - **[TOOLS.md](TOOLS.md)** — full reference for every MCP tool the Soleon server
-  exposes (28 live, grouped by area), the pending draft-workflow tools awaiting
-  deploy, and known gaps. Tools are discovered live from the server, so new ones
+  exposes (grouped by area), the draft-first workflow (stage → review → deploy →
+  promote), retired tools, and known gaps. Tools are discovered live from the server, so new ones
   appear in the plugin automatically — no plugin update needed.
 - **[MCP landing page](docs/index.html)** — a public, no-auth docs page for the
   server (serve via GitHub Pages: Settings → Pages → deploy from `main`, `/docs`).
