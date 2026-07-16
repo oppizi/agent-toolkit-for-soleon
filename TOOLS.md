@@ -9,7 +9,7 @@ tool the server publishes, automatically.
 server. Access follows platform roles (platform admins see everything; members see the
 agents they hold a role on).
 
-## Current tools (31 live + 3 arriving with agent-infra PR #336)
+## Current tools (31)
 
 ### Agents
 
@@ -23,9 +23,6 @@ agents they hold a role on).
 | `update_agent_draft` | Stage changes in the draft — the ONLY content-edit path (conflict-protected; 409 returns the current draft to reconcile). |
 | `deploy_agent_draft` | Deploy exactly what's staged in your draft to dev (no content inputs). *Arrives with #336.* |
 | `promote_agent` | Promote one tier (dev→staging→prod), sequential + version-bound. *Arrives with #336.* |
-| `update_agent_soul` | ⚠️ **Retired (draft-first)** — returns guidance to use the draft flow. |
-| `update_agent_config` | ⚠️ **Retired (draft-first)** — returns guidance to use the draft flow. |
-| `update_agent_metadata` | ⚠️ **Retired (draft-first)** — returns guidance to use the draft flow. |
 | `delete_agent` | Delete an agent (cascades across promoted tiers). |
 | `list_agent_collaborators` | Who holds a role on an agent. |
 
@@ -85,10 +82,10 @@ The toolkit never mutates a live agent directly — in any tier, including dev.
 4. **Promote tiers** — `promote_agent` / `promote_custom_mcp` (dev → staging → prod,
    sequential-only, version-bound; per-stage platform permissions apply)
 
-The retired direct-edit tools (`update_agent_soul`, `update_agent_config`,
-`update_agent_metadata`) keep their schemas but fail loudly with directions to this
-flow. No plugin update is needed as tools change — clients discover the toolset live
-from the server on every connection.
+The former direct-edit tools (`update_agent_soul`, `update_agent_config`,
+`update_agent_metadata`) were **deleted** — the draft flow is the only write path.
+No plugin update is needed as tools change — clients discover the toolset live from
+the server on every connection.
 
 ## Known gaps / wishlist
 
