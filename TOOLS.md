@@ -21,8 +21,8 @@ agents they hold a role on).
 | `private_deploy_agent` | Create a private, owner-only agent from a validated request body. |
 | `get_agent_draft` | Your per-user edit draft (document + concurrency token). |
 | `update_agent_draft` | Stage changes in the draft — the ONLY content-edit path (conflict-protected; 409 returns the current draft to reconcile). |
-| `deploy_agent_draft` | Deploy exactly what's staged in your draft to dev (no content inputs). *Arrives with #336.* |
-| `promote_agent` | Promote one tier (dev→staging→prod), sequential + version-bound. *Arrives with #336.* |
+| `deploy_agent_draft` | Deploy exactly what's staged in your draft to dev (no content inputs). |
+| `promote_agent` | Promote one tier (dev→staging→prod), sequential + version-bound. |
 | `delete_agent` | Delete an agent (cascades across promoted tiers). |
 | `list_agent_collaborators` | Who holds a role on an agent. |
 
@@ -35,7 +35,7 @@ agents they hold a role on).
 | `list_custom_mcp_connections` | The data-source connections (credentials never returned). |
 | `update_custom_mcp_draft` | Save tool changes to a server's draft without publishing. |
 | `publish_custom_mcp` | Publish a server's draft as the next version via the platform's publish pipeline. |
-| `promote_custom_mcp` | Promote a server one tier (sequential + version-bound). *Arrives with #336.* |
+| `promote_custom_mcp` | Promote a server one tier (sequential + version-bound). |
 
 ### Channels
 
