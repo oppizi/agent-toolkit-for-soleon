@@ -39,6 +39,22 @@ stored in your system keychain — never in `settings.json` — and is injected
 into the server's request header at connect time. Reconfigure the plugin to
 rotate it.
 
+The install prompt also offers a **Soleon MCP server URL** — leave it blank to
+use the default (the **production** system, soleon.oppizi.com). To target the
+dev system (soleon-dev.oppizi.com) instead, set it to the dev endpoint and mint
+your token with `--env dev` — tokens are Cognito-pool-specific, so the URL and
+the token must always come from the same environment:
+
+| Environment | Server URL | Token mint |
+|---|---|---|
+| Production (default) | `https://u39c45fy7l.execute-api.us-east-1.amazonaws.com/prod/mcp` | `--env prod` |
+| Dev | `https://us33jh28gi.execute-api.us-east-1.amazonaws.com/prod/mcp` | `--env dev` |
+
+(The trailing `/prod/` in both URLs is the API-gateway stage name, not the
+environment — the subdomain is what differs.) Switch environments any time via
+`/plugin` → reconfigure → change the URL + paste a matching token →
+`/reload-plugins`.
+
 ## Install
 
 From the GitHub marketplace:
