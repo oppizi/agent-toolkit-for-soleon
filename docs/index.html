@@ -48,11 +48,6 @@
   .tool:last-child { border-bottom: none; }
   .tool code { color: var(--accent); white-space: nowrap; }
   .tool span { color: var(--muted); flex: 1; min-width: 240px; }
-  .badge {
-    font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.06em;
-    border-radius: 999px; padding: 2px 10px; white-space: nowrap;
-  }
-  .badge.pending { color: var(--pending); border: 1px solid var(--pending); }
   .pill-row { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 16px; }
   .pill { font-size: 0.8rem; color: var(--muted); border: 1px solid var(--line);
           border-radius: 999px; padding: 3px 12px; }
@@ -70,8 +65,7 @@
     and usage. Tools are served live from the platform: install once, and new
     capabilities appear automatically.</p>
     <div class="pill-row">
-      <span class="pill">28 tools live</span>
-      <span class="pill">3 pending</span>
+      <span class="pill">85 tools live</span>
       <span class="pill">Cognito bearer auth</span>
       <span class="pill">Claude Code plugin</span>
     </div>
@@ -92,19 +86,15 @@
     <div class="tool"><code>get_agent</code><span>One agent's configuration summary and runtime identifiers.</span></div>
     <div class="tool"><code>get_agent_config</code><span>The deployed soul, config, and schedules from the deployed artifact.</span></div>
     <div class="tool"><code>private_deploy_agent</code><span>Create a private, owner-only agent from a validated request body.</span></div>
-    <div class="tool"><code>update_agent_soul</code><span>Update an agent's soul through the platform's validators.</span></div>
-    <div class="tool"><code>update_agent_config</code><span>Update soul / config / skills with optimistic concurrency (dev tier).</span></div>
-    <div class="tool"><code>update_agent_metadata</code><span>Update display metadata.</span></div>
+    <div class="tool"><code>get_agent_draft</code><span>Fetch your per-user edit draft, with its concurrency token.</span></div>
+    <div class="tool"><code>update_agent_draft</code><span>Save an edit draft without deploying, with conflict protection.</span></div>
+    <div class="tool"><code>delete_agent_draft</code><span>Discard your edit draft — the deployed config is untouched.</span></div>
+    <div class="tool"><code>deploy_agent_draft</code><span>Deploy your staged draft to the dev tier via the full deploy pipeline.</span></div>
+    <div class="tool"><code>sync_draft_test_chat</code><span>Materialize your draft into the test-chat sandbox and reset its session.</span></div>
+    <div class="tool"><code>promote_agent</code><span>Promote an agent's config one tier — sequential, version-bound.</span></div>
+    <div class="tool"><code>update_agent_profile</code><span>Update avatar, description, and visibility — metadata only, no deploy.</span></div>
     <div class="tool"><code>delete_agent</code><span>Delete an agent (cascades across promoted tiers).</span></div>
     <div class="tool"><code>list_agent_collaborators</code><span>Who holds a role on an agent.</span></div>
-  </div>
-
-  <h3>Custom MCPs</h3>
-  <div class="card">
-    <div class="tool"><code>list_custom_mcp_servers</code><span>User-defined custom MCP servers: name, status, version, draft presence.</span></div>
-    <div class="tool"><code>get_custom_mcp_server</code><span>One server: pointer metadata, draft overlay, published tool definitions.</span></div>
-    <div class="tool"><code>list_custom_mcp_connections</code><span>Data-source connections (credentials never returned).</span></div>
-    <div class="tool"><code>publish_custom_mcp</code><span>Publish a server's draft as the next version via the platform pipeline.</span></div>
   </div>
 
   <h3>Channels</h3>
@@ -116,21 +106,53 @@
     <div class="tool"><code>unbind_agent_channel</code><span>Unbind an agent from a channel instance.</span></div>
   </div>
 
+  <h3>Custom MCPs</h3>
+  <div class="card">
+    <div class="tool"><code>list_custom_mcp_servers</code><span>User-defined custom MCP servers: name, status, version, draft presence.</span></div>
+    <div class="tool"><code>get_custom_mcp_server</code><span>One server: pointer metadata, draft overlay, published tools, overrides.</span></div>
+    <div class="tool"><code>list_custom_mcp_connections</code><span>Data-source connections (credentials never returned).</span></div>
+    <div class="tool"><code>create_custom_mcp_server</code><span>Create a new empty, inactive tool server.</span></div>
+    <div class="tool"><code>clone_custom_mcp_server</code><span>Duplicate a server — tools and governance travel with the clone.</span></div>
+    <div class="tool"><code>update_custom_mcp_draft</code><span>Save changes to a server's draft without publishing.</span></div>
+    <div class="tool"><code>generate_tool_code</code><span>Generate a tool's Python execute() body from a natural-language prompt.</span></div>
+    <div class="tool"><code>test_custom_mcp_tool</code><span>Execute one tool against the live test runtime, draft tools included.</span></div>
+    <div class="tool"><code>diagnose_custom_mcp_failure</code><span>Diagnose a failing tool test from the errored response envelope.</span></div>
+    <div class="tool"><code>publish_custom_mcp</code><span>Publish a server's draft as the next version via the platform pipeline.</span></div>
+    <div class="tool"><code>promote_custom_mcp</code><span>Promote a server one tier — sequential, version-bound.</span></div>
+    <div class="tool"><code>set_custom_mcp_lifecycle</code><span>Activate or deactivate a server in one environment.</span></div>
+  </div>
+
   <h3>Knowledge</h3>
   <div class="card">
     <div class="tool"><code>list_knowledge_bases</code><span>The knowledge bases in an environment.</span></div>
     <div class="tool"><code>get_knowledge_base</code><span>One knowledge base's details.</span></div>
+    <div class="tool"><code>create_knowledge_base</code><span>Create a new empty knowledge-base scaffold.</span></div>
+    <div class="tool"><code>list_kb_pages</code><span>A KB's wiki pages: path, title, kind, contributing sources.</span></div>
+    <div class="tool"><code>get_kb_page</code><span>Read one wiki page: markdown body plus etag (and graph facts).</span></div>
+    <div class="tool"><code>put_kb_page</code><span>Write one wiki page with stale-write protection.</span></div>
+    <div class="tool"><code>add_kb_source</code><span>Add a source (url / text / mcp / file) and queue its ingestion.</span></div>
+    <div class="tool"><code>get_kb_source</code><span>Read one source's config — plus raw content and extraction logs.</span></div>
+    <div class="tool"><code>manage_kb_source</code><span>Patch a source's config or schedule and/or re-run its ingestion.</span></div>
+    <div class="tool"><code>manage_kb_watch</code><span>Manage polled S3 bucket-watch sources: list, create, update, run now.</span></div>
+    <div class="tool"><code>kb_lint</code><span>Run the KB lint loop and accept / reject / edit its findings.</span></div>
+    <div class="tool"><code>kb_versions</code><span>Read a KB's change history and per-page three-way content views.</span></div>
   </div>
 
   <h3>Observability &amp; evals</h3>
   <div class="card">
-    <div class="tool"><code>get_eval_scoreboard</code><span>An agent's eval scoreboard.</span></div>
-    <div class="tool"><code>list_scored_sessions</code><span>Sessions scored by the online eval pipeline.</span></div>
-    <div class="tool"><code>get_session_eval_detail</code><span>Per-criterion detail for one scored session.</span></div>
-    <div class="tool"><code>list_trace_sessions</code><span>Trace sessions for an agent.</span></div>
+    <div class="tool"><code>list_trace_sessions</code><span>Trace sessions, filterable by agent or user namespace.</span></div>
     <div class="tool"><code>get_trace_session</code><span>One trace session end-to-end.</span></div>
     <div class="tool"><code>list_failures</code><span>Platform failure records.</span></div>
-    <div class="tool"><code>get_usage_summary</code><span>Usage and cost summary.</span></div>
+    <div class="tool"><code>get_usage_summary</code><span>Usage summary: sessions, tokens, durations, per-agent splits.</span></div>
+    <div class="tool"><code>list_scored_sessions</code><span>Sessions scored by the online eval pipeline.</span></div>
+    <div class="tool"><code>get_session_eval_detail</code><span>Per-criterion detail for one scored session.</span></div>
+    <div class="tool"><code>get_eval_scoreboard</code><span>An agent's eval scoreboard.</span></div>
+    <div class="tool"><code>run_eval</code><span>Start an eval run — single or side-by-side — against version refs.</span></div>
+    <div class="tool"><code>get_eval_run</code><span>One eval run's full detail; poll while running.</span></div>
+    <div class="tool"><code>list_eval_runs</code><span>An agent's eval runs with side tallies and trend.</span></div>
+    <div class="tool"><code>get_agent_skills</code><span>An agent's deployed skills and their enabled state.</span></div>
+    <div class="tool"><code>list_versions</code><span>The published version lineage, plus what each environment runs.</span></div>
+    <div class="tool"><code>get_version_diff</code><span>Compare two versions or environments — summary or full patches.</span></div>
   </div>
 
   <h3>Governance</h3>
@@ -138,14 +160,45 @@
     <div class="tool"><code>list_role_change_audit</code><span>The role-change audit trail.</span></div>
   </div>
 
-  <h2>Coming next — the draft-first workflow</h2>
-  <p class="muted">Edit safely in a draft, review, then publish deliberately.
-  Built and tested; awaiting deployment. No plugin update needed — tools appear
-  automatically when the server ships them.</p>
+  <h3>Business Center — Ideas &amp; Pipeline</h3>
   <div class="card">
-    <div class="tool"><code>update_custom_mcp_draft</code><span>Save changes to a custom MCP server's draft without publishing.</span><span class="badge pending">pending</span></div>
-    <div class="tool"><code>get_agent_draft</code><span>Fetch your edit draft for an agent, with its concurrency token.</span><span class="badge pending">pending</span></div>
-    <div class="tool"><code>update_agent_draft</code><span>Save an agent edit draft without deploying, with conflict protection.</span><span class="badge pending">pending</span></div>
+    <div class="tool"><code>list_ideas</code><span>The Ideas board with scores, votes, and comments — score-rank sorted.</span></div>
+    <div class="tool"><code>get_idea</code><span>One idea in full: content, scores with provenance, status, links.</span></div>
+    <div class="tool"><code>create_idea</code><span>Submit a new idea to the board.</span></div>
+    <div class="tool"><code>update_idea</code><span>Edit an idea; status / priority / scores overrides are admin-only.</span></div>
+    <div class="tool"><code>list_idea_comments</code><span>An idea's discussion comments with reply threading.</span></div>
+    <div class="tool"><code>add_idea_comment</code><span>Add a comment or threaded reply to an idea.</span></div>
+    <div class="tool"><code>approve_idea</code><span>Approve an idea — decision only (admin).</span></div>
+    <div class="tool"><code>move_idea_to_preparation</code><span>Promote an idea into the pipeline: mints an in-build agent shell (admin).</span></div>
+    <div class="tool"><code>get_pipeline</code><span>The build-pipeline board, grouped by the 6 build stages.</span></div>
+    <div class="tool"><code>set_pipeline_stage</code><span>Move an agent between build stages (admin).</span></div>
+  </div>
+
+  <h3>Business Center — Agent management &amp; Wiki</h3>
+  <div class="card">
+    <div class="tool"><code>list_agent_thread</code><span>An agent's discussion-thread comments.</span></div>
+    <div class="tool"><code>add_agent_thread_comment</code><span>Append a comment to an agent's discussion thread.</span></div>
+    <div class="tool"><code>get_overview_visibility</code><span>The curated Overview visibility overrides per agent.</span></div>
+    <div class="tool"><code>set_overview_visibility</code><span>Show or hide one agent on the Business Center Overview.</span></div>
+    <div class="tool"><code>get_wiki</code><span>An agent's wiki: sections, page metadata, and the nested page tree.</span></div>
+    <div class="tool"><code>get_wiki_page</code><span>One wiki page in full, with placement and provenance.</span></div>
+    <div class="tool"><code>put_wiki_page</code><span>Create or edit a wiki page.</span></div>
+    <div class="tool"><code>delete_wiki_page</code><span>Delete a wiki page and its descendant sub-pages.</span></div>
+  </div>
+
+  <h3>Business Center — Discovery</h3>
+  <div class="card">
+    <div class="tool"><code>list_discovery_requests</code><span>Discovery requests: person, agent, modality, status, injected context.</span></div>
+    <div class="tool"><code>get_discovery_request</code><span>One request's full tree: materials, gaps, summary, form.</span></div>
+    <div class="tool"><code>create_discovery_request</code><span>Ask a person for knowledge an agent needs — interview or form.</span></div>
+    <div class="tool"><code>update_discovery_request</code><span>Edit a request's status, chat binding, or injected context.</span></div>
+    <div class="tool"><code>manage_discovery_gap</code><span>Manage a request's knowledge gaps: add, update, expand, AI-analyze.</span></div>
+    <div class="tool"><code>list_discovery_people</code><span>The org-wide Discovery people directory.</span></div>
+    <div class="tool"><code>manage_discovery_person</code><span>Create, update, or delete a directory person.</span></div>
+    <div class="tool"><code>list_stakeholders</code><span>An agent's discovery stakeholders (bound knowledge sources).</span></div>
+    <div class="tool"><code>manage_stakeholder</code><span>Bind or unbind a stakeholder on an agent.</span></div>
+    <div class="tool"><code>list_discovery_materials</code><span>Materials for one request or an agent's pool — metadata only.</span></div>
+    <div class="tool"><code>get_material_download_link</code><span>Mint a 15-minute presigned download URL for one material file.</span></div>
   </div>
 
   <footer>
