@@ -58,10 +58,10 @@ def _assigned_value(tree: ast.Module, name: str) -> ast.expr:
         )
         for target in targets:
             if isinstance(target, ast.Name) and target.id == name:
-                value = node.value if isinstance(node, ast.Assign) else node.value
-                if value is None:
+                # `AnnAssign.value` is None for a bare annotation (`X: dict`).
+                if node.value is None:
                     raise ExtractionError(f"{name} is annotated but not assigned")
-                return value
+                return node.value
     raise ExtractionError(
         f"{name} not found in {SCOPES_SOURCE_REL} — the platform source changed "
         "shape, or --repo-root points at the wrong tree"

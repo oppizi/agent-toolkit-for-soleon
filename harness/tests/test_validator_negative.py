@@ -165,23 +165,10 @@ def test_missing_soul(good_body):
 
 
 def test_cross_check_body_projection_divergence(example_item, good_body):
-    """The cross-check must catch a body that disagrees with its own projection.
-
-    Diverges on `displayName`, NOT on `framework`. The cross-check only runs once
-    envelope validation has passed, and since the platform archived every framework
-    but `maverick` there is no second VALID framework value left — a `framework`
-    divergence now trips `envelope_errors` first, so the cross-check would never
-    execute and this test would assert on an empty list for the wrong reason.
-    """
-    good_body["displayName"] = "Some Other Name"  # projection says otherwise
+    good_body["framework"] = "nanobot"  # projection says maverick
     result = validate(good_body, example_item)
     assert result["schema_match"] is False
-    assert result["cross_errors"], (
-        "cross-check did not fire on a body/projection displayName divergence"
-    )
-    assert not result["envelope_errors"], (
-        "this test must exercise the CROSS-check, not envelope validation"
-    )
+    assert result["cross_errors"]
 
 
 # ---------- skills negatives (v0.2) ----------

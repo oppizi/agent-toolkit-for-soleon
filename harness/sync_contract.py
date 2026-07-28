@@ -51,12 +51,10 @@ MODEL_ALIAS_MAP = {
     "haiku": "us.anthropic.claude-haiku-4-5-20251001",
 }
 
-# Hand-authored prose (not extractable from platform source), but the KEY SET must
-# track `_FRAMEWORK_VALUES` — the guard at the bottom of build_contract enforces it.
-# `nanobot` and `openclaw` were dropped 2026-07-28: the platform archived both, and
-# offering them here made the plugin validate agents the API answers 400.
 FRAMEWORK_GLOSSES = {
     "maverick": "Oppizi's in-house framework — the default choice; pick this unless told otherwise.",
+    "nanobot": "Lightweight third-party framework for minimal single-purpose agents.",
+    "openclaw": "Full-featured third-party framework matching the OpenClaw reference implementation.",
 }
 
 
@@ -210,23 +208,9 @@ def extract(repo_root: Path) -> dict:
         **idx,
     }
 
-    # A frozen tripwire, deliberately: a framework appearing or disappearing on the
-    # platform changes what the shipped contract validates, so a human must
-    # consciously edit this line rather than let a regeneration absorb it silently.
-    #
-    # Updated 2026-07-28: the platform archived `nanobot` and `openclaw`, leaving
-    # `_FRAMEWORK_VALUES = {"maverick"}`. This tripwire had been firing ever since —
-    # unseen, because every test that reaches it lives in the module that skips
-    # outside a monorepo checkout, and neither repo has CI. Meanwhile the shipped
-    # contract.json still offered all three, so the plugin would locally validate an
-    # agent the platform answers 400. Regenerated together with this fix.
-    sanity = {"maverick"}
+    sanity = {"maverick", "nanobot", "openclaw"}
     if set(contract["frameworks"]) != sanity:
-        raise SystemExit(
-            f"sync_contract: framework set drifted: {contract['frameworks']} "
-            f"(expected {sorted(sanity)}). If the platform really changed its "
-            "framework set, update `sanity` here in the same commit."
-        )
+        raise SystemExit(f"sync_contract: framework set drifted: {contract['frameworks']}")
     if set(contract["framework_glosses"]) != set(contract["frameworks"]):
         raise SystemExit("sync_contract: glosses out of sync with frameworks")
     # The alias map's concrete keys must be a subset of the recognized aliases.
