@@ -16,9 +16,12 @@
     "must_be_nonempty_stripped": true
   },
   "dynamo_allowed": [
+    "description",
     "displayName",
     "framework",
     "grantUsers",
+    "iconColor",
+    "iconName",
     "registrationOpen",
     "revokeUsers",
     "slackDefaultChannelId",
@@ -40,14 +43,10 @@
     "agent"
   ],
   "framework_glosses": {
-    "maverick": "Oppizi's in-house framework \u2014 the default choice; pick this unless told otherwise.",
-    "nanobot": "Lightweight third-party framework for minimal single-purpose agents.",
-    "openclaw": "Full-featured third-party framework matching the OpenClaw reference implementation."
+    "maverick": "Oppizi's in-house framework \u2014 the default choice; pick this unless told otherwise."
   },
   "frameworks": [
-    "maverick",
-    "nanobot",
-    "openclaw"
+    "maverick"
   ],
   "guardrail_enabled_keys": [
     "enabled",
@@ -117,6 +116,7 @@
     "content",
     "description",
     "enabled",
+    "files",
     "id",
     "name"
   ],

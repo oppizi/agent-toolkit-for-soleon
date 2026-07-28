@@ -1,4 +1,32 @@
-# soleon-deploy-agent
+# soleon-builder
+
+The Soleon agent build loop: everything `soleon-observer` can read, plus the
+scopes to create, update, deploy, promote and delete agents, bind channels, and
+author custom MCP servers and knowledge bases. It carries the `deploy-agent`
+skill.
+
+> **Renamed from `soleon-deploy-agent`.** See *Upgrading* below — there is no
+> alias, and your old access-token setting is obsolete.
+
+## Scopes this bundle requests
+
+Sixteen — the eight `soleon-observer` reads, plus:
+
+```
+soleon-mcp/agent.write   soleon-mcp/agent.deploy  soleon-mcp/agent.delete
+soleon-mcp/channel.write soleon-mcp/mcp.write     soleon-mcp/kb.write
+soleon-mcp/business.write soleon-mcp/wiki.write
+```
+
+Installing a broader bundle grants **no** additional access. Scope is a ceiling on
+what the token may consent to, never a role — Soleon authorizes every request
+against your real permissions, so you see and reach only the tools you are already
+entitled to.
+
+The admin-only families (`channel.read`, `mcp.read`, `eval.run`, `discovery.*`) are
+deliberately absent; they live in `soleon-admin`.
+
+## What the deploy-agent skill does
 
 Turn a local Claude Code agent definition (`.claude/agents/<name>.md`) into a
 **validated, deploy-ready agent-infra record** — without re-describing your
@@ -20,9 +48,8 @@ your machine without touching the network, so the prototype never pays the
 token cost of loading a complex remote server's full tool catalog just to
 interview you. Only after you review the assets and explicitly confirm does the
 skill deploy them, by calling the `private_deploy_agent` tool on the bundled
-`soleon-agent-toolkit` MCP server (a stateless HTTP server, authenticated with
-your Soleon access token — see *Authentication* below). Nothing is sent until
-you say so.
+`soleon-agent-toolkit` MCP server (a stateless HTTP server you sign in to over
+OAuth — see *Authentication* below). Nothing is sent until you say so.
 
 **What this plugin does NOT do:** it does not deploy anything *without your
 explicit confirmation*, and it does not create agents during distillation or
@@ -32,28 +59,41 @@ a dependency the plugin avoids); visibility is `private` only in this slice.
 
 ## Authentication
 
-The `soleon-agent-toolkit` MCP server requires an `Authorization: Bearer <JWT>`.
-On install, the plugin prompts you for a **Soleon access token** (a temporal JWT
-issued while the OAuth 2.1 infrastructure is built). The value is masked and
-stored in your system keychain — never in `settings.json` — and is injected
-into the server's request header at connect time. Reconfigure the plugin to
-rotate it.
+Sign-in is **OAuth 2.1** — there is no token to paste and nothing to rotate. The
+first request to the server opens the flow in your browser (or run
+`claude mcp login` explicitly); Claude Code then holds a short-lived access token
+and refreshes it for you.
 
-The install prompt also offers a **Soleon MCP server URL** — leave it blank to
-use the default (the **production** system, soleon.oppizi.com). To target the
-dev system (soleon-dev.oppizi.com) instead, set it to the dev endpoint and mint
-your token with `--env dev` — tokens are Cognito-pool-specific, so the URL and
-the token must always come from the same environment:
+The plugin pins the sixteen scopes listed above, so the token it obtains is capped
+at the builder surface no matter what the server would otherwise offer.
 
-| Environment | Server URL | Token mint |
-|---|---|---|
-| Production (default) | `https://u39c45fy7l.execute-api.us-east-1.amazonaws.com/prod/mcp` | `--env prod` |
-| Dev | `https://us33jh28gi.execute-api.us-east-1.amazonaws.com/prod/mcp` | `--env dev` |
+The install prompt offers a **Soleon MCP server URL**, defaulting to the dev system
+(`https://mcp-dev.oppizi.com/mcp`). Point it at another environment to work there;
+switch any time via `/plugin` → reconfigure → change the URL → `/reload-plugins`,
+then sign in again (sessions are per-environment).
 
-(The trailing `/prod/` in both URLs is the API-gateway stage name, not the
-environment — the subdomain is what differs.) Switch environments any time via
-`/plugin` → reconfigure → change the URL + paste a matching token →
-`/reload-plugins`.
+Use the stage-less custom-domain form. A URL carrying an API-Gateway stage path —
+the `…execute-api.us-east-1.amazonaws.com/prod/mcp` shape earlier versions
+documented — breaks OAuth discovery and the sign-in will fail on the first request.
+
+## Upgrading from soleon-deploy-agent
+
+This plugin **was** `soleon-deploy-agent`. The rename is hard: there is no alias, so
+an existing install will not update itself. Uninstall the old plugin and install
+this one:
+
+```
+/plugin uninstall soleon-deploy-agent@agent-toolkit-for-soleon
+/plugin install soleon-builder@agent-toolkit-for-soleon
+```
+
+The `deploy-agent` skill, the contract, and the bundled engine are unchanged. Your
+old **Soleon access token** setting is obsolete — authentication is now the OAuth
+flow above, so that long-lived JWT is no longer read from your keychain and can be
+deleted.
+
+If you only ever *read* from Soleon, consider `soleon-observer` instead — it
+consents to no writes at all.
 
 ## Install
 
@@ -61,14 +101,14 @@ From the GitHub marketplace:
 
 ```
 /plugin marketplace add oppizi/agent-toolkit-for-soleon
-/plugin install soleon-deploy-agent@agent-toolkit-for-soleon
+/plugin install soleon-builder@agent-toolkit-for-soleon
 ```
 
 Or from a local checkout of [oppizi/agent-toolkit-for-soleon](https://github.com/oppizi/agent-toolkit-for-soleon):
 
 ```
 /plugin marketplace add ./agent-toolkit-for-soleon
-/plugin install soleon-deploy-agent@agent-toolkit-for-soleon
+/plugin install soleon-builder@agent-toolkit-for-soleon
 ```
 
 (The only contents that matter at runtime are this directory's

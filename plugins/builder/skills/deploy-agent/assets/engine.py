@@ -1,6 +1,6 @@
 """CliEngine — the single seam between the converter and the `allium` engine.
 
-Resolution order: bundled binary (plugin/bin/allium-{os}-{arch}) first, PATH
+Resolution order: bundled binary (<plugin>/bin/allium-{os}-{arch}) first, PATH
 fallback second. The PATH fallback is version-pinned to contract.json's
 engine_version because every parsed-output fact (diagnostics shape, raw
 default_expr semantics, exit-code behavior) was verified against that exact

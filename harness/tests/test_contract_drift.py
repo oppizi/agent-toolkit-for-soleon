@@ -29,11 +29,11 @@ pytestmark = pytest.mark.skipif(
 
 
 def test_shipped_contract_matches_fresh_extraction():
-    shipped = json.loads((BET_ROOT / "plugin/contract.json").read_text())
+    shipped = json.loads((BET_ROOT / "plugins/builder/contract.json").read_text())
     fresh = extract(REPO_ROOT)
     assert shipped == fresh, (
-        "plugin/contract.json has drifted from repo source — regenerate with "
-        "python3 harness/sync_contract.py"
+        "plugins/builder/contract.json has drifted from repo source — regenerate "
+        "with python3 harness/sync_contract.py"
     )
 
 
@@ -41,9 +41,15 @@ def test_dynamo_allowed_is_full_set():
     """F13: the envelope check's universe must be the FULL _DYNAMO_ALLOWED set,
     not a partial recollection."""
     fresh = extract(REPO_ROOT)
+    # Frozen on purpose — a field entering or leaving _DYNAMO_ALLOWED changes what
+    # the plugin will send, so it must be a conscious edit. `description`,
+    # `iconColor` and `iconName` were added 2026-07-28: the platform had carried
+    # them for a while, but this module skips outside a monorepo checkout so
+    # nothing surfaced the drift.
     assert set(fresh["dynamo_allowed"]) == {
         "displayName", "framework", "registrationOpen", "visibility",
         "grantUsers", "revokeUsers", "slackDefaultChannelId",
+        "description", "iconColor", "iconName",
     }
 
 

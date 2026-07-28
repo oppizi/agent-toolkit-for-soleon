@@ -1,10 +1,16 @@
 """Packaging boundary — the ship boundary must be real, textually AND
 behaviorally.
 
-1. plugin/ contains no reference to harness/, samples/, preflight/, runs, or
-   transcripts (bet telemetry never ships).
-2. Isolation smoke (F3): plugin/ copied ALONE to a temp dir still converts a
-   spec end-to-end — proving no hidden dependency on the bet tree or repo.
+The ship boundary is now THREE boundaries: the repo publishes one plugin per role
+bundle (`soleon-observer` / `soleon-builder` / `soleon-admin`). The telemetry ban
+and the manifest/discovery surface apply to all three; the Python-specific checks
+apply to **builder** only, because it is the sole bundle carrying the converter,
+the engine, and the vendored allium binary.
+
+1. No plugin references harness/, samples/, preflight/, runs, or transcripts (bet
+   telemetry never ships).
+2. Isolation smoke (F3): the builder plugin copied ALONE to a temp dir still
+   converts a spec end-to-end — proving no hidden dependency on the bet tree.
 3. Converter + engine are stdlib-only (no third-party imports).
 """
 import ast
@@ -14,8 +20,15 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 BET_ROOT = Path(__file__).resolve().parents[2]
-PLUGIN = BET_ROOT / "plugin"
+PLUGINS_DIR = BET_ROOT / "plugins"
+# Every shipped bundle. Sorted so parametrized ids are stable.
+PLUGINS = sorted(p for p in PLUGINS_DIR.iterdir() if p.is_dir())
+BUNDLE_NAMES = [p.name for p in PLUGINS]
+# The one bundle that ships Python + the vendored binary.
+PLUGIN = PLUGINS_DIR / "builder"
 
 FORBIDDEN_REFS = ("harness/", "samples/", "preflight/", "runs.jsonl", "transcripts/")
 
@@ -25,17 +38,18 @@ STDLIB_OK = {
 }
 
 
-def test_no_telemetry_references_in_plugin():
+@pytest.mark.parametrize("plugin", PLUGINS, ids=BUNDLE_NAMES)
+def test_no_telemetry_references_in_plugin(plugin):
     offenders = []
-    for path in PLUGIN.rglob("*"):
+    for path in plugin.rglob("*"):
         if not path.is_file() or path.suffix not in {".py", ".md", ".json"}:
             continue
         text = path.read_text(encoding="utf-8", errors="ignore")
         for ref in FORBIDDEN_REFS:
             for line in text.splitlines():
                 if ref in line and "maintainers:" not in line.lower():
-                    offenders.append(f"{path.relative_to(PLUGIN)}: {ref}")
-    assert not offenders, f"plugin references bet telemetry: {offenders}"
+                    offenders.append(f"{path.relative_to(plugin)}: {ref}")
+    assert not offenders, f"{plugin.name} references bet telemetry: {offenders}"
 
 
 def test_plugin_python_is_stdlib_only():
@@ -84,16 +98,48 @@ def test_isolation_smoke_plugin_alone_converts(tmp_path):
     assert (out_dir / "iso-smoke-agent.report.json").is_file()
 
 
-def test_plugin_manifest_and_discovery_surface():
-    """DX-1/DX-10: manifest, marketplace entry, README, and SKILL description
-    strings all exist — the install + discovery story is shippable."""
-    manifest = json.loads((PLUGIN / ".claude-plugin/plugin.json").read_text())
+@pytest.mark.parametrize("plugin", PLUGINS, ids=BUNDLE_NAMES)
+def test_plugin_manifest_and_discovery_surface(plugin):
+    """DX-1/DX-10: manifest + README exist for EVERY bundle — the install and
+    discovery story has to be shippable for all three, not just the one with skills."""
+    manifest = json.loads((plugin / ".claude-plugin/plugin.json").read_text())
     assert manifest["name"] and manifest["description"] and manifest["version"]
-    market = json.loads((PLUGIN / ".claude-plugin/marketplace.json").read_text())
-    assert market["plugins"], "marketplace.json must list the plugin"
-    readme = (PLUGIN / "README.md").read_text(encoding="utf-8")
-    for required in ("Install", "does NOT", "darwin-arm64", "ALLIUM_ENGINE_UNPINNED"):
-        assert required in readme, f"README missing required section/term: {required}"
+    assert manifest["name"] == f"soleon-{plugin.name}", (
+        f"{plugin.name}'s manifest name {manifest['name']!r} must match its directory"
+    )
+    readme = (plugin / "README.md").read_text(encoding="utf-8")
+    required = ["Install", "does NOT"]
+    if plugin.name == "builder":
+        # Only builder ships the vendored engine, so only its README documents it.
+        required += ["darwin-arm64", "ALLIUM_ENGINE_UNPINNED"]
+    for term in required:
+        assert term in readme, f"{plugin.name} README missing required term: {term}"
+
+
+def test_root_marketplace_lists_every_bundle():
+    """The ROOT manifest is the distribution surface — `/plugin marketplace add
+    oppizi/agent-toolkit-for-soleon` resolves it.
+
+    The nested `plugin/.claude-plugin/marketplace.json` was deleted: it declared the
+    SAME marketplace name as this one, so in a three-plugin repo it would advertise
+    one of three plugins under a colliding name, and its `./` source could not
+    address sibling bundles anyway.
+    """
+    market = json.loads((BET_ROOT / ".claude-plugin/marketplace.json").read_text())
+    entries = {e["name"]: e for e in market["plugins"]}
+    assert set(entries) == {f"soleon-{n}" for n in BUNDLE_NAMES}, (
+        f"root marketplace lists {sorted(entries)} but the repo ships {BUNDLE_NAMES}"
+    )
+    for name, entry in entries.items():
+        source = (BET_ROOT / entry["source"]).resolve()
+        assert source.is_dir(), f"{name} source {entry['source']} does not resolve"
+        assert (source / ".claude-plugin/plugin.json").is_file(), (
+            f"{name} source {entry['source']} has no plugin manifest"
+        )
+        assert entry["description"].strip(), f"{name} needs a description"
+    assert not (BET_ROOT / "plugins/builder/.claude-plugin/marketplace.json").exists(), (
+        "the nested marketplace manifest must stay deleted — one marketplace, one name"
+    )
     skill = (PLUGIN / "skills/deploy-agent/SKILL.md").read_text(encoding="utf-8")
     assert skill.startswith("---"), "SKILL.md needs frontmatter with description"
     assert "selfcheck" in skill.lower()

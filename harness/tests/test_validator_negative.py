@@ -11,7 +11,7 @@ import json
 from pathlib import Path
 
 BET_ROOT = Path(__file__).resolve().parents[2]
-CONTRACT = json.loads((BET_ROOT / "plugin/contract.json").read_text())
+CONTRACT = json.loads((BET_ROOT / "plugins/builder/contract.json").read_text())
 FIXTURE = json.loads((BET_ROOT / "preflight/expected_channelless_config.json").read_text())
 
 
@@ -165,10 +165,23 @@ def test_missing_soul(good_body):
 
 
 def test_cross_check_body_projection_divergence(example_item, good_body):
-    good_body["framework"] = "nanobot"  # projection says maverick
+    """The cross-check must catch a body that disagrees with its own projection.
+
+    Diverges on `displayName`, NOT on `framework`. The cross-check only runs once
+    envelope validation has passed, and since the platform archived every framework
+    but `maverick` there is no second VALID framework value left — a `framework`
+    divergence now trips `envelope_errors` first, so the cross-check would never
+    execute and this test would assert on an empty list for the wrong reason.
+    """
+    good_body["displayName"] = "Some Other Name"  # projection says otherwise
     result = validate(good_body, example_item)
     assert result["schema_match"] is False
-    assert result["cross_errors"]
+    assert result["cross_errors"], (
+        "cross-check did not fire on a body/projection displayName divergence"
+    )
+    assert not result["envelope_errors"], (
+        "this test must exercise the CROSS-check, not envelope validation"
+    )
 
 
 # ---------- skills negatives (v0.2) ----------
