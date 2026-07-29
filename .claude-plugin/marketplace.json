@@ -5,9 +5,19 @@
   },
   "plugins": [
     {
-      "name": "soleon-deploy-agent",
-      "source": "./plugin",
-      "description": "Deploy a local Claude Code agent identity to agent-infra: identity markdown → Allium spec → validated POST /agents JSON. Offline; nothing is deployed without you."
+      "name": "soleon-observer",
+      "source": "./plugins/observer",
+      "description": "Read-only access to Soleon: agents, traces, failures, usage, evals, ideas and wiki. Requests no write consent — the least-privilege way to connect Claude Code to Soleon."
+    },
+    {
+      "name": "soleon-builder",
+      "source": "./plugins/builder",
+      "description": "Everything in observer, plus the agent build loop: create and update drafts, deploy and promote agents, bind channels, author custom MCP servers and knowledge bases. Includes the deploy-agent skill (identity markdown → Allium spec → validated POST /agents)."
+    },
+    {
+      "name": "soleon-admin",
+      "source": "./plugins/admin",
+      "description": "The full Soleon surface, including the platform-admin-only families: channel and custom-MCP instance reads, eval runs, and discovery. For platform administrators."
     }
   ]
 }

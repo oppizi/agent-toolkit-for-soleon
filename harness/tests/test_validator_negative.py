@@ -11,7 +11,7 @@ import json
 from pathlib import Path
 
 BET_ROOT = Path(__file__).resolve().parents[2]
-CONTRACT = json.loads((BET_ROOT / "plugin/contract.json").read_text())
+CONTRACT = json.loads((BET_ROOT / "plugins/builder/contract.json").read_text())
 FIXTURE = json.loads((BET_ROOT / "preflight/expected_channelless_config.json").read_text())
 
 

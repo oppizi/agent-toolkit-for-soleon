@@ -24,7 +24,7 @@ from allium_to_json import (
 from conftest import write_spec
 
 BET_ROOT = Path(__file__).resolve().parents[2]
-PLUGIN = BET_ROOT / "plugin"
+PLUGIN = BET_ROOT / "plugins" / "builder"
 REAL_IDENTITY = BET_ROOT.parents[1] / ".claude/agents/soleon-fde.md"
 
 
@@ -39,7 +39,7 @@ def resolved():
 
 def test_bundled_binary_resolves_first(resolved):
     contract, binary, version = resolved
-    assert "plugin/bin/allium-" in binary.replace("\\", "/")
+    assert "plugins/builder/bin/allium-" in binary.replace("\\", "/")
     assert version == contract["engine_version"]
 
 

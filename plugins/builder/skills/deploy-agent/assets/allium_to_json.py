@@ -21,7 +21,7 @@ Pipeline (check-first ordering is load-bearing):
   4. local validation against contract.json (full parity with the server)
   5. emit body + projection + report
 
-Stdlib only; reads plugin/contract.json, never repo source.
+Stdlib only; reads the plugin's own contract.json, never repo source.
 """
 from __future__ import annotations
 

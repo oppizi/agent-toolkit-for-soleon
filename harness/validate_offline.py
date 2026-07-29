@@ -23,7 +23,7 @@ from pathlib import Path
 
 BET_ROOT = Path(__file__).resolve().parents[1]
 FIXTURE_PATH = BET_ROOT / "preflight/expected_channelless_config.json"
-CONTRACT_PATH = BET_ROOT / "plugin/contract.json"
+CONTRACT_PATH = BET_ROOT / "plugins/builder/contract.json"
 
 PK_RE = re.compile(r"^APPENV#(dev|staging|prod)#AGENT#[a-z0-9-]+$")
 CREATED_AT_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")

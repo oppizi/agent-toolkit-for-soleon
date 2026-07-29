@@ -1,4 +1,4 @@
-"""Generate plugin/contract.json from agent-infra repo source TEXT.
+"""Generate plugins/builder/contract.json from agent-infra repo source TEXT.
 
 Build-time tool (harness-only, never ships). Reads source as text because
 `lambda/ui_admin/index.py` is un-importable outside a deployed env (reads
@@ -224,7 +224,7 @@ def main() -> None:
     here = Path(__file__).resolve()
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--repo-root", type=Path, default=here.parents[3])
-    ap.add_argument("--out", type=Path, default=here.parents[1] / "plugin/contract.json")
+    ap.add_argument("--out", type=Path, default=here.parents[1] / "plugins/builder/contract.json")
     args = ap.parse_args()
 
     contract = extract(args.repo_root)

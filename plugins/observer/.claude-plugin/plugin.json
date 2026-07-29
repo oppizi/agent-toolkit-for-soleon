@@ -1,0 +1,25 @@
+{
+  "name": "soleon-observer",
+  "description": "Read-only access to Soleon. Inspect agents and their configuration, read traces, failures and usage, review eval scores, and browse ideas and the wiki. Requests no write consent at all — installing this plugin is the least-privilege way to connect Claude Code to a Soleon system.",
+  "version": "0.3.0",
+  "author": {
+    "name": "Oppizi — Soleon Headless Toolkit"
+  },
+  "keywords": [
+    "soleon",
+    "agent-infra",
+    "read-only",
+    "observability",
+    "least-privilege"
+  ],
+  "license": "MIT",
+  "userConfig": {
+    "server_url": {
+      "type": "string",
+      "title": "Soleon MCP server URL",
+      "description": "Which Soleon system to connect to. Defaults to the dev system; point at another environment for development or testing.",
+      "required": false,
+      "default": "https://mcp-dev.oppizi.com/mcp"
+    }
+  }
+}
