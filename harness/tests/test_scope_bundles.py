@@ -333,6 +333,35 @@ def test_expected_pins_fails_loud_on_missing_declarations():
                       'BUNDLE_ORDER = ()\n')
 
 
+def test_expected_publication_maps_constants_onto_artifact_keys():
+    published = expected_publication(
+        'PUBLISHED_ENV = "demo"\n'
+        'PUBLISHED_CLIENT_ID = "abc123"\n'
+        'PUBLISHED_SERVER_URL = "https://mcp-demo.example.com/mcp"\n'
+    )
+    assert published == {
+        "defaultEnv": "demo",
+        "defaultClientId": "abc123",
+        "defaultServerUrl": "https://mcp-demo.example.com/mcp",
+    }
+
+
+def test_expected_publication_fails_loud_on_missing_declarations():
+    with pytest.raises(ExtractionError, match="PUBLISHED_SERVER_URL not found"):
+        expected_publication('PUBLISHED_ENV = "demo"\nPUBLISHED_CLIENT_ID = "abc"\n')
+
+
+@pytest.mark.parametrize("bad", ['" abc123"', '"abc123 "', '""'])
+def test_expected_publication_rejects_whitespace_padded_or_empty_values(bad):
+    """A padded client id survives every "is it set?" check and 401s at runtime."""
+    with pytest.raises(ExtractionError, match="PUBLISHED_CLIENT_ID"):
+        expected_publication(
+            'PUBLISHED_ENV = "demo"\n'
+            f"PUBLISHED_CLIENT_ID = {bad}\n"
+            'PUBLISHED_SERVER_URL = "https://mcp-demo.example.com/mcp"\n'
+        )
+
+
 # ---------------------------------------------------------------------------
 # Positive control — a --check that never fails is indistinguishable from a
 # working one, so prove it detects a mutation.
@@ -405,6 +434,69 @@ def test_check_flags_a_mutated_pin(tmp_path):
         "--check reported clean on a mutated pin — the drift guard is inert"
     )
     assert "observer/.mcp.json" in mutated.stderr
+
+
+def test_generator_takes_the_client_id_from_platform_source(tmp_path):
+    """The published defaults are DERIVED, not baked into the generator.
+
+    Without this, a generator that hardcoded the production client id would pass
+    every other test in this file: the shipped files would match the artifact, the
+    artifact would match its own digest, and `--check` would report clean — while
+    the value silently ignored the source it claims to read. The fake platform tree
+    carries deliberately non-production values, so anything hardcoded shows up as a
+    mismatch here.
+
+    It also pins the client id into the digest chain: mutating it in the vendored
+    artifact alone must make `--check` fail.
+    """
+    clone = tmp_path / "toolkit"
+    shutil.copytree(BET_ROOT / "plugins", clone / "plugins")
+    (clone / "harness").mkdir()
+    shutil.copy(BET_ROOT / "harness/sync_scope_bundles.py", clone / "harness")
+
+    platform = _fake_platform_root(tmp_path)
+    (platform / "stacks" / "_mcp_scopes.py").write_text(
+        _FIXTURE_SOURCE.replace('("watcher", "maker", "boss")',
+                                '("observer", "builder", "admin")')
+        .replace('"watcher"', '"observer"')
+        .replace('"maker"', '"builder"')
+        .replace('"boss"', '"admin"')
+    )
+
+    seed = subprocess.run(
+        [sys.executable, str(clone / "harness/sync_scope_bundles.py"),
+         "--repo-root", str(platform)],
+        capture_output=True, text=True,
+    )
+    assert seed.returncode == 0, seed.stderr
+
+    artifact = json.loads((clone / "plugins/scope_bundles.json").read_text())
+    assert artifact["defaultClientId"] == "fixtureclientid0000000000", (
+        "the generator did not take the client id from platform source — it is "
+        f"hardcoded or read from elsewhere (got {artifact['defaultClientId']!r})"
+    )
+
+    for bundle in ("observer", "builder", "admin"):
+        doc = json.loads((clone / f"plugins/{bundle}/.mcp.json").read_text())
+        (server,) = doc["mcpServers"].values()
+        assert server["oauth"]["clientId"] == "fixtureclientid0000000000"
+        manifest = json.loads(
+            (clone / f"plugins/{bundle}/.claude-plugin/plugin.json").read_text()
+        )
+        assert (
+            manifest["userConfig"]["server_url"]["default"]
+            == "https://mcp-fixture.example.com/mcp"
+        ), f"{bundle}'s server_url default was not generated from platform source"
+
+    # And the client id must be inside the digested payload, not beside it.
+    target = clone / "plugins/scope_bundles.json"
+    doc = json.loads(target.read_text())
+    doc["defaultClientId"] = "tamperedclientid000000000"
+    target.write_text(json.dumps(doc, indent=2, sort_keys=True) + "\n")
+    assert _run_check(platform, clone).returncode != 0, (
+        "--check reported clean after the vendored client id was hand-edited — a "
+        "dead client id would ship with a green suite"
+    )
 
 
 # ---------------------------------------------------------------------------
