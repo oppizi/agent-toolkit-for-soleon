@@ -48,9 +48,47 @@ Then sign in — the first request to the server triggers the OAuth flow in your
 browser, or run `claude mcp login` explicitly. There is no token to paste.
 
 On install you may set a **Soleon MCP server URL**. It defaults to the dev system
-(`https://mcp-dev.oppizi.com/mcp`); point it at another environment to work there.
-Use the stage-less custom-domain form — a URL carrying an API-Gateway stage path
-breaks OAuth discovery.
+(`https://mcp-dev.oppizi.com/mcp`), which the plugin is configured for out of the
+box — nothing else to set up.
+
+## Connecting to a different Soleon system
+
+The server URL and the OAuth **client ID** are env-coupled — each Soleon system
+registers its own client — so changing one without the other is a guaranteed
+sign-in failure. The plugin ships dev's client ID as a literal, and a plugin
+setting cannot override it (Claude Code substitutes `${user_config.…}` in the
+server URL but *not* inside the OAuth block). To work against another environment,
+add the server directly and pass both:
+
+```bash
+claude mcp add --transport http soleon-agent-toolkit \
+  "$(aws ssm get-parameter --name /agent-infra/mcp/{env}/oauth-base-url \
+       --query Parameter.Value --output text)/mcp" \
+  --client-id "$(aws ssm get-parameter --name /agent-infra/mcp/{env}/cli-client-id \
+       --query Parameter.Value --output text)"
+```
+
+Substitute your environment for `{env}` (for example `staging`). Both lookups need
+AWS access to the account running that Soleon system — ask whoever operates it if
+you don't have it. Use the stage-less custom-domain URL these parameters return; a
+URL carrying an API-Gateway stage path breaks OAuth discovery.
+
+### Access
+
+This connects to an Oppizi-operated Soleon system and requires an account there.
+There is no public sign-up — accounts are created by an administrator, so if you
+have not been given one, the sign-in page cannot be completed.
+
+### Troubleshooting sign-in
+
+- **"Incompatible auth server: does not support dynamic client registration"** —
+  you are on plugin version **0.3.0 or earlier**, which shipped without an OAuth
+  client ID. Update to **0.3.1 or later**. No server-side change can fix it: a
+  plugin with no client ID never reaches the authorization server at all.
+- **"Unrecognised MCP client" / `unauthorized_client`** — the client ID being sent
+  is not registered in the environment you are pointing at. The error page names
+  that environment's current client ID; re-add the server with `--client-id` as
+  above.
 
 ## Upgrading from soleon-deploy-agent
 

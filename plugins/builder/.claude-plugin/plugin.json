@@ -1,7 +1,7 @@
 {
   "name": "soleon-builder",
   "description": "The Soleon agent build loop. Everything in soleon-observer, plus: create and update agent drafts, deploy and promote agents, bind channels, and author custom MCP servers and knowledge bases. Includes the deploy-agent skill, which converts a local Claude Code agent identity (.claude/agents/<name>.md) into a validated, deploy-ready POST /agents request via an Allium specification. Distill, elicit gaps, and validate fully offline; then deploy the confirmed assets via the Soleon MCP server.",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "author": {
     "name": "Oppizi — Soleon Headless Toolkit (bet-1)"
   },

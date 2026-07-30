@@ -34,11 +34,20 @@ VENDORED = PLUGINS_DIR / "scope_bundles.json"
 BUNDLES = sorted(p.name for p in PLUGINS_DIR.iterdir() if p.is_dir())
 
 sys.path.insert(0, str(BET_ROOT / "harness"))
-from sync_scope_bundles import ExtractionError, expected_pins  # noqa: E402
+from sync_scope_bundles import (  # noqa: E402
+    ExtractionError,
+    expected_pins,
+    expected_publication,
+)
 
 
 def _mcp_json(bundle: str) -> dict:
     return json.loads((PLUGINS_DIR / bundle / ".mcp.json").read_text())
+
+
+def _oauth(bundle: str) -> dict:
+    (server,) = _mcp_json(bundle)["mcpServers"].values()
+    return server["oauth"]
 
 
 def _scopes(bundle: str) -> list[str]:
@@ -141,6 +150,123 @@ def test_shipped_pins_match_the_vendored_artifact():
         )
 
 
+# ---------------------------------------------------------------------------
+# The OAuth client identity the plugins ship.
+#
+# A plugin with no `oauth.clientId` cannot sign in AT ALL — the Soleon
+# authorization proxy rejects `/authorize` without one, and Claude Code, finding
+# no client id and no dynamic-registration endpoint, fails with "Incompatible
+# auth server: does not support dynamic client registration". That shipped in
+# 0.3.0 with a fully green suite, because every check above constrains the SCOPE
+# pin and nothing constrained the client identity.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("bundle", ["observer", "builder", "admin"])
+def test_plugin_ships_a_usable_oauth_client_id(bundle):
+    """Present, correctly named, and not a shape that fails at runtime."""
+    oauth = _oauth(bundle)
+    assert "client_id" not in oauth, (
+        f"{bundle}/.mcp.json uses the snake_case key `client_id`. The documented "
+        "schema key is `clientId`; `client_id` is silently IGNORED, which leaves the "
+        "plugin unable to sign in while every other check here passes."
+    )
+    client_id = oauth.get("clientId")
+    assert isinstance(client_id, str) and client_id, (
+        f"{bundle}/.mcp.json declares no oauth.clientId — the plugin cannot complete "
+        "an OAuth sign-in. Regenerate with "
+        "`python3 harness/sync_scope_bundles.py --repo-root <agent-infra>`"
+    )
+    assert client_id == client_id.strip(), (
+        f"{bundle} clientId {client_id!r} carries surrounding whitespace — the proxy "
+        "compares client_id with an exact match, so this is a silent 401 that every "
+        "non-empty check passes"
+    )
+
+
+@pytest.mark.parametrize("bundle", ["observer", "builder", "admin"])
+def test_client_id_is_a_literal_not_a_user_config_reference(bundle):
+    """`${user_config.…}` does NOT expand inside the `oauth` block.
+
+    This is the trap the whole file exists to prevent, because the line directly
+    above `clientId` in the same document IS a `${user_config.…}` reference — so
+    the symmetric-looking edit is the natural one to make, and it fails silently:
+    Claude Code sends the unexpanded string verbatim as the client_id and the proxy
+    401s. Verified empirically against Claude Code 2.1.220, with the option both
+    unset and explicitly configured.
+    """
+    client_id = _oauth(bundle)["clientId"]
+    assert "${" not in client_id, (
+        f"{bundle} clientId is {client_id!r} — a `${{user_config.…}}` reference. "
+        "Claude Code expands those in the server `url` but NOT inside `oauth`, so "
+        "this ships the literal placeholder as the client id and no user can sign "
+        "in. Use the literal value; the documented override is "
+        "`claude mcp add --transport http --client-id <id> <url>`."
+    )
+    assert "user_config" not in client_id
+
+
+@pytest.mark.parametrize("bundle", ["observer", "builder", "admin"])
+def test_shipped_oauth_defaults_match_the_vendored_artifact_as_a_pair(bundle):
+    """The content check for the client identity, with no platform source.
+
+    Counterpart to `test_shipped_pins_match_the_vendored_artifact`: shape checks
+    cannot tell a correct client id from a well-formed wrong one.
+
+    Asserted as a PAIR because the two values are env-coupled — a `server_url`
+    pointing at staging with dev's client id is a guaranteed 401, and each value
+    passes its own individual check. The `server_url` side is compared against the
+    RESOLVED `plugin.json` default, not the `.mcp.json` literal: all three
+    `.mcp.json` files carry the identical `${user_config.server_url}` string, which
+    carries no information about where the plugin actually points.
+    """
+    artifact = json.loads(VENDORED.read_text())
+    shipped = (
+        _plugin_json(bundle)["userConfig"]["server_url"]["default"],
+        _oauth(bundle)["clientId"],
+    )
+    published = (artifact["defaultServerUrl"], artifact["defaultClientId"])
+    assert shipped == published, (
+        f"{bundle}'s (server_url, clientId) pair has drifted from "
+        f"plugins/scope_bundles.json.\n  shipped:   {shipped}\n  artifact:  {published}\n"
+        "These are env-coupled: a half-completed environment switch is a 401 that "
+        "every individual check passes. Regenerate with "
+        "`python3 harness/sync_scope_bundles.py --repo-root <agent-infra>`"
+    )
+
+
+def test_no_client_id_user_config_field_is_advertised():
+    """Do not offer an override that cannot work.
+
+    `${user_config.client_id}` is unusable inside the `oauth` block, so a
+    `client_id` userConfig field would prompt installers for a value that is read
+    by nothing. The real override is the CLI `--client-id` flag, documented in the
+    plugin READMEs.
+    """
+    for bundle in ("observer", "builder", "admin"):
+        user_config = _plugin_json(bundle)["userConfig"]
+        assert "client_id" not in user_config, (
+            f"{bundle} declares a client_id userConfig field. It cannot reach the "
+            "oauth block, so it is an override that silently does nothing — worse "
+            "than no override at all. Document `claude mcp add --client-id` instead."
+        )
+
+
+def test_published_client_id_is_not_marked_sensitive_anywhere():
+    """It is an identifier, not a credential — and `sensitive` has a real cost.
+
+    Sensitive values are routed to the OS keychain, which shares a small budget
+    with the OAuth tokens themselves. Spending it on a public PKCE identifier buys
+    nothing.
+    """
+    for bundle in ("observer", "builder", "admin"):
+        for name, field in _plugin_json(bundle)["userConfig"].items():
+            assert not field.get("sensitive"), (
+                f"{bundle}'s userConfig field {name!r} is marked sensitive; none of "
+                "these values are secrets"
+            )
+
+
 def test_vendored_artifact_sha256_covers_its_own_content():
     """Without this the recorded digest would be decorative — it must actually be a
     checksum over the payload it ships beside."""
@@ -213,11 +339,22 @@ def test_expected_pins_fails_loud_on_missing_declarations():
 # ---------------------------------------------------------------------------
 
 
+# The publication half of the fake platform tree. Deliberately NOT the real
+# published values: a fixture that happened to match production would let a
+# generator bug that ignores the source entirely still pass.
+_FIXTURE_PUBLICATION = '''\
+PUBLISHED_ENV = "fixture"
+PUBLISHED_CLIENT_ID = "fixtureclientid0000000000"
+PUBLISHED_SERVER_URL = "https://mcp-fixture.example.com/mcp"
+'''
+
+
 def _fake_platform_root(tmp_path: Path) -> Path:
-    """A minimal agent-infra-shaped tree carrying only the file we extract from."""
+    """A minimal agent-infra-shaped tree carrying only the files we extract from."""
     root = tmp_path / "fake-agent-infra"
     (root / "stacks").mkdir(parents=True)
     (root / "stacks" / "_mcp_scopes.py").write_text(_FIXTURE_SOURCE)
+    (root / "stacks" / "_plugin_publication.py").write_text(_FIXTURE_PUBLICATION)
     return root
 
 

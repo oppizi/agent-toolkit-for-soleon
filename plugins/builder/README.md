@@ -68,13 +68,38 @@ The plugin pins the sixteen scopes listed above, so the token it obtains is capp
 at the builder surface no matter what the server would otherwise offer.
 
 The install prompt offers a **Soleon MCP server URL**, defaulting to the dev system
-(`https://mcp-dev.oppizi.com/mcp`). Point it at another environment to work there;
-switch any time via `/plugin` → reconfigure → change the URL → `/reload-plugins`,
-then sign in again (sessions are per-environment).
+(`https://mcp-dev.oppizi.com/mcp`) — which the plugin is configured for out of the
+box, so nothing else needs setting up to use it.
 
-Use the stage-less custom-domain form. A URL carrying an API-Gateway stage path —
-the `…execute-api.us-east-1.amazonaws.com/prod/mcp` shape earlier versions
-documented — breaks OAuth discovery and the sign-in will fail on the first request.
+This connects to an Oppizi-operated Soleon system and requires an account there.
+There is no public sign-up — accounts are created by an administrator, so if you
+have not been given one, the sign-in page cannot be completed.
+
+### Connecting to a different Soleon system
+
+The server URL and the OAuth **client ID** are env-coupled — each Soleon system
+registers its own client — so changing one without the other is a guaranteed
+sign-in failure. The plugin ships dev's client ID as a literal, and the `/plugin`
+reconfigure path cannot override it (Claude Code substitutes `${user_config.…}` in
+the server URL but *not* inside the OAuth block). To work against another
+environment, add the server directly and pass both:
+
+```bash
+claude mcp add --transport http soleon-agent-toolkit \
+  "$(aws ssm get-parameter --name /agent-infra/mcp/{env}/oauth-base-url \
+       --query Parameter.Value --output text)/mcp" \
+  --client-id "$(aws ssm get-parameter --name /agent-infra/mcp/{env}/cli-client-id \
+       --query Parameter.Value --output text)"
+```
+
+Substitute your environment for `{env}` (for example `staging`), then sign in again
+— sessions are per-environment. Both lookups need AWS access to the account running
+that Soleon system; ask whoever operates it if you don't have it.
+
+Use the stage-less custom-domain URL these parameters return. A URL carrying an
+API-Gateway stage path — the `…execute-api.us-east-1.amazonaws.com/prod/mcp` shape
+earlier versions documented — breaks OAuth discovery and the sign-in will fail on
+the first request.
 
 ## Upgrading from soleon-deploy-agent
 
@@ -201,3 +226,14 @@ common:
   PATH → run the `cargo install` command above.
 - **ContractError** — `contract.json` missing/corrupt → reinstall the plugin
   from its source (the contract ships with the bundle; it is not user-editable).
+
+Sign-in specifically:
+
+- **"Incompatible auth server: does not support dynamic client registration"** —
+  you are on plugin version **0.3.0 or earlier**, which shipped without an OAuth
+  client ID. Update to **0.3.1 or later**. No server-side change can fix it: a
+  plugin with no client ID never reaches the authorization server at all.
+- **"Unrecognised MCP client" / `unauthorized_client`** — the client ID being sent
+  is not registered in the environment you are pointing at. The error page names
+  that environment's current client ID; re-add the server with `--client-id` as
+  shown under *Connecting to a different Soleon system*.
