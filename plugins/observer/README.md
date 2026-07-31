@@ -56,18 +56,41 @@ server URL but *not* inside the OAuth block). To work against another environmen
 add the server directly and pass both:
 
 ```bash
-claude mcp add --transport http soleon-agent-toolkit \
-  "$(aws ssm get-parameter --name /agent-infra/mcp/{env}/oauth-base-url \
-       --query Parameter.Value --output text)/mcp" \
-  --client-id "$(aws ssm get-parameter --name /agent-infra/mcp/{env}/cli-client-id \
-       --query Parameter.Value --output text)"
+ENV=staging   # the environment you want
+
+claude mcp add-json soleon-observer-$ENV "$(cat <<JSON
+{
+  "type": "http",
+  "url": "$(aws ssm get-parameter --name /agent-infra/mcp/$ENV/oauth-base-url \
+             --query Parameter.Value --output text)/mcp",
+  "oauth": {
+    "clientId": "$(aws ssm get-parameter --name /agent-infra/mcp/$ENV/cli-client-id \
+                     --query Parameter.Value --output text)",
+    "scopes": "soleon-mcp/agent.read soleon-mcp/kb.read soleon-mcp/observability.read soleon-mcp/eval.read soleon-mcp/usage.read soleon-mcp/governance.read soleon-mcp/business.read soleon-mcp/wiki.read"
+  }
+}
+JSON
+)"
+
+claude mcp login soleon-observer-$ENV
 ```
 
-Substitute your environment for `{env}` (for example `staging`). Both lookups need
-AWS access to the account running that Soleon system — ask whoever operates it if
-you don't have it. Use the stage-less custom-domain URL these parameters return; a
-URL carrying an API-Gateway stage path breaks OAuth discovery.
+**Use `add-json`, not `claude mcp add`.** `claude mcp add` cannot set OAuth
+scopes — its `--scope` flag is the *config* scope (local/user/project), something
+else entirely — so a server added that way requests whatever the server advertises
+as its default. That default is currently this same read-only set, so `add` happens
+to work for **this** bundle today — but nothing pins it, and it would drift silently
+if the server's default ever changed. `add-json` states the pin explicitly.
 
+This registers a **second, separate** MCP server alongside the plugin's own, which
+stays pointed at the default system. Disable the plugin (or just use the new
+server) so you are not signed in to two systems at once.
+
+Both `aws ssm` lookups need access to the AWS account running that Soleon system —
+ask whoever operates it if you don't have it. They return the stage-less
+custom-domain URL on purpose: a URL carrying an API-Gateway stage path (the
+`…execute-api.us-east-1.amazonaws.com/prod/mcp` shape earlier versions documented)
+breaks OAuth discovery and the sign-in fails on the first request.
 ### Access
 
 This connects to an Oppizi-operated Soleon system and requires an account there.
@@ -82,8 +105,8 @@ have not been given one, the sign-in page cannot be completed.
   plugin with no client ID never reaches the authorization server at all.
 - **"Unrecognised MCP client" / `unauthorized_client`** — the client ID being sent
   is not registered in the environment you are pointing at. The error page names
-  that environment's current client ID; re-add the server with `--client-id` as
-  above.
+  that environment's current client ID; re-add the server with `add-json` as
+  shown above, using that ID.
 
 ## Upgrading from soleon-deploy-agent
 

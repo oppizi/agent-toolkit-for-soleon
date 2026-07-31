@@ -29,10 +29,17 @@ and major bumps are deliberate.
 - Every README gained a **Connecting to a different Soleon system** section. The
   client ID cannot be overridden through plugin settings — Claude Code substitutes
   `${user_config.…}` in the server URL but not inside the OAuth block — so pointing
-  at another environment uses `claude mcp add --transport http … --client-id …`.
-  The section gives the two `aws ssm get-parameter` lookups that yield both values
-  for any environment, rather than hard-coding a second environment's identifiers
-  that nothing would keep current.
+  at another environment registers a separate server with `claude mcp add-json`,
+  carrying the client ID **and** the bundle's scope pin. `claude mcp add` is
+  explicitly ruled out: it cannot set `oauth.scopes` (its `--scope` flag is the
+  unrelated config scope), so it silently yields the read-only observer set — a
+  builder or admin user would get a token with none of the write or deploy scopes
+  their plugin exists for. The section gives the two `aws ssm get-parameter`
+  lookups that yield both values for any environment, rather than hard-coding a
+  second environment's identifiers that nothing would keep current.
+- The **Configure options** screen offers only the server URL — a client ID field
+  there could not be read. Its description now says so, and points at the working
+  override, instead of inviting a URL-only change that always 401s.
 - Every README now states that this connects to an Oppizi-operated Soleon system
   and requires an account, with no public sign-up.
 - Every README now carries a sign-in troubleshooting section mapping the two

@@ -278,6 +278,40 @@ def test_server_url_config_screen_warns_that_the_pair_is_coupled(bundle):
     )
 
 
+@pytest.mark.parametrize("bundle", ["observer", "builder", "admin"])
+def test_readme_override_recipe_uses_add_json_with_this_bundles_exact_pin(bundle):
+    """The documented override must not silently downgrade the token.
+
+    `claude mcp add` has NO way to set `oauth.scopes` (its `--scope` flag is the
+    *config* scope — local/user/project — an unrelated setting with a colliding
+    name). A server added that way falls back to whatever the resource advertises
+    as its default, which is the **read-only observer set**. Verified live against
+    ahp-396: `add --client-id` produced the 8 observer scopes for a request that
+    should have carried builder's 16.
+
+    So a README telling a builder/admin user to use `claude mcp add` hands them a
+    read-only token while everything looks correctly installed — the same
+    "green but broken" shape as the missing clientId this release fixes.
+
+    The recipe must therefore use `add-json` AND embed this bundle's exact pin.
+    """
+    readme = (PLUGINS_DIR / bundle / "README.md").read_text()
+    artifact_pin = json.loads(VENDORED.read_text())["bundles"][bundle]
+
+    assert "claude mcp add-json" in readme, (
+        f"{bundle}/README.md does not document `claude mcp add-json`"
+    )
+    assert "claude mcp add --transport" not in readme, (
+        f"{bundle}/README.md still documents `claude mcp add --transport`, which "
+        "cannot carry oauth.scopes and silently yields a read-only token"
+    )
+    assert artifact_pin in readme, (
+        f"{bundle}/README.md's override recipe does not embed the bundle's exact "
+        "pin from plugins/scope_bundles.json — a hand-edited or stale scope string "
+        "would grant the wrong consent. Regenerate the recipe from the artifact."
+    )
+
+
 def test_published_client_id_is_not_marked_sensitive_anywhere():
     """It is an identifier, not a credential — and `sensitive` has a real cost.
 
