@@ -583,3 +583,27 @@ def test_no_drift_against_live_platform_source():
     assert result.returncode == 0, (
         f"pins have drifted from live platform source:\n{result.stderr}"
     )
+
+
+def test_changelog_top_section_matches_the_shipped_version():
+    """A changelog whose newest heading isn't the shipped version is worse than none.
+
+    The rollback plan leans on the version being meaningful, and the version is
+    auto-bumped by a hook on any bundle content change — so the heading drifts
+    silently unless something checks it. (It did: the READMEs bumped 0.3.1 -> 0.3.2
+    while the heading still said 0.3.1.)
+    """
+    changelog = (BET_ROOT / "CHANGELOG.md").read_text()
+    top = next(
+        line[3:].strip()
+        for line in changelog.splitlines()
+        if line.startswith("## ")
+    )
+    versions = {_plugin_json(b)["version"] for b in ("observer", "builder", "admin")}
+    assert len(versions) == 1, f"bundles disagree on version: {versions}"
+    shipped = versions.pop()
+    assert top == shipped, (
+        f"CHANGELOG's newest section is {top!r} but the plugins ship {shipped!r}. "
+        "The version-bump hook fires on any bundle content change; update the "
+        "heading in the same commit."
+    )

@@ -4,7 +4,7 @@ Versions are per-plugin (`soleon-observer`, `soleon-builder`, `soleon-admin`) an
 move together. Patch bumps are automatic when a bundle's content changes; minor
 and major bumps are deliberate.
 
-## 0.3.1
+## 0.3.2
 
 ### Fixed
 
