@@ -252,6 +252,32 @@ def test_no_client_id_user_config_field_is_advertised():
         )
 
 
+@pytest.mark.parametrize("bundle", ["observer", "builder", "admin"])
+def test_server_url_config_screen_warns_that_the_pair_is_coupled(bundle):
+    """The `/plugin` Configure screen must not invite a half-completed override.
+
+    That screen offers `server_url` and — necessarily — NOT `client_id`, because
+    a `client_id` field could not be read from the `oauth` block
+    (`test_no_client_id_user_config_field_is_advertised`). So the ONE action the
+    screen makes easy is exactly the action that breaks sign-in: repoint the URL
+    at another environment while still sending this one's client id, yielding
+    `401 unauthorized_client` with nothing in the UI explaining why.
+
+    The description is the only text rendered there, so it is the only place that
+    warning can live. It previously read "point at another environment for
+    development or testing" — an active invitation to the broken path.
+    """
+    desc = _plugin_json(bundle)["userConfig"]["server_url"]["description"]
+    assert "client id" in desc.lower() or "client_id" in desc.lower(), (
+        f"{bundle}'s server_url description does not mention the client ID, so the "
+        "Configure screen invites changing the URL alone — a guaranteed 401"
+    )
+    assert "--client-id" in desc, (
+        f"{bundle}'s server_url description must name the working override "
+        "(`claude mcp add --client-id`), not just warn that the URL is insufficient"
+    )
+
+
 def test_published_client_id_is_not_marked_sensitive_anywhere():
     """It is an identifier, not a credential — and `sensitive` has a real cost.
 
