@@ -37,7 +37,6 @@ sys.path.insert(0, str(BET_ROOT / "harness"))
 from sync_scope_bundles import (  # noqa: E402
     ExtractionError,
     expected_pins,
-    expected_publication,
 )
 
 
@@ -192,30 +191,30 @@ def test_plugin_ships_no_oauth_client_id(bundle):
 
 
 @pytest.mark.parametrize("bundle", ["observer", "builder", "admin"])
-def test_shipped_server_url_matches_the_vendored_artifact(bundle):
-    """The content check for where a plugin points, with no platform source.
+def test_shipped_server_url_is_a_stage_less_custom_domain_mcp_endpoint(bundle):
+    """`server_url` is hand-maintained again, so guard its SHAPE.
 
-    Counterpart to `test_shipped_pins_match_the_vendored_artifact`: shape checks
-    cannot tell a correct URL from a well-formed wrong one.
+    It was briefly generated from a platform constant and bound to the vendored
+    artifact. That binding existed to keep it in lockstep with a published client
+    id — the two were env-coupled, and a half-completed environment switch 401'd
+    while each value passed its own check. With the client id gone there is
+    nothing left to keep it in step WITH, so the field returned to being
+    hand-written per plugin, which is the shape this repo had before that
+    release.
 
-    Compared against the RESOLVED `plugin.json` default, not the `.mcp.json`
-    literal: all three `.mcp.json` files carry the identical
-    `${user_config.server_url}` string, which says nothing about where the plugin
-    actually points.
-
-    This previously asserted a (server_url, clientId) PAIR, because the two were
-    env-coupled: a half-completed environment switch 401'd while each value passed
-    its own individual check. With the client id gone there is only one value left
-    to get wrong, which is precisely the point of removing it.
+    What can still be asserted with no platform source is the property that
+    actually breaks users: an `execute-api` URL carries a `/prod` stage path,
+    which breaks RFC 8414 path-insertion discovery. Shipping one to a public
+    marketplace would hand that defect to every installer.
     """
-    artifact = json.loads(VENDORED.read_text())
-    shipped = _plugin_json(bundle)["userConfig"]["server_url"]["default"]
-    published = artifact["defaultServerUrl"]
-    assert shipped == published, (
-        f"{bundle}'s server_url default has drifted from plugins/scope_bundles.json."
-        f"\n  shipped:   {shipped}\n  artifact:  {published}\n"
-        "Regenerate with "
-        "`python3 harness/sync_scope_bundles.py --repo-root <agent-infra>`"
+    url = _plugin_json(bundle)["userConfig"]["server_url"]["default"]
+    assert url.startswith("https://"), f"{bundle}: {url!r} must be https"
+    assert "execute-api" not in url, (
+        f"{bundle}: {url!r} is an execute-api URL — its /prod stage path breaks "
+        "RFC 8414 path-insertion discovery; publish the custom domain instead"
+    )
+    assert url.endswith("/mcp"), (
+        f"{bundle}: {url!r} must address the /mcp endpoint, not the OAuth base URL"
     )
 
 
@@ -389,35 +388,6 @@ def test_expected_pins_fails_loud_on_missing_declarations():
                       'BUNDLE_ORDER = ()\n')
 
 
-def test_expected_publication_maps_constants_onto_artifact_keys():
-    published = expected_publication(
-        'PUBLISHED_ENV = "demo"\n'
-        'PUBLISHED_CLIENT_ID = "abc123"\n'
-        'PUBLISHED_SERVER_URL = "https://mcp-demo.example.com/mcp"\n'
-    )
-    assert published == {
-        "defaultEnv": "demo",
-        "defaultClientId": "abc123",
-        "defaultServerUrl": "https://mcp-demo.example.com/mcp",
-    }
-
-
-def test_expected_publication_fails_loud_on_missing_declarations():
-    with pytest.raises(ExtractionError, match="PUBLISHED_SERVER_URL not found"):
-        expected_publication('PUBLISHED_ENV = "demo"\nPUBLISHED_CLIENT_ID = "abc"\n')
-
-
-@pytest.mark.parametrize("bad", ['" abc123"', '"abc123 "', '""'])
-def test_expected_publication_rejects_whitespace_padded_or_empty_values(bad):
-    """A padded client id survives every "is it set?" check and 401s at runtime."""
-    with pytest.raises(ExtractionError, match="PUBLISHED_CLIENT_ID"):
-        expected_publication(
-            'PUBLISHED_ENV = "demo"\n'
-            f"PUBLISHED_CLIENT_ID = {bad}\n"
-            'PUBLISHED_SERVER_URL = "https://mcp-demo.example.com/mcp"\n'
-        )
-
-
 # ---------------------------------------------------------------------------
 # Positive control — a --check that never fails is indistinguishable from a
 # working one, so prove it detects a mutation.
@@ -492,7 +462,7 @@ def test_check_flags_a_mutated_pin(tmp_path):
     assert "observer/.mcp.json" in mutated.stderr
 
 
-def test_generator_takes_the_client_id_from_platform_source(tmp_path):
+def test_generator_takes_the_pins_from_platform_source(tmp_path):
     """The published defaults are DERIVED, not baked into the generator.
 
     Without this, a generator that hardcoded the production client id would pass
@@ -502,8 +472,8 @@ def test_generator_takes_the_client_id_from_platform_source(tmp_path):
     carries deliberately non-production values, so anything hardcoded shows up as a
     mismatch here.
 
-    It also pins the client id into the digest chain: mutating it in the vendored
-    artifact alone must make `--check` fail.
+    It also pins the scope pins into the digest chain: mutating one in the
+    vendored artifact alone must make `--check` fail.
     """
     clone = tmp_path / "toolkit"
     shutil.copytree(BET_ROOT / "plugins", clone / "plugins")
@@ -527,38 +497,28 @@ def test_generator_takes_the_client_id_from_platform_source(tmp_path):
     assert seed.returncode == 0, seed.stderr
 
     artifact = json.loads((clone / "plugins/scope_bundles.json").read_text())
-    assert artifact["defaultClientId"] == "fixtureclientid0000000000", (
-        "the generator did not take the client id from platform source — it is "
-        f"hardcoded or read from elsewhere (got {artifact['defaultClientId']!r})"
+    assert artifact["bundles"]["observer"].startswith("demo-rs/"), (
+        "the generator did not take the scope identifier from platform source — "
+        f"it is hardcoded or read from elsewhere (got {artifact['bundles']['observer']!r})"
     )
 
     for bundle in ("observer", "builder", "admin"):
         doc = json.loads((clone / f"plugins/{bundle}/.mcp.json").read_text())
         (server,) = doc["mcpServers"].values()
-        # The generator must NOT write a client id into a plugin, even though the
-        # platform source still declares one. The two facts are now separate: the
-        # constant remains readable for operators diagnosing a legacy-arm
-        # mismatch, but nothing published to users carries it.
-        assert "clientId" not in server["oauth"], (
-            "the generator wrote a clientId into a plugin — plugins are "
-            "environment-neutral now and must carry only the scope pin"
+        # The generator must write the scope pin and NOTHING else into a plugin.
+        assert set(server["oauth"]) == {"scopes"}, (
+            f"the generator wrote unexpected oauth keys {sorted(server['oauth'])} — "
+            "plugins are environment-neutral and carry only the scope pin"
         )
-        manifest = json.loads(
-            (clone / f"plugins/{bundle}/.claude-plugin/plugin.json").read_text()
-        )
-        assert (
-            manifest["userConfig"]["server_url"]["default"]
-            == "https://mcp-fixture.example.com/mcp"
-        ), f"{bundle}'s server_url default was not generated from platform source"
 
-    # And the client id must be inside the digested payload, not beside it.
+    # And the pins must be inside the digested payload, not beside it.
     target = clone / "plugins/scope_bundles.json"
     doc = json.loads(target.read_text())
-    doc["defaultClientId"] = "tamperedclientid000000000"
+    doc["bundles"]["observer"] = "demo-rs/tampered"
     target.write_text(json.dumps(doc, indent=2, sort_keys=True) + "\n")
     assert _run_check(platform, clone).returncode != 0, (
-        "--check reported clean after the vendored client id was hand-edited — a "
-        "dead client id would ship with a green suite"
+        "--check reported clean after a vendored pin was hand-edited — the wrong "
+        "consent would ship with a green suite"
     )
 
 

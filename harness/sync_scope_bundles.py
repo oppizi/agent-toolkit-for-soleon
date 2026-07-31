@@ -43,19 +43,14 @@ BET_ROOT = Path(__file__).resolve().parents[1]
 PLUGINS = BET_ROOT / "plugins"
 VENDORED_ARTIFACT = PLUGINS / "scope_bundles.json"
 SCOPES_SOURCE_REL = Path("stacks") / "_mcp_scopes.py"
-# The OAuth defaults the plugins publish. A SECOND platform source file, because
-# these are deploy-time values (a Cognito client id, a custom-domain URL) that no
-# amount of reading the scope taxonomy produces.
-PUBLICATION_SOURCE_REL = Path("stacks") / "_plugin_publication.py"
 
-# The publication constants, and the artifact key each one is published under.
-# Key names and the serialization below must stay byte-identical with the
-# platform's own `scripts/gen_scope_bundles.py`, since both write this artifact.
-PUBLICATION_FIELDS = {
-    "PUBLISHED_CLIENT_ID": "defaultClientId",
-    "PUBLISHED_SERVER_URL": "defaultServerUrl",
-    "PUBLISHED_ENV": "defaultEnv",
-}
+# There is deliberately no second platform source. A previous release published
+# OAuth defaults (a Cognito client id, a server URL, an env name) from
+# `stacks/_plugin_publication.py` so the plugins could ship a client id; the
+# server now accepts the client identity the Anthropic harnesses publish for
+# themselves, so plugins carry none and that whole file is gone. Each plugin's
+# `server_url` default is hand-maintained in its own manifest, which is the shape
+# this repo had before that release.
 
 
 class ExtractionError(RuntimeError):
@@ -118,33 +113,6 @@ def expected_pins(source_text: str) -> dict[str, str]:
     return pins
 
 
-def expected_publication(source_text: str) -> dict[str, str]:
-    """Derive the published OAuth defaults from the platform's publication source.
-
-    Same shape as :func:`expected_pins` — pure, takes source TEXT, no import — but
-    a different question. The scope pins are *derived* from a taxonomy; these are
-    *reviewed constants*, because a Cognito client id and a custom-domain URL are
-    deploy-time facts that no source file computes.
-
-    Extracting them here rather than hand-copying them is the whole point: it makes
-    the value the plugins ship provably the value the platform believes it
-    published, and the artifact's sha256 then carries that guarantee into a
-    standalone clone with no platform source at all.
-    """
-    tree = ast.parse(source_text)
-    published: dict[str, str] = {}
-    for const_name, artifact_key in PUBLICATION_FIELDS.items():
-        value = ast.literal_eval(_assigned_value(tree, const_name))
-        if not isinstance(value, str) or not value or value != value.strip():
-            raise ExtractionError(
-                f"{const_name} must be a non-empty string with no surrounding "
-                f"whitespace, got {value!r}. The OAuth proxy compares client_id with "
-                "an exact match, so a stray space is a silent 401."
-            )
-        published[artifact_key] = value
-    return published
-
-
 def canonical_json(payload: dict) -> str:
     return json.dumps(payload, sort_keys=True, separators=(",", ":"))
 
@@ -153,21 +121,21 @@ def payload_sha256(payload: dict) -> str:
     return hashlib.sha256(canonical_json(payload).encode("utf-8")).hexdigest()
 
 
-def render_artifact(pins: dict[str, str], publication: dict[str, str]) -> dict:
+def render_artifact(pins: dict[str, str]) -> dict:
     """The artifact body + its digest.
 
     Must stay byte-identical with the platform's ``scripts/gen_scope_bundles.py``:
     both write this file, and `test_no_drift_against_live_platform_source` compares
-    them. The publication defaults ride INSIDE the digested payload so a hand-edited
-    vendored copy fails the integrity self-check rather than shipping a dead
-    client id.
+    them. The payload is the scope taxonomy only — the digest exists so a
+    hand-edited vendored pin fails the integrity self-check instead of silently
+    granting the wrong consent.
     """
-    payload = {"bundleOrder": list(pins), "bundles": dict(pins), **publication}
+    payload = {"bundleOrder": list(pins), "bundles": dict(pins)}
     return {**payload, "sha256": payload_sha256(payload)}
 
 
-def artifact_text(pins: dict[str, str], publication: dict[str, str]) -> str:
-    return json.dumps(render_artifact(pins, publication), indent=2, sort_keys=True) + "\n"
+def artifact_text(pins: dict[str, str]) -> str:
+    return json.dumps(render_artifact(pins), indent=2, sort_keys=True) + "\n"
 
 
 def mcp_json_path(bundle: str) -> Path:
@@ -228,33 +196,6 @@ def rendered_mcp_json(bundle: str, scopes: str) -> str:
     return json.dumps(doc, indent=2, ensure_ascii=False) + "\n"
 
 
-def rendered_plugin_json(bundle: str, server_url: str) -> str:
-    """The plugin manifest, with `userConfig.server_url.default` bound to the artifact.
-
-    `server_url` is now the ONLY environment-specific value a plugin carries, so
-    the Configure screen's field genuinely determines the target: change it and
-    the plugin talks to that environment, with no second value to keep in step.
-    That was not true while a `clientId` literal sat beside it — a `server_url`
-    pointing at one environment with a client id from another was a guaranteed
-    401, which is why the field used to invite a broken override.
-
-    There is deliberately no `client_id` userConfig field. It could not be
-    referenced from the `oauth` block even if it existed (see
-    :func:`rendered_mcp_json`), so declaring one would advertise an override that
-    silently does nothing — and nothing needs it now.
-    """
-    path = plugin_json_path(bundle)
-    if not path.exists():
-        raise ExtractionError(f"{path} missing — create the plugin skeleton first")
-    doc = json.loads(path.read_text())
-    user_config = doc.get("userConfig") or {}
-    if "server_url" not in user_config:
-        raise ExtractionError(f"{path} declares no server_url userConfig field")
-    user_config["server_url"]["default"] = server_url
-    # See `rendered_mcp_json` on `ensure_ascii=False`.
-    return json.dumps(doc, indent=2, ensure_ascii=False) + "\n"
-
-
 def main(argv: "list[str] | None" = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -273,8 +214,7 @@ def main(argv: "list[str] | None" = None) -> int:
     args = parser.parse_args(argv)
 
     source = args.repo_root / SCOPES_SOURCE_REL
-    publication_source = args.repo_root / PUBLICATION_SOURCE_REL
-    for required in (source, publication_source):
+    for required in (source,):
         if not required.is_file():
             print(
                 f"ERROR: {required} not found. Pass --repo-root pointing at an "
@@ -285,21 +225,20 @@ def main(argv: "list[str] | None" = None) -> int:
 
     try:
         pins = expected_pins(source.read_text())
-        publication = expected_publication(publication_source.read_text())
     except ExtractionError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 2
 
     targets: list[tuple[Path, str]] = [
-        (VENDORED_ARTIFACT, artifact_text(pins, publication))
+        (VENDORED_ARTIFACT, artifact_text(pins))
     ]
-    server_url = publication["defaultServerUrl"]
+    # NOTE: `plugin.json` is no longer generated. Its only generated field was
+    # `userConfig.server_url.default`, which came from the deleted publication
+    # source; it is hand-maintained per plugin again, as it was before that
+    # release. This script owns the scope pin and nothing else.
     for bundle, scopes in pins.items():
         targets.append(
             (mcp_json_path(bundle), rendered_mcp_json(bundle, scopes))
-        )
-        targets.append(
-            (plugin_json_path(bundle), rendered_plugin_json(bundle, server_url))
         )
 
     drifted = [p for p, want in targets if not p.exists() or p.read_text() != want]
