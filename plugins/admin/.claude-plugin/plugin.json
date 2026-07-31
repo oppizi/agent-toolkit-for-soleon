@@ -1,7 +1,7 @@
 {
   "name": "soleon-admin",
   "description": "The full Soleon surface for platform administrators. Everything in soleon-builder, plus the admin-only families: channel and custom-MCP instance reads, eval runs, and the discovery workspace. Consent only — what you can actually do is still decided by your Soleon permissions.",
-  "version": "0.3.2",
+  "version": "0.3.3",
   "author": {
     "name": "Oppizi — Soleon Headless Toolkit"
   },

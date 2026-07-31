@@ -115,6 +115,13 @@ This registers a **second, separate** MCP server alongside the plugin's own, whi
 stays pointed at the default system. Disable the plugin (or just use the new
 server) so you are not signed in to two systems at once.
 
+> ⚠ **The `deploy-agent` skill does NOT follow this override.** The skill calls
+> `private_deploy_agent` on the server named `soleon-agent-toolkit` — the plugin's
+> own — so it keeps targeting the default system no matter what you register
+> beside it. Use the parallel server for reading and for ad-hoc tool calls; do not
+> assume `deploy-agent` deploys to the environment you added here. Deploying to a
+> non-default environment is not supported by the skill in this release.
+
 Both `aws ssm` lookups need access to the AWS account running that Soleon system —
 ask whoever operates it if you don't have it. They return the stage-less
 custom-domain URL on purpose: a URL carrying an API-Gateway stage path (the

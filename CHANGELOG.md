@@ -4,7 +4,7 @@ Versions are per-plugin (`soleon-observer`, `soleon-builder`, `soleon-admin`) an
 move together. Patch bumps are automatic when a bundle's content changes; minor
 and major bumps are deliberate.
 
-## 0.3.2
+## 0.3.3
 
 ### Fixed
 
@@ -37,6 +37,13 @@ and major bumps are deliberate.
   their plugin exists for. The section gives the two `aws ssm get-parameter`
   lookups that yield both values for any environment, rather than hard-coding a
   second environment's identifiers that nothing would keep current.
+- Documented that the  skill does not follow the environment
+  override: it binds  to the plugin's own
+   server by name, so it always targets the default system.
+- Documented that the `deploy-agent` skill does **not** follow the environment
+  override: it binds `private_deploy_agent` to the plugin's own
+  `soleon-agent-toolkit` server by name, so it always targets the default
+  system. Deploying to a non-default environment is unsupported in this release.
 - The **Configure options** screen offers only the server URL — a client ID field
   there could not be read. Its description now says so, and points at the working
   override, instead of inviting a URL-only change that always 401s.
