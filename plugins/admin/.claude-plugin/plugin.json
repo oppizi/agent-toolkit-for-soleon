@@ -1,7 +1,7 @@
 {
   "name": "soleon-admin",
   "description": "The full Soleon surface for platform administrators. Everything in soleon-builder, plus the admin-only families: channel and custom-MCP instance reads, eval runs, and the discovery workspace. Consent only — what you can actually do is still decided by your Soleon permissions.",
-  "version": "0.3.3",
+  "version": "0.4.0",
   "author": {
     "name": "Oppizi — Soleon Headless Toolkit"
   },
@@ -17,7 +17,7 @@
     "server_url": {
       "type": "string",
       "title": "Soleon MCP server URL",
-      "description": "Which Soleon system to connect to. Defaults to the dev system, which works out of the box. Changing this ALONE will break sign-in: each system registers its own OAuth client, and the client ID cannot be set from this screen. To use another environment, add the server with both values instead — `claude mcp add --transport http <url> --client-id <id>` (see the plugin README).",
+      "description": "Which Soleon system to connect to. Defaults to the dev system, which works out of the box. This is the only setting involved: the plugin carries no other environment-specific value, so changing this URL is sufficient to point at another Soleon system. That system must be running a current release (see the plugin README).",
       "required": false,
       "default": "https://mcp-dev.oppizi.com/mcp"
     }

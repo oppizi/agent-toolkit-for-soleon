@@ -151,86 +151,70 @@ def test_shipped_pins_match_the_vendored_artifact():
 
 
 # ---------------------------------------------------------------------------
-# The OAuth client identity the plugins ship.
+# The OAuth client identity the plugins ship — which is now NONE, deliberately.
 #
-# A plugin with no `oauth.clientId` cannot sign in AT ALL — the Soleon
-# authorization proxy rejects `/authorize` without one, and Claude Code, finding
-# no client id and no dynamic-registration endpoint, fails with "Incompatible
-# auth server: does not support dynamic client registration". That shipped in
-# 0.3.0 with a fully green suite, because every check above constrains the SCOPE
-# pin and nothing constrained the client identity.
+# The history matters, because this guard's inversion looks like a weakening and
+# is not. 0.3.0 shipped no client id and could not sign in at all, so a later
+# release published a literal Cognito client id. That worked, and it was a
+# workaround: it pinned every install to ONE environment (`${user_config.…}` does
+# not expand inside the `oauth` block, so the field could not be parameterised);
+# it pushed anyone targeting another environment onto a CLI override carrying a
+# hand-pasted scope list, re-creating the very copy-drift this file exists to
+# prevent; and the claude.ai marketplace sync strips the whole `oauth` block, so
+# Desktop/Web users never received it regardless.
+#
+# The server now accepts the client identity the Anthropic harnesses already
+# publish — a Client ID Metadata Document URL — so a plugin needs none. The
+# failure mode worth catching is therefore no longer a MISSING literal but a
+# REINTRODUCED one.
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize("bundle", ["observer", "builder", "admin"])
-def test_plugin_ships_a_usable_oauth_client_id(bundle):
-    """Present, correctly named, and not a shape that fails at runtime."""
-    oauth = _oauth(bundle)
-    assert "client_id" not in oauth, (
-        f"{bundle}/.mcp.json uses the snake_case key `client_id`. The documented "
-        "schema key is `clientId`; `client_id` is silently IGNORED, which leaves the "
-        "plugin unable to sign in while every other check here passes."
-    )
-    client_id = oauth.get("clientId")
-    assert isinstance(client_id, str) and client_id, (
-        f"{bundle}/.mcp.json declares no oauth.clientId — the plugin cannot complete "
-        "an OAuth sign-in. Regenerate with "
-        "`python3 harness/sync_scope_bundles.py --repo-root <agent-infra>`"
-    )
-    assert client_id == client_id.strip(), (
-        f"{bundle} clientId {client_id!r} carries surrounding whitespace — the proxy "
-        "compares client_id with an exact match, so this is a silent 401 that every "
-        "non-empty check passes"
-    )
+def test_plugin_ships_no_oauth_client_id(bundle):
+    """A client id must not come back — in either spelling.
 
-
-@pytest.mark.parametrize("bundle", ["observer", "builder", "admin"])
-def test_client_id_is_a_literal_not_a_user_config_reference(bundle):
-    """`${user_config.…}` does NOT expand inside the `oauth` block.
-
-    This is the trap the whole file exists to prevent, because the line directly
-    above `clientId` in the same document IS a `${user_config.…}` reference — so
-    the symmetric-looking edit is the natural one to make, and it fails silently:
-    Claude Code sends the unexpanded string verbatim as the client_id and the proxy
-    401s. Verified empirically against Claude Code 2.1.220, with the option both
-    unset and explicitly configured.
+    Both the documented `clientId` and the silently-ignored snake_case
+    `client_id` are refused, so a well-meaning "restore the client id" edit fails
+    loudly here instead of shipping an environment-locked plugin with an
+    otherwise-green suite.
     """
-    client_id = _oauth(bundle)["clientId"]
-    assert "${" not in client_id, (
-        f"{bundle} clientId is {client_id!r} — a `${{user_config.…}}` reference. "
-        "Claude Code expands those in the server `url` but NOT inside `oauth`, so "
-        "this ships the literal placeholder as the client id and no user can sign "
-        "in. Use the literal value; the documented override is "
-        "`claude mcp add --transport http --client-id <id> <url>`."
-    )
-    assert "user_config" not in client_id
+    oauth = _oauth(bundle)
+    for key in ("clientId", "client_id"):
+        assert key not in oauth, (
+            f"{bundle}/.mcp.json declares oauth.{key}={oauth[key]!r}. Plugins no "
+            "longer carry a client id — the server accepts the harness's published "
+            "Client ID Metadata Document, so `server_url` is the only "
+            "environment-specific value left. Re-adding this pins every install to "
+            "one environment, and the marketplace sync strips it anyway. Regenerate "
+            "with `python3 harness/sync_scope_bundles.py --repo-root <agent-infra>`"
+        )
 
 
 @pytest.mark.parametrize("bundle", ["observer", "builder", "admin"])
-def test_shipped_oauth_defaults_match_the_vendored_artifact_as_a_pair(bundle):
-    """The content check for the client identity, with no platform source.
+def test_shipped_server_url_matches_the_vendored_artifact(bundle):
+    """The content check for where a plugin points, with no platform source.
 
     Counterpart to `test_shipped_pins_match_the_vendored_artifact`: shape checks
-    cannot tell a correct client id from a well-formed wrong one.
+    cannot tell a correct URL from a well-formed wrong one.
 
-    Asserted as a PAIR because the two values are env-coupled — a `server_url`
-    pointing at staging with dev's client id is a guaranteed 401, and each value
-    passes its own individual check. The `server_url` side is compared against the
-    RESOLVED `plugin.json` default, not the `.mcp.json` literal: all three
-    `.mcp.json` files carry the identical `${user_config.server_url}` string, which
-    carries no information about where the plugin actually points.
+    Compared against the RESOLVED `plugin.json` default, not the `.mcp.json`
+    literal: all three `.mcp.json` files carry the identical
+    `${user_config.server_url}` string, which says nothing about where the plugin
+    actually points.
+
+    This previously asserted a (server_url, clientId) PAIR, because the two were
+    env-coupled: a half-completed environment switch 401'd while each value passed
+    its own individual check. With the client id gone there is only one value left
+    to get wrong, which is precisely the point of removing it.
     """
     artifact = json.loads(VENDORED.read_text())
-    shipped = (
-        _plugin_json(bundle)["userConfig"]["server_url"]["default"],
-        _oauth(bundle)["clientId"],
-    )
-    published = (artifact["defaultServerUrl"], artifact["defaultClientId"])
+    shipped = _plugin_json(bundle)["userConfig"]["server_url"]["default"]
+    published = artifact["defaultServerUrl"]
     assert shipped == published, (
-        f"{bundle}'s (server_url, clientId) pair has drifted from "
-        f"plugins/scope_bundles.json.\n  shipped:   {shipped}\n  artifact:  {published}\n"
-        "These are env-coupled: a half-completed environment switch is a 401 that "
-        "every individual check passes. Regenerate with "
+        f"{bundle}'s server_url default has drifted from plugins/scope_bundles.json."
+        f"\n  shipped:   {shipped}\n  artifact:  {published}\n"
+        "Regenerate with "
         "`python3 harness/sync_scope_bundles.py --repo-root <agent-infra>`"
     )
 
@@ -253,71 +237,83 @@ def test_no_client_id_user_config_field_is_advertised():
 
 
 @pytest.mark.parametrize("bundle", ["observer", "builder", "admin"])
-def test_server_url_config_screen_warns_that_the_pair_is_coupled(bundle):
-    """The `/plugin` Configure screen must not invite a half-completed override.
+def test_server_url_config_screen_does_not_warn_about_a_client_id(bundle):
+    """The Configure screen's one action must now be the one that WORKS.
 
-    That screen offers `server_url` and — necessarily — NOT `client_id`, because
-    a `client_id` field could not be read from the `oauth` block
-    (`test_no_client_id_user_config_field_is_advertised`). So the ONE action the
-    screen makes easy is exactly the action that breaks sign-in: repoint the URL
-    at another environment while still sending this one's client id, yielding
-    `401 unauthorized_client` with nothing in the UI explaining why.
+    This guard is inverted from its previous form, and the inversion is the whole
+    point of the release. The screen offers `server_url` and necessarily not a
+    client id. While the plugin shipped a client-id literal, repointing the URL
+    alone was a guaranteed `401 unauthorized_client`, so the description had to
+    warn against the single action the screen made easy — and name a CLI override
+    instead.
 
-    The description is the only text rendered there, so it is the only place that
-    warning can live. It previously read "point at another environment for
-    development or testing" — an active invitation to the broken path.
+    The plugin no longer carries a client id, so the URL alone is sufficient and
+    that warning is now FALSE. Leaving it would be worse than useless: it would
+    talk users out of the supported path and toward a hand-built second server.
     """
     desc = _plugin_json(bundle)["userConfig"]["server_url"]["description"]
-    assert "client id" in desc.lower() or "client_id" in desc.lower(), (
-        f"{bundle}'s server_url description does not mention the client ID, so the "
-        "Configure screen invites changing the URL alone — a guaranteed 401"
+    lowered = desc.lower()
+    assert "client id" not in lowered and "client_id" not in lowered, (
+        f"{bundle}'s server_url description still mentions a client ID: {desc!r}. "
+        "There isn't one any more — the URL alone selects the environment, and "
+        "this text would send users down a path that no longer exists."
     )
-    assert "--client-id" in desc, (
-        f"{bundle}'s server_url description must name the working override "
-        "(`claude mcp add --client-id`), not just warn that the URL is insufficient"
+    assert "--client-id" not in desc, (
+        f"{bundle}'s server_url description still names the `--client-id` "
+        "override, which is obsolete: {desc!r}"
+    )
+    assert "break sign-in" not in lowered, (
+        f"{bundle}'s server_url description still warns that changing the URL "
+        f"breaks sign-in. It does not: {desc!r}"
     )
 
 
 @pytest.mark.parametrize("bundle", ["observer", "builder", "admin"])
-def test_readme_override_recipe_uses_add_json_with_this_bundles_exact_pin(bundle):
-    """The documented override must not silently downgrade the token.
+def test_readme_documents_no_hand_built_server_recipe(bundle):
+    """The README must not send users back to a hand-pasted server definition.
 
-    `claude mcp add` has NO way to set `oauth.scopes` (its `--scope` flag is the
-    *config* scope — local/user/project — an unrelated setting with a colliding
-    name). A server added that way falls back to whatever the resource advertises
-    as its default, which is the **read-only observer set**. Verified live against
-    ahp-396: `add --client-id` produced the 8 observer scopes for a request that
-    should have carried builder's 16.
+    Also inverted, for the same reason as the Configure-screen guard. While a
+    client-id literal shipped, changing environments REQUIRED registering a
+    second server by hand, and the recipe had to use `claude mcp add-json` with
+    the bundle's exact scope pin embedded — because `claude mcp add` cannot set
+    `oauth.scopes` at all (its `--scope` flag is the *config* scope, an unrelated
+    setting with a colliding name), so a server added that way silently fell back
+    to the read-only observer set. Verified live: `add --client-id` produced 8
+    observer scopes for a request that should have carried builder's 16.
 
-    So a README telling a builder/admin user to use `claude mcp add` hands them a
-    read-only token while everything looks correctly installed — the same
-    "green but broken" shape as the missing clientId this release fixes.
-
-    The recipe must therefore use `add-json` AND embed this bundle's exact pin.
+    That recipe was itself a defect. A scope list pasted into a README is a
+    hand-maintained copy of the pin, and hand-maintained copies drift — which is
+    the exact failure the vendored artifact and these tests exist to prevent. The
+    URL setting now does the whole job, so the recipe is gone and must not
+    return.
     """
     readme = (PLUGINS_DIR / bundle / "README.md").read_text()
     artifact_pin = json.loads(VENDORED.read_text())["bundles"][bundle]
 
-    assert "claude mcp add-json" in readme, (
-        f"{bundle}/README.md does not document `claude mcp add-json`"
+    assert "claude mcp add-json" not in readme, (
+        f"{bundle}/README.md documents a hand-built `claude mcp add-json` server. "
+        "Changing environments is now the server-URL setting alone; a hand-built "
+        "definition re-introduces a second place for the scope pin to drift."
     )
     assert "claude mcp add --transport" not in readme, (
-        f"{bundle}/README.md still documents `claude mcp add --transport`, which "
-        "cannot carry oauth.scopes and silently yields a read-only token"
+        f"{bundle}/README.md documents `claude mcp add --transport`, which cannot "
+        "carry oauth.scopes and silently yields a read-only token"
     )
-    assert artifact_pin in readme, (
-        f"{bundle}/README.md's override recipe does not embed the bundle's exact "
-        "pin from plugins/scope_bundles.json — a hand-edited or stale scope string "
-        "would grant the wrong consent. Regenerate the recipe from the artifact."
+    assert artifact_pin not in readme, (
+        f"{bundle}/README.md embeds the bundle's full scope pin as literal text. "
+        "That is a hand-maintained copy of the artifact and will drift from it — "
+        "the plugin's own .mcp.json is the only place the pin belongs."
     )
 
 
-def test_published_client_id_is_not_marked_sensitive_anywhere():
-    """It is an identifier, not a credential — and `sensitive` has a real cost.
+def test_no_user_config_field_is_marked_sensitive():
+    """None of these values is a credential — and `sensitive` has a real cost.
 
     Sensitive values are routed to the OS keychain, which shares a small budget
-    with the OAuth tokens themselves. Spending it on a public PKCE identifier buys
-    nothing.
+    with the OAuth tokens themselves. Spending it on a server URL buys nothing.
+
+    (This assertion has always ranged over every `userConfig` field; it was named
+    for the published client id, which no longer exists.)
     """
     for bundle in ("observer", "builder", "admin"):
         for name, field in _plugin_json(bundle)["userConfig"].items():
@@ -539,7 +535,14 @@ def test_generator_takes_the_client_id_from_platform_source(tmp_path):
     for bundle in ("observer", "builder", "admin"):
         doc = json.loads((clone / f"plugins/{bundle}/.mcp.json").read_text())
         (server,) = doc["mcpServers"].values()
-        assert server["oauth"]["clientId"] == "fixtureclientid0000000000"
+        # The generator must NOT write a client id into a plugin, even though the
+        # platform source still declares one. The two facts are now separate: the
+        # constant remains readable for operators diagnosing a legacy-arm
+        # mismatch, but nothing published to users carries it.
+        assert "clientId" not in server["oauth"], (
+            "the generator wrote a clientId into a plugin — plugins are "
+            "environment-neutral now and must carry only the scope pin"
+        )
         manifest = json.loads(
             (clone / f"plugins/{bundle}/.claude-plugin/plugin.json").read_text()
         )

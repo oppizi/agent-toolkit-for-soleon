@@ -178,27 +178,30 @@ def plugin_json_path(bundle: str) -> Path:
     return PLUGINS / bundle / ".claude-plugin" / "plugin.json"
 
 
-def rendered_mcp_json(bundle: str, scopes: str, client_id: str) -> str:
-    """The `.mcp.json` for a bundle: `oauth.scopes` + `oauth.clientId`.
+def rendered_mcp_json(bundle: str, scopes: str) -> str:
+    """The `.mcp.json` for a bundle: `oauth.scopes`, and deliberately nothing else.
 
     Reads the existing file so hand-maintained keys (`type`, `url`, the server key)
-    survive regeneration — this script owns the pin and the client identity, not the
-    whole document.
+    survive regeneration — this script owns the scope pin, not the whole document.
 
-    **`clientId` is a LITERAL, and that is not a shortcut.** `url` next to it is
-    `${user_config.server_url}`, so the obvious symmetry would be
-    `${user_config.client_id}`. It does not work: Claude Code expands
-    `${user_config.…}` in the server `url` but NOT inside the `oauth` block, and it
-    fails silently — the unexpanded string is sent verbatim as the `client_id` and
-    the authorization proxy 401s. Verified empirically against Claude Code 2.1.220
-    with both controls: an interpolated `clientId` arrived at `/authorize` as
-    `%24%7Buser_config.client_id%7D` *even with the option explicitly configured*,
-    while a literal arrived intact. Reverting to interpolation here reintroduces
-    exactly the bug this change fixes, with a green test suite.
+    **There is no `clientId`, and its absence is the fix.** An earlier release
+    published a literal Cognito client id here, because the server advertised no
+    client-registration arm the harness could take and a plugin without one could
+    not sign in at all. That literal was a workaround with three costs: it pinned
+    every install to ONE environment (`${user_config.…}` provably does not expand
+    inside the `oauth` block, so the field could not be parameterised — an
+    interpolated value arrived at `/authorize` as
+    `%24%7Buser_config.client_id%7D` even with the option explicitly configured);
+    pointing a plugin elsewhere therefore needed a CLI override with a
+    hand-pasted scope list, re-creating the copy-drifts failure mode the scope
+    pin exists to prevent; and the marketplace sync strips the entire `oauth`
+    block, so it never reached Desktop/Web users regardless.
 
-    The consequence is that pointing a plugin at another environment needs the CLI
-    override (`claude mcp add --transport http --client-id …`), which the plugin
-    READMEs document.
+    The server now accepts the client identity the Anthropic harnesses already
+    publish — a Client ID Metadata Document URL — so the plugin carries no
+    environment-specific value at all and `server_url` alone selects the target.
+    Do not re-add a `clientId`: it would re-couple every install to one
+    environment and buy nothing.
     """
     path = mcp_json_path(bundle)
     if not path.exists():
@@ -209,7 +212,10 @@ def rendered_mcp_json(bundle: str, scopes: str, client_id: str) -> str:
         raise ExtractionError(f"{path} must declare exactly one mcpServers entry")
     (server,) = servers.values()
     oauth = server.setdefault("oauth", {})
-    oauth["clientId"] = client_id
+    # Actively REMOVE a stale literal rather than merely ceasing to emit one: the
+    # document is read back from disk, so a `clientId` written by an earlier
+    # release would survive regeneration untouched and keep shipping silently.
+    oauth.pop("clientId", None)
     oauth["scopes"] = scopes
     # `callbackPort` stays unset on purpose: Claude Code then picks an ephemeral
     # loopback port, which the proxy's redirect allowlist already accepts (any
@@ -225,13 +231,17 @@ def rendered_mcp_json(bundle: str, scopes: str, client_id: str) -> str:
 def rendered_plugin_json(bundle: str, server_url: str) -> str:
     """The plugin manifest, with `userConfig.server_url.default` bound to the artifact.
 
-    The server URL and the client id are ENV-COUPLED — a default pointing at one
-    environment with a client id from another is a guaranteed 401. Generating both
-    from the same artifact is what stops them drifting apart independently.
+    `server_url` is now the ONLY environment-specific value a plugin carries, so
+    the Configure screen's field genuinely determines the target: change it and
+    the plugin talks to that environment, with no second value to keep in step.
+    That was not true while a `clientId` literal sat beside it — a `server_url`
+    pointing at one environment with a client id from another was a guaranteed
+    401, which is why the field used to invite a broken override.
 
-    There is deliberately no `client_id` userConfig field: it could not be
-    referenced from the `oauth` block anyway (see :func:`rendered_mcp_json`), and
-    declaring one would advertise an override that silently does nothing.
+    There is deliberately no `client_id` userConfig field. It could not be
+    referenced from the `oauth` block even if it existed (see
+    :func:`rendered_mcp_json`), so declaring one would advertise an override that
+    silently does nothing — and nothing needs it now.
     """
     path = plugin_json_path(bundle)
     if not path.exists():
@@ -283,11 +293,10 @@ def main(argv: "list[str] | None" = None) -> int:
     targets: list[tuple[Path, str]] = [
         (VENDORED_ARTIFACT, artifact_text(pins, publication))
     ]
-    client_id = publication["defaultClientId"]
     server_url = publication["defaultServerUrl"]
     for bundle, scopes in pins.items():
         targets.append(
-            (mcp_json_path(bundle), rendered_mcp_json(bundle, scopes, client_id))
+            (mcp_json_path(bundle), rendered_mcp_json(bundle, scopes))
         )
         targets.append(
             (plugin_json_path(bundle), rendered_plugin_json(bundle, server_url))

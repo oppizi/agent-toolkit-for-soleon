@@ -4,6 +4,37 @@ Versions are per-plugin (`soleon-observer`, `soleon-builder`, `soleon-admin`) an
 move together. Patch bumps are automatic when a bundle's content changes; minor
 and major bumps are deliberate.
 
+## 0.4.0
+
+### Changed
+
+- **The plugins no longer carry an OAuth client ID, and no longer need one.** The
+  Soleon authorization server now accepts the client identity Claude publishes for
+  itself, so a plugin ships only its scope pin and its server URL. This replaces
+  the literal client ID introduced in 0.3.1 — which worked, but was a workaround.
+
+  A minor bump rather than a patch, because this changes what a plugin requires of
+  the server it points at: **0.4.0 needs a Soleon system that has been updated for
+  this sign-in flow.** Against an older one it will fail the same way 0.3.0 did.
+  If you point a plugin at a system you do not operate, confirm it is current
+  before upgrading.
+
+- **Changing environments is now a single setting.** Set the **Soleon MCP server
+  URL** and you are done. Previously the URL and the client ID were env-coupled and
+  the client ID could not be overridden from plugin settings, so switching meant
+  registering a second server by hand with `claude mcp add-json` and a hand-pasted
+  scope list — which re-created exactly the copy-drift the scope pin exists to
+  prevent. That whole path is gone from the READMEs.
+
+- **`soleon-builder`'s `deploy-agent` skill now works against a non-default
+  system.** It binds to the plugin's own server by name, and that server now
+  follows the URL setting. Under 0.3.x an environment override registered a
+  *separate* server the skill could not see, so deploying off-default was
+  unsupported.
+
+- Marketplace-synced installs are unaffected by the sync stripping the `oauth`
+  block, since the stripped field is one the plugins no longer rely on.
+
 ## 0.3.3
 
 ### Fixed

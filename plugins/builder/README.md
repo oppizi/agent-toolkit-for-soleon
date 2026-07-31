@@ -77,56 +77,16 @@ have not been given one, the sign-in page cannot be completed.
 
 ### Connecting to a different Soleon system
 
-The server URL and the OAuth **client ID** are env-coupled — each Soleon system
-registers its own client — so changing one without the other is a guaranteed
-sign-in failure. The plugin ships dev's client ID as a literal, and the `/plugin`
-reconfigure path cannot override it (Claude Code substitutes `${user_config.…}` in
-the server URL but *not* inside the OAuth block). To work against another
-environment, add the server directly and pass both:
+Set the **Soleon MCP server URL** to that system's `/mcp` endpoint — that is the
+only value involved. The plugin carries nothing else environment-specific, so
+there is no second setting to keep in step and no CLI override to paste.
 
-```bash
-ENV=staging   # the environment you want
+**`deploy-agent` follows it.** The skill calls `private_deploy_agent` on the
+plugin's own server by name, and that server now points wherever `server_url`
+points — so deploying to a non-default environment works. Earlier versions
+required registering a second, separate server to change environments, which the
+skill could not see; deploying off-default was unsupported as a result.
 
-claude mcp add-json soleon-builder-$ENV "$(cat <<JSON
-{
-  "type": "http",
-  "url": "$(aws ssm get-parameter --name /agent-infra/mcp/$ENV/oauth-base-url \
-             --query Parameter.Value --output text)/mcp",
-  "oauth": {
-    "clientId": "$(aws ssm get-parameter --name /agent-infra/mcp/$ENV/cli-client-id \
-                     --query Parameter.Value --output text)",
-    "scopes": "soleon-mcp/agent.read soleon-mcp/agent.write soleon-mcp/agent.deploy soleon-mcp/agent.delete soleon-mcp/channel.write soleon-mcp/mcp.write soleon-mcp/kb.read soleon-mcp/kb.write soleon-mcp/observability.read soleon-mcp/eval.read soleon-mcp/usage.read soleon-mcp/governance.read soleon-mcp/business.read soleon-mcp/business.write soleon-mcp/wiki.read soleon-mcp/wiki.write"
-  }
-}
-JSON
-)"
-
-claude mcp login soleon-builder-$ENV
-```
-
-**Use `add-json`, not `claude mcp add`.** `claude mcp add` cannot set OAuth
-scopes — its `--scope` flag is the *config* scope (local/user/project), something
-else entirely — so a server added that way requests whatever the server advertises
-as its default: the **read-only observer set**. You would get 8 scopes instead of
-this bundle's 16, silently losing every write and deploy capability this plugin
-exists for, while everything still looked correctly installed.
-
-This registers a **second, separate** MCP server alongside the plugin's own, which
-stays pointed at the default system. Disable the plugin (or just use the new
-server) so you are not signed in to two systems at once.
-
-> ⚠ **The `deploy-agent` skill does NOT follow this override.** The skill calls
-> `private_deploy_agent` on the server named `soleon-agent-toolkit` — the plugin's
-> own — so it keeps targeting the default system no matter what you register
-> beside it. Use the parallel server for reading and for ad-hoc tool calls; do not
-> assume `deploy-agent` deploys to the environment you added here. Deploying to a
-> non-default environment is not supported by the skill in this release.
-
-Both `aws ssm` lookups need access to the AWS account running that Soleon system —
-ask whoever operates it if you don't have it. They return the stage-less
-custom-domain URL on purpose: a URL carrying an API-Gateway stage path (the
-`…execute-api.us-east-1.amazonaws.com/prod/mcp` shape earlier versions documented)
-breaks OAuth discovery and the sign-in fails on the first request.
 ## Upgrading from soleon-deploy-agent
 
 This plugin **was** `soleon-deploy-agent`. The rename is hard: there is no alias, so
