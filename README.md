@@ -75,7 +75,9 @@ agent-toolkit-for-soleon/
 │   │   ├── bin/             vendored allium engine (v3.2.4, provenance in LICENSES/)
 │   │   ├── contract.json    platform validation contract, generated from source
 │   │   ├── LICENSES/        MIT notice + binary provenance chain
-│   │   └── skills/deploy-agent/ the skill (SKILL.md state machine + converter assets)
+│   │   └── skills/          the shipped skills
+│   │       ├── deploy-agent/  SKILL.md state machine + converter assets
+│   │       └── write-evals/   designing evals whose score reflects the behaviour
 │   └── admin/               full platform surface (scope pin only, no skills)
 ├── preflight/               frozen correctness oracle (schema fixture + contract doc)
 ├── harness/                 offline validator, judge rubric, tests — never ships
@@ -119,7 +121,7 @@ admin — and differ only in the OAuth scopes they request:
 | Plugin | Scopes | For |
 |---|---|---|
 | `soleon-observer` | 8, all reads | Reading agents, traces, failures, usage, evals, ideas, wiki. No write consent at all. |
-| `soleon-builder` | 16 | The agent build loop: drafts, deploys, promotions, channel binds, custom MCPs, knowledge bases. Ships the `deploy-agent` skill. |
+| `soleon-builder` | 16 | The agent build loop: drafts, deploys, promotions, channel binds, custom MCPs, knowledge bases. Ships the `deploy-agent` and `write-evals` skills. |
 | `soleon-admin` | 21 (all) | Platform admins — adds channel/custom-MCP instance reads, eval runs, and discovery. |
 
 **Pick the narrowest one that covers your work.** A broader bundle grants no extra
@@ -180,6 +182,21 @@ Direct converter invocation (no LLM, spec already in hand):
 ```bash
 python3 plugins/builder/skills/deploy-agent/assets/allium_to_json.py spec.allium --app-env dev --out-dir out/
 ```
+
+Once an agent is deployed, the other half of the build loop is knowing whether it
+actually behaves:
+
+```
+/write-evals
+```
+
+Designs evals for a deployed agent — how to choose *what* to test (derive from
+decisions made and ways the agent can be confidently wrong, not from plausible
+user inputs), and how the platform's LLM judge computes a score. That second part
+matters more than it sounds: populating `expectedOutput` silently makes half the
+score measure *resemblance to your reference answer* rather than correctness,
+which is the usual reason a suite goes green while testing very little. Read it
+before writing an eval, and whenever a suite passes but you don't trust it.
 
 Full usage, escape hatches, and troubleshooting: [`plugins/builder/README.md`](plugins/builder/README.md).
 

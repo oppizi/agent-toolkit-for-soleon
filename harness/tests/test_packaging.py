@@ -145,6 +145,31 @@ def test_root_marketplace_lists_every_bundle():
     assert "selfcheck" in skill.lower()
 
 
+def test_every_shipped_skill_has_frontmatter():
+    """Claude Code discovers a skill by its frontmatter ``name`` + ``description``.
+    A skill missing either installs fine and then never triggers, and nothing
+    else in this suite would notice — so assert it for every skill the bundle
+    ships, not only deploy-agent."""
+    skills = sorted((PLUGIN / "skills").glob("*/SKILL.md"))
+    assert skills, "builder bundle ships no skills — did the directory move?"
+    for path in skills:
+        text = path.read_text(encoding="utf-8")
+        rel = path.relative_to(BET_ROOT)
+        assert text.startswith("---\n"), f"{rel} has no frontmatter block"
+        front = text.split("---\n", 2)[1]
+        for key in ("name:", "description:"):
+            assert key in front, f"{rel} frontmatter is missing `{key}`"
+        declared = next(
+            ln.split(":", 1)[1].strip()
+            for ln in front.splitlines()
+            if ln.startswith("name:")
+        )
+        assert declared == path.parent.name, (
+            f"{rel} declares name `{declared}` but lives in `{path.parent.name}/` — "
+            "Claude Code resolves the directory, so the two must match"
+        )
+
+
 def test_vendored_binary_provenance_recorded():
     notice = (PLUGIN / "LICENSES/allium-tools-MIT.txt").read_text(encoding="utf-8")
     assert "MIT License" in notice
