@@ -31,7 +31,11 @@ import pytest
 BET_ROOT = Path(__file__).resolve().parents[2]
 PLUGINS_DIR = BET_ROOT / "plugins"
 VENDORED = PLUGINS_DIR / "scope_bundles.json"
-BUNDLES = sorted(p.name for p in PLUGINS_DIR.iterdir() if p.is_dir())
+# Manifest presence, not `is_dir()`: `plugins/` also holds the capability catalogue
+# (`skills/`, `agents/`, `hooks/`), which are not bundles and pin no scopes.
+BUNDLES = sorted(
+    p.name for p in PLUGINS_DIR.iterdir() if (p / ".claude-plugin/plugin.json").is_file()
+)
 
 sys.path.insert(0, str(BET_ROOT / "harness"))
 from sync_scope_bundles import ExtractionError, expected_pins  # noqa: E402

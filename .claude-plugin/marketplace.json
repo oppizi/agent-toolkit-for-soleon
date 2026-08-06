@@ -17,7 +17,7 @@
     {
       "name": "soleon-admin",
       "source": "./plugins/admin",
-      "description": "The full Soleon surface, including the platform-admin-only families: channel and custom-MCP instance reads, eval runs, and discovery. For platform administrators."
+      "description": "The full Soleon surface, including the platform-admin-only families: channel and custom-MCP instance reads, eval runs, and discovery. For platform administrators. Includes the write-evals skill."
     }
   ]
 }

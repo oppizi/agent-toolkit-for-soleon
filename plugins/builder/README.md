@@ -150,6 +150,23 @@ python3 skills/deploy-agent/assets/allium_to_json.py spec.allium --app-env dev -
   --skill .claude/skills/cite-sources
 ```
 
+Once an agent is deployed, the other half of the build loop is knowing whether it
+actually behaves:
+
+```
+/write-evals
+```
+
+Designs evals for a deployed agent: how to choose *what* to test (derive from
+decisions made and ways the agent can be confidently wrong, not from plausible user
+inputs), and how the platform's LLM judge computes a score. That second part
+matters more than it sounds — populating `expectedOutput` silently makes half the
+score measure *resemblance to your reference answer* rather than correctness, which
+is the usual reason a suite goes green while testing very little.
+
+`/write-evals` also ships in `soleon-admin`, byte for byte: both bundles are
+composed from one shared source, so the two copies cannot drift apart.
+
 ## Supported platforms (bundled engine)
 
 | Platform | Bundled binary | Status |
