@@ -2,7 +2,7 @@
 
 > **Status: Prototype (v0.2).** This is a proof-of-concept built to answer one
 > question, offline, with evidence. It is not production software. It works —
-> 9 logged runs validated green, 99/99 tests passing — but it is the
+> 9 logged runs validated green, 165/165 tests passing — but it is the
 > *foundation we will extend*, not the finished product. Expect sharp edges,
 > a single supported platform for the bundled engine, and APIs that will
 > change as capabilities grow on top of it.
@@ -66,7 +66,11 @@ until a future iteration scores the artifacts Allium uniquely produces.
 agent-toolkit-for-soleon/
 ├── .claude-plugin/          marketplace manifest (GitHub installs resolve here;
 │                            lists all three bundles)
-├── plugins/                 ← THE adoptable artifacts, one per role bundle
+├── plugins/                 ← THE adoptable artifacts, plus the catalogue they're built from
+│   ├── skills/              CATALOGUE — the source of truth for every skill
+│   │   ├── deploy-agent/      SKILL.md state machine + converter assets
+│   │   └── write-evals/       designing evals whose score reflects the behaviour
+│   ├── agents/ hooks/       CATALOGUE — same convention, empty until first use
 │   ├── scope_bundles.json   generated scope pins + sha256, vendored from the platform
 │   ├── observer/            read-only bundle (scope pin only, no skills)
 │   ├── builder/             the agent build loop — the only bundle shipping Python
@@ -75,8 +79,8 @@ agent-toolkit-for-soleon/
 │   │   ├── bin/             vendored allium engine (v3.2.4, provenance in LICENSES/)
 │   │   ├── contract.json    platform validation contract, generated from source
 │   │   ├── LICENSES/        MIT notice + binary provenance chain
-│   │   └── skills/deploy-agent/ the skill (SKILL.md state machine + converter assets)
-│   └── admin/               full platform surface (scope pin only, no skills)
+│   │   └── skills/          GENERATED copies of deploy-agent + write-evals
+│   └── admin/               full platform surface + a generated copy of write-evals
 ├── preflight/               frozen correctness oracle (schema fixture + contract doc)
 ├── harness/                 offline validator, judge rubric, tests — never ships
 ├── samples/                 4 authored identity files (+ skill fixtures under
@@ -91,6 +95,22 @@ The boundary is enforced by tests: each bundle under `plugins/` ships alone (an
 isolation smoke test copies `plugins/builder/` — the only bundle with executable
 assets — to a bare temp directory and runs the conversion end to end); everything
 else is experiment telemetry.
+
+**A capability shared by two bundles lives in the catalogue once, and each bundle
+carries a generated copy.** Not a symlink: cross-directory links are dereferenced
+only by a marketplace install that git-clones the repo, so they silently vanish on
+a local-clone install, on `--plugin-dir`, on Windows, and in a downloaded ZIP. The
+convention is adapted from
+[`aws/agent-toolkit-for-aws`](https://github.com/aws/agent-toolkit-for-aws) — the
+bundle directory declares *which* capabilities it subscribes to, the catalogue owns
+*what is in them*, and drift is a test failure:
+
+```bash
+python3 harness/sync_bundles.py --check              # drift guard
+python3 harness/sync_bundles.py --add admin skills write-evals
+```
+
+Edit the catalogue, never a bundle copy — the next sync overwrites it.
 
 ## Getting started
 
@@ -119,8 +139,8 @@ admin — and differ only in the OAuth scopes they request:
 | Plugin | Scopes | For |
 |---|---|---|
 | `soleon-observer` | 8, all reads | Reading agents, traces, failures, usage, evals, ideas, wiki. No write consent at all. |
-| `soleon-builder` | 16 | The agent build loop: drafts, deploys, promotions, channel binds, custom MCPs, knowledge bases. Ships the `deploy-agent` skill. |
-| `soleon-admin` | 21 (all) | Platform admins — adds channel/custom-MCP instance reads, eval runs, and discovery. |
+| `soleon-builder` | 16 | The agent build loop: drafts, deploys, promotions, channel binds, custom MCPs, knowledge bases. Ships the `deploy-agent` and `write-evals` skills. |
+| `soleon-admin` | 21 (all) | Platform admins — adds channel/custom-MCP instance reads, eval runs, and discovery. Also ships `write-evals`. |
 
 **Pick the narrowest one that covers your work.** A broader bundle grants no extra
 access: scope is a ceiling on what the token may consent to, never a role. Soleon
@@ -181,13 +201,29 @@ Direct converter invocation (no LLM, spec already in hand):
 python3 plugins/builder/skills/deploy-agent/assets/allium_to_json.py spec.allium --app-env dev --out-dir out/
 ```
 
+Once an agent is deployed, the other half of the build loop is knowing whether it
+actually behaves:
+
+```
+/write-evals
+```
+
+Available in `soleon-builder` and `soleon-admin`. Designs evals for a deployed
+agent — how to choose *what* to test (derive from
+decisions made and ways the agent can be confidently wrong, not from plausible
+user inputs), and how the platform's LLM judge computes a score. That second part
+matters more than it sounds: populating `expectedOutput` silently makes half the
+score measure *resemblance to your reference answer* rather than correctness,
+which is the usual reason a suite goes green while testing very little. Read it
+before writing an eval, and whenever a suite passes but you don't trust it.
+
 Full usage, escape hatches, and troubleshooting: [`plugins/builder/README.md`](plugins/builder/README.md).
 
 ## Running the tests
 
 ```bash
 ~/.asdf/installs/python/3.14.2/bin/python3 -m pytest harness/tests -o addopts=""
-# 99 passed
+# 165 passed, 7 skipped
 ```
 
 (Any Python ≥3.10 with pytest works; `-o addopts=""` bypasses the parent
@@ -239,10 +275,20 @@ This is an internal prototype in a bet worktree, so the loop is lightweight:
    re-litigating a design choice — supersede explicitly, never silently.
 2. Keep the ship boundary: anything the plugin needs at runtime goes in
    `plugins/`; anything else is harness. The packaging tests enforce this.
-3. Regenerate the contract after touching platform validation code:
-   `python3 harness/sync_contract.py` (the drift test fails loudly otherwise).
-4. All 99 tests green before handing off. New failure modes get a negative
+3. Change a bundle's composition only through
+   `python3 harness/sync_bundles.py --add/--remove` (or `/bundle-plugin`, which
+   drives it). Edit capabilities in `plugins/{skills,agents,hooks}/`, never in a
+   bundle — the next sync overwrites bundle copies.
+4. Regenerate the generated artifacts after touching platform code:
+   `python3 harness/sync_contract.py` and `python3 harness/sync_scope_bundles.py`
+   (the drift tests fail loudly otherwise).
+5. All tests green before handing off. New failure modes get a negative
    test, not a workaround.
+
+CI runs on every push and pull request to `main`: the full suite on macOS
+arm64 (where the bundled engine resolves), the engine-independent guards on
+Linux against Python 3.10 and 3.13, plus CodeQL and a conventional-commit
+check on PR titles. See `.github/workflows/`.
 
 ## License
 

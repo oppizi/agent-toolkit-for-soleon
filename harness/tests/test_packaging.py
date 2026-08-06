@@ -4,11 +4,13 @@ behaviorally.
 The ship boundary is now THREE boundaries: the repo publishes one plugin per role
 bundle (`soleon-observer` / `soleon-builder` / `soleon-admin`). The telemetry ban
 and the manifest/discovery surface apply to all three; the Python-specific checks
-apply to **builder** only, because it is the sole bundle carrying the converter,
-the engine, and the vendored allium binary.
+apply to the **deploy-agent** catalogue entry, the only capability carrying
+executable assets, and to **builder**, the only bundle with the engine and the
+vendored allium binary.
 
 1. No plugin references harness/, samples/, preflight/, runs, or transcripts (bet
-   telemetry never ships).
+   telemetry never ships) — enforced on the bundles AND on the catalogue entries
+   they copy from, since that content ships too.
 2. Isolation smoke (F3): the builder plugin copied ALONE to a temp dir still
    converts a spec end-to-end — proving no hidden dependency on the bet tree.
 3. Converter + engine are stdlib-only (no third-party imports).
@@ -24,11 +26,25 @@ import pytest
 
 BET_ROOT = Path(__file__).resolve().parents[2]
 PLUGINS_DIR = BET_ROOT / "plugins"
-# Every shipped bundle. Sorted so parametrized ids are stable.
-PLUGINS = sorted(p for p in PLUGINS_DIR.iterdir() if p.is_dir())
+# Every shipped bundle, identified by MANIFEST PRESENCE — `plugins/` also holds the
+# capability catalogue (`skills/`, `agents/`, `hooks/`) and `scope_bundles.json`, so
+# an `is_dir()` filter would enumerate those as bundles. Sorted for stable ids.
+PLUGINS = sorted(p for p in PLUGINS_DIR.iterdir() if (p / ".claude-plugin/plugin.json").is_file())
 BUNDLE_NAMES = [p.name for p in PLUGINS]
-# The one bundle that ships Python + the vendored binary.
+# The one bundle that ships the vendored binary + contract.
 PLUGIN = PLUGINS_DIR / "builder"
+# The catalogue is the source of truth; bundles carry generated copies.
+CATALOGUE = PLUGINS_DIR / "skills"
+ASSETS = CATALOGUE / "deploy-agent" / "assets"
+
+# What each bundle is expected to ship. Asserted as an exact set so a LOST skill
+# fails as loudly as an unexpected one — discovery alone would silently pass a
+# bundle whose skill vanished.
+EXPECTED_SKILLS = {
+    "observer": set(),
+    "builder": {"deploy-agent", "write-evals"},
+    "admin": {"write-evals"},
+}
 
 FORBIDDEN_REFS = ("harness/", "samples/", "preflight/", "runs.jsonl", "transcripts/")
 
@@ -38,22 +54,43 @@ STDLIB_OK = {
 }
 
 
-@pytest.mark.parametrize("plugin", PLUGINS, ids=BUNDLE_NAMES)
-def test_no_telemetry_references_in_plugin(plugin):
+def _telemetry_offenders(root):
     offenders = []
-    for path in plugin.rglob("*"):
+    for path in root.rglob("*"):
         if not path.is_file() or path.suffix not in {".py", ".md", ".json"}:
             continue
         text = path.read_text(encoding="utf-8", errors="ignore")
         for ref in FORBIDDEN_REFS:
             for line in text.splitlines():
                 if ref in line and "maintainers:" not in line.lower():
-                    offenders.append(f"{path.relative_to(plugin)}: {ref}")
+                    offenders.append(f"{path.relative_to(root)}: {ref}")
+    return offenders
+
+
+@pytest.mark.parametrize("plugin", PLUGINS, ids=BUNDLE_NAMES)
+def test_no_telemetry_references_in_plugin(plugin):
+    offenders = _telemetry_offenders(plugin)
     assert not offenders, f"{plugin.name} references bet telemetry: {offenders}"
 
 
+@pytest.mark.parametrize(
+    "entry",
+    sorted(p for p in CATALOGUE.iterdir() if (p / "SKILL.md").is_file()),
+    ids=lambda p: p.name,
+)
+def test_no_telemetry_references_in_catalogue_entry(entry):
+    """Catalogue ENTRIES ship, by copy, so the ban applies to them too.
+
+    Scoped to the entries rather than to `plugins/skills/` wholesale: the
+    catalogue's own README is maintainer documentation that never reaches a
+    bundle, and it legitimately points at `harness/sync_bundles.py`.
+    """
+    offenders = _telemetry_offenders(entry)
+    assert not offenders, f"catalogue entry {entry.name} references bet telemetry: {offenders}"
+
+
 def test_plugin_python_is_stdlib_only():
-    for path in (PLUGIN / "skills/deploy-agent/assets").glob("*.py"):
+    for path in ASSETS.glob("*.py"):
         tree = ast.parse(path.read_text(encoding="utf-8"))
         for node in ast.walk(tree):
             mods = []
@@ -143,6 +180,51 @@ def test_root_marketplace_lists_every_bundle():
     skill = (PLUGIN / "skills/deploy-agent/SKILL.md").read_text(encoding="utf-8")
     assert skill.startswith("---"), "SKILL.md needs frontmatter with description"
     assert "selfcheck" in skill.lower()
+
+
+def _assert_skill_frontmatter(path):
+    """Claude Code discovers a skill by its frontmatter ``name`` + ``description``.
+    A skill missing either installs fine and then never triggers, and nothing else
+    in this suite would notice."""
+    text = path.read_text(encoding="utf-8")
+    rel = path.relative_to(BET_ROOT)
+    assert text.startswith("---\n"), f"{rel} has no frontmatter block"
+    front = text.split("---\n", 2)[1]
+    for key in ("name:", "description:"):
+        assert key in front, f"{rel} frontmatter is missing `{key}`"
+    declared = next(
+        ln.split(":", 1)[1].strip()
+        for ln in front.splitlines()
+        if ln.startswith("name:")
+    )
+    assert declared == path.parent.name, (
+        f"{rel} declares name `{declared}` but lives in `{path.parent.name}/` — "
+        "Claude Code resolves the directory, so the two must match"
+    )
+
+
+@pytest.mark.parametrize("plugin", PLUGINS, ids=BUNDLE_NAMES)
+def test_every_shipped_skill_has_frontmatter(plugin):
+    skills = sorted((plugin / "skills").glob("*/SKILL.md"))
+    found = {p.parent.name for p in skills}
+    assert found == EXPECTED_SKILLS[plugin.name], (
+        f"{plugin.name} ships {sorted(found)}, expected "
+        f"{sorted(EXPECTED_SKILLS[plugin.name])} — did a composition change land "
+        "without updating EXPECTED_SKILLS?"
+    )
+    for path in skills:
+        _assert_skill_frontmatter(path)
+
+
+@pytest.mark.parametrize(
+    "entry",
+    sorted(p for p in CATALOGUE.iterdir() if (p / "SKILL.md").is_file()),
+    ids=lambda p: p.name,
+)
+def test_every_catalogue_skill_has_frontmatter(entry):
+    """The catalogue is the source of truth, so a malformed entry would be copied
+    into every subscribing bundle. Check it at the source too."""
+    _assert_skill_frontmatter(entry / "SKILL.md")
 
 
 def test_vendored_binary_provenance_recorded():
