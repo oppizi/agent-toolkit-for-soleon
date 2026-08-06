@@ -1,0 +1,107 @@
+name: Build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  merge_group:
+  workflow_dispatch:
+
+# Cancel superseded PR runs; let push and merge_group runs complete — a
+# merge_group run gates a queued merge, so cancelling it would block the queue.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+# Default to no permissions; grant the minimum at the job level.
+permissions: {}
+
+jobs:
+  # The full suite needs the bundled allium engine, and the only binary this repo
+  # vendors is `bin/allium-darwin-arm64` (see plugins/builder/README.md — other
+  # platforms need a `cargo install`). macos-15 runners are Apple Silicon, so the
+  # bundled binary resolves exactly as it does for a real user on a supported
+  # machine. Pinned rather than macos-latest: `-latest` silently moving to a
+  # non-arm64 image would turn every engine test red for a reason unrelated to
+  # the change under review.
+  test:
+    name: Test suite (macOS arm64)
+    runs-on: macos-15
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+
+      - run: python -m pip install --disable-pip-version-check pytest
+
+      - name: Engine health check
+        run: python3 plugins/builder/skills/deploy-agent/assets/engine.py --selfcheck
+
+      - name: Test suite
+        # `-o addopts=""` is a no-op standalone; it is here so the command is
+        # identical to the one in CLAUDE.md, which must bypass the parent
+        # monorepo's xdist requirement. The contract-drift and render-parity
+        # tests skip outside an agent-infra checkout — that is expected here.
+        run: python -m pytest harness/tests -o addopts="" -q
+
+      - name: Bundles match the catalogue
+        # Redundant with test_bundle_composition.py by design: this asserts the
+        # CLI contract a maintainer actually types, and fails with the message
+        # they will actually read.
+        run: python3 harness/sync_bundles.py --check
+
+  # Everything that does not need the engine, on Linux and on the oldest Python
+  # the docs claim support for. Two things only this job can catch:
+  #   * case sensitivity — macOS is case-insensitive, so a catalogue entry whose
+  #     name differs only in case from its bundle copy passes locally and breaks
+  #     on a Linux user's checkout;
+  #   * a 3.12+ syntax or stdlib feature creeping into stdlib-only plugin code,
+  #     which would break the "Python 3.9+/≥3.10" promise in the READMEs.
+  portability:
+    name: Composition guards (Linux, Python ${{ matrix.python }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.10", "3.13"]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: ${{ matrix.python }}
+
+      - run: python -m pip install --disable-pip-version-check pytest
+
+      - name: Bundles match the catalogue
+        run: python3 harness/sync_bundles.py --check
+
+      - name: Engine-independent guards
+        # Named explicitly rather than deselected: the engine-dependent files are
+        # test_engine_and_converter.py, test_deploy_smoke.py, and the isolation
+        # smoke in test_packaging.py. A `--deselect` list would rot silently as
+        # tests are added; an allow-list fails loudly when a new file needs a home.
+        run: |
+          python -m pytest -o addopts="" -q \
+            harness/tests/test_bundle_composition.py \
+            harness/tests/test_scope_bundles.py \
+            harness/tests/test_validator_negative.py
+
+      # `harness/sync_scope_bundles.py --check` and test_contract_drift.py are
+      # deliberately NOT run here: both need an agent-infra checkout to diff
+      # against, which CI does not have. The standalone half of
+      # test_scope_bundles.py — shipped pins vs the vendored artifact and its
+      # sha256 — runs above and is what actually guards a fork or a clone.
