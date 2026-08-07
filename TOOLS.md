@@ -9,7 +9,7 @@ tool the server publishes, automatically.
 server. Access follows platform roles (platform admins see everything; members see the
 agents they hold a role on).
 
-## Current tools (85)
+## Current tools (81)
 
 ### Agents
 
@@ -107,10 +107,6 @@ agents they hold a role on).
 | `update_idea` | Edit an idea — content fields for author/admin; status / priority / scores overrides are admin-only. |
 | `list_idea_comments` | An idea's discussion comments (oldest-first) with reply threading and vote counts. |
 | `add_idea_comment` | Add a comment or threaded reply; the forum locks (409) once the idea moves to preparation. |
-| `approve_idea` | Approve an idea — decision only, the idea stays on the board. Admin-only. |
-| `move_idea_to_preparation` | Promote an idea into the build pipeline: mints an in-build agent shell seeded with the brief + scores. Admin-only. |
-| `get_pipeline` | The agent build-pipeline board: every not-yet-launched agent grouped by the 6 build stages. |
-| `set_pipeline_stage` | Set an agent's build-pipeline stage (one of the 6 stages, or terminal `Launched`). Admin-only. |
 
 ### Business Center — Agent management & Wiki
 
@@ -149,3 +145,17 @@ agents they hold a role on).
 - Several surfaces deliberately stay UI-only for now: KB restore and watch deletion,
   custom-MCP server deletion, Discovery request deletion / material uploads / forms /
   invite minting, and the pipeline's launch flow that flips an in-build shell live.
+
+## Recently removed
+
+These tools were retired from the server and are no longer published. They are listed
+here, rather than silently deleted, because clients that remember them need to know the
+capability moved rather than vanished — and because this reference advertised them for
+some time after they stopped existing.
+
+| Tool | Status |
+|---|---|
+| `move_idea_to_preparation` | Removed. Idea→agent promotion now rides the stage-transition route; a replacement tool is tracked in `docs/mcp-coverage-wave-3.md`. |
+| `get_pipeline` | Removed. |
+| `set_pipeline_stage` | Removed. Stage changes are currently UI-only; a replacement tool is tracked in `docs/mcp-coverage-wave-3.md`. |
+| `approve_idea` | Removed with the idea status axis. Spec approval is a field on the idea; tool coverage is tracked in `docs/mcp-coverage-wave-3.md`. |
