@@ -1,0 +1,17 @@
+{
+  "description": "Soleon local agent emulation — every save under .soleon/agents/<slug>/ (SOUL.md, config.json, skills/, evals/) is pushed to the platform draft instantly via patch_agent_draft; a conflict stops the session and asks (exit 2). Files anywhere else are ignored.",
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/bin/soleon_draft_sync.py\"",
+            "timeout": 180
+          }
+        ]
+      }
+    ]
+  }
+}
