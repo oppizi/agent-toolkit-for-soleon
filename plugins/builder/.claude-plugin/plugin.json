@@ -1,7 +1,7 @@
 {
   "name": "soleon-builder",
-  "description": "The Soleon agent build loop. Everything in soleon-observer, plus: create and update agent drafts, deploy and promote agents, bind channels, and author custom MCP servers and knowledge bases. Includes the deploy-agent skill, which converts a local Claude Code agent identity (.claude/agents/<name>.md) into a validated, deploy-ready POST /agents request via an Allium specification. Distill, elicit gaps, and validate fully offline; then deploy the confirmed assets via the Soleon MCP server.",
-  "version": "0.3.0",
+  "description": "The Soleon agent build loop. Everything in soleon-observer, plus: create and update agent drafts, deploy and promote agents, bind channels, and author custom MCP servers and knowledge bases. Includes the deploy-agent skill, which converts a local Claude Code agent identity (.claude/agents/<name>.md) into a validated, deploy-ready POST /agents request via an Allium specification — distill, elicit gaps, and validate fully offline; then deploy the confirmed assets via the Soleon MCP server. And the reverse arrow: pull-agent pulls a Soleon agent into Claude Code as a local subagent that reasons here and runs every tool on the platform, with SOUL.md / config.json / skills / evals materialized as files whose every save lands on your Soleon draft (a conflict stops and asks), and run-local-eval scores it with the platform's own judge prompt.",
+  "version": "0.4.0",
   "author": {
     "name": "Oppizi — Soleon Headless Toolkit (bet-1)"
   },
@@ -10,7 +10,8 @@
     "allium",
     "agent-infra",
     "soleon",
-    "identity-to-config"
+    "identity-to-config",
+    "local-emulation"
   ],
   "license": "MIT (bundled allium engine also MIT, see LICENSES/)",
   "userConfig": {
