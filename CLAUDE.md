@@ -29,6 +29,16 @@ samples/ runs/ transcripts/ runs.jsonl   ← experiment telemetry. NEVER ships.
 
 - **`plugin/contract.json`** — the frozen platform-validation contract (slug pattern, allowed dynamo/config keys, frameworks, soul byte cap, model aliases, PK template, projection constants). **It is generated, not hand-edited** — see contract-as-data below.
 
+### Local agent emulation (the reverse arrow, AHP-889, builder 0.4.0)
+
+`plugins/builder/skills/pull-agent/` + `skills/run-local-eval/` + `bin/*.py` + `hooks/hooks.json`. Same head/core split: the SKILL.md state machine does the Soleon MCP calls (`get_agent_draft`, `list_agent_tools` with the pending/poll protocol, `get_agent_system_prompt`, `get_agent_workspace_archive`) and saves the raw JSON; `skills/pull-agent/assets/pull_agent.py materialize` is the deterministic, offline core that writes `.soleon/agents/<slug>/` and the `.claude/agents/<slug>.md` subagent. Three things to know before touching it:
+
+- **`bin/soleon_agent_document.py` is the ONE mapping between the platform's flat editor document and the nested `config.json`**, in both directions (a mirror of agent-infra's `_flat_draft_config_patch` and its inverse). `pull_agent.py` and the save hook (`bin/soleon_draft_sync.py`) both import it — never re-derive a field in either caller.
+- **`bin/soleon_mcp_client.py` is the ONE HTTP path to Soleon from outside Claude Code's MCP connection** (the `soleon-agent-tools` shim and the hook). It reads Claude Code's own OAuth token from `~/.claude/.credentials.json` (Linux; macOS Keychain is untested) and refreshes it at most once. Tokens are never logged, printed or put in exception text — keep it that way.
+- **The two stdio servers mirror the platform, byte-for-byte where it matters.** `bin/soleon_workspace_mcp.py` copies the four filesystem tools' names/descriptions/schemas from `containers/maverick-agent/maverick/agent/tools/filesystem.py`; `bin/soleon_agent_tools_mcp.py` publishes each external tool under its OWN platform name and schema and runs it through `call_agent_tool`, waiting on `pending` with no timeout (spec D14). Approval gating is enforced server-side; the shim only words the refusal so the model asks first.
+
+Everything under `plugins/` stays **stdlib-only and Python 3.9-compatible** — `test_packaging.py` now parses every `bin/*.py` and `skills/*/assets/*.py` with the 3.9 grammar.
+
 - **`preflight/expected_channelless_config.json`** — the frozen oracle the offline validator checks output against (`required_exact`, `required_variable`, `forbidden`, `optional` keys for a channelless CONFIG row).
 
 ### Two traps the code is built to avoid (know these before changing the converter or validator)
@@ -63,7 +73,7 @@ Offline validation of generated output (harness):
 python3 harness/validate_offline.py <request_body.json> <ddb_projection.json>
 ```
 
-Run the full test suite (99 tests; 93 pass + 6 contract-drift/render-parity skips outside the monorepo):
+Run the full test suite (184 tests; the contract-drift/render-parity tests skip outside the monorepo, and the 27 engine-backed tests need the allium binary — bundled for darwin-arm64 only, `cargo install` elsewhere):
 ```bash
 ~/.asdf/installs/python/3.14.2/bin/python3 -m pytest harness/tests -o addopts=""
 ```
