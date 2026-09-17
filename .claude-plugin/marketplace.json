@@ -12,7 +12,7 @@
     {
       "name": "soleon-builder",
       "source": "./plugins/builder",
-      "description": "Everything in observer, plus the agent build loop: create and update drafts, deploy and promote agents, bind channels, author custom MCP servers and knowledge bases. Includes the deploy-agent skill (identity markdown → Allium spec → validated POST /agents)."
+      "description": "Everything in observer, plus the agent build loop: create and update drafts, deploy and promote agents, bind channels, author custom MCP servers and knowledge bases. Includes the deploy-agent skill (identity markdown → Allium spec → validated POST /agents) and its reverse arrow, pull-agent (a Soleon agent as a local Claude Code subagent whose tools run on the platform and whose every file save lands on your draft), plus run-local-eval."
     },
     {
       "name": "soleon-admin",

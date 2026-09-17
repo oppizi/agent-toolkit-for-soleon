@@ -73,9 +73,14 @@ agent-toolkit-for-soleon/
 │   │   ├── .claude-plugin/  manifest
 │   │   ├── README.md        install, usage, supported platforms, escape hatches
 │   │   ├── bin/             vendored allium engine (v3.2.4, provenance in LICENSES/)
+│   │   │                    + the local-emulation stdio MCP servers, save hook and
+│   │   │                    shared client (stdlib Python)
+│   │   ├── hooks/           PostToolUse hook: saves under .soleon/agents/ → Soleon draft
 │   │   ├── contract.json    platform validation contract, generated from source
 │   │   ├── LICENSES/        MIT notice + binary provenance chain
-│   │   └── skills/deploy-agent/ the skill (SKILL.md state machine + converter assets)
+│   │   ├── skills/deploy-agent/   local identity → Allium → validated POST /agents
+│   │   ├── skills/pull-agent/     Soleon agent → local subagent + files (the reverse arrow)
+│   │   └── skills/run-local-eval/ the platform's judge prompt, run locally
 │   └── admin/               full platform surface (scope pin only, no skills)
 ├── preflight/               frozen correctness oracle (schema fixture + contract doc)
 ├── harness/                 offline validator, judge rubric, tests — never ships
@@ -97,7 +102,7 @@ else is experiment telemetry.
 ### Documentation
 
 - **[TOOLS.md](TOOLS.md)** — full reference for every MCP tool the Soleon server
-  exposes (85 live, grouped by area), plus known gaps. Tools are discovered live
+  exposes (91 live, grouped by area), plus known gaps. Tools are discovered live
   from the server, so new ones appear in the plugin automatically — no plugin
   update needed.
 - **[MCP landing page](docs/index.html)** — a public, no-auth docs page for the
@@ -182,6 +187,54 @@ python3 plugins/builder/skills/deploy-agent/assets/allium_to_json.py spec.allium
 ```
 
 Full usage, escape hatches, and troubleshooting: [`plugins/builder/README.md`](plugins/builder/README.md).
+
+### Pull a Soleon agent into Claude Code
+
+The reverse arrow of `/deploy-agent` (`soleon-builder` v0.4.0):
+
+```
+/pull-agent <slug>
+```
+
+pulls your **dev draft** of a Soleon agent (else its deployed dev config —
+exactly what the platform's edit page opens) into the project as a Claude Code
+subagent, `.claude/agents/<slug>.md`, whose body is the system prompt the
+platform assembles for you, fetched live. **The local session is the brain;
+Soleon executes the tools**: every external tool (Gmail, web search, browser,
+custom MCPs, subagent pairs…) is published under its platform name and schema by
+a stdio MCP shim and run on the platform through `call_agent_tool` — with your
+credentials, the agent's tool policy and its approval gates (the subagent asks you
+before an approval-gated call, then sends `approved: true`). The workspace tools
+(`read_file`, `write_file`, `edit_file`, `list_dir`) run locally against a
+read-only snapshot of your platform workspace. You pick the local Claude model at
+pull time (default: the closest match to the agent's Bedrock model; non-Anthropic
+agents get a warning and no default).
+
+**The edit loop.** `/pull-agent` materializes the agent as files under
+`.soleon/agents/<slug>/` — `SOUL.md`, `config.json`, `skills/<id>/SKILL.md`,
+`evals/<id>.json`, `workspace/` — and the plugin's save hook pushes **every save**
+of the first four to your Soleon draft (`patch_agent_draft`), then re-syncs the
+platform's test sandbox. The draft IS the local state; there is no separate push.
+An edit made elsewhere in the meantime (the Soleon editor, another session) is a
+conflict: the hook stops the session and asks you to reload theirs
+(`/pull-agent` again) or overwrite with yours. Going live is still
+`deploy_agent_draft`. Configured helper subagents and workflows are pulled too, as
+sibling subagents `<slug>--<id>` and workflow skills that follow the platform's
+steps approximately. `/run-local-eval <slug>` runs the agent's standard evals
+against the local subagent and grades them with the platform's own judge prompt
+(fetched live) — scores only, never a pass/fail verdict.
+
+**Not emulated** (platform-only, shown read-only in `config.json`): channels,
+budgets, schedules, guardrails, online-eval sampling. Workspace edits never push
+back.
+
+**Credentials.** The shim and the hook reuse the OAuth token Claude Code already
+holds for the `soleon-agent-toolkit` server. On **Linux** that token lives in
+`~/.claude/.credentials.json` (mode 0600, `mcpOAuth` map) and both read it there,
+refreshing it through the server's `refresh_token` grant when it expires. On
+**macOS** Claude Code keeps it in the Keychain — reading it from a hook (e.g. via
+`security find-generic-password`) is **untested**; set `SOLEON_MCP_TOKEN` in the
+environment as a workaround until it is.
 
 ## Running the tests
 

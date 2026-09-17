@@ -3,20 +3,26 @@
 The Soleon agent build loop: everything `soleon-observer` can read, plus the
 scopes to create, update, deploy, promote and delete agents, bind channels, and
 author custom MCP servers and knowledge bases. It carries the `deploy-agent`
-skill.
+skill (local identity → Soleon) and, since 0.4.0, its reverse arrow: the
+`pull-agent` and `run-local-eval` skills (Soleon agent → local Claude Code
+subagent, edited as files whose every save lands on your draft).
 
 > **Renamed from `soleon-deploy-agent`.** See *Upgrading* below — there is no
 > alias, and your old access-token setting is obsolete.
 
 ## Scopes this bundle requests
 
-Sixteen — the eight `soleon-observer` reads, plus:
+Seventeen — the eight `soleon-observer` reads, plus:
 
 ```
 soleon-mcp/agent.write   soleon-mcp/agent.deploy  soleon-mcp/agent.delete
-soleon-mcp/channel.write soleon-mcp/mcp.write     soleon-mcp/kb.write
-soleon-mcp/business.write soleon-mcp/wiki.write
+soleon-mcp/agent.invoke  soleon-mcp/channel.write soleon-mcp/mcp.write
+soleon-mcp/kb.write      soleon-mcp/business.write soleon-mcp/wiki.write
 ```
+
+`agent.invoke` is the local-emulation scope: running one of an agent's tools on
+the platform with YOUR credentials (`call_agent_tool`), listing them, fetching the
+assembled prompt and your workspace snapshot.
 
 Installing a broader bundle grants **no** additional access. Scope is a ceiling on
 what the token may consent to, never a role — Soleon authorizes every request
@@ -56,6 +62,76 @@ explicit confirmation*, and it does not create agents during distillation or
 elicitation — those phases are offline and produce only local JSON.
 `config.schedules` and `config.tools` are deferred (no honest identity signal /
 a dependency the plugin avoids); visibility is `private` only in this slice.
+
+## Pull a Soleon agent into Claude Code
+
+```
+/pull-agent <slug>
+```
+
+**What it does.** Reads your dev draft of the agent (else the deployed dev
+config — what the platform's edit page opens), the tools its session actually
+registers, the system prompt the platform assembles for you, and a zip of your
+workspace, then asks ONE question (which Claude model to run locally — default
+the closest match to the agent's Bedrock model; Kimi/Nova/GLM agents get a
+warning and no default) and writes:
+
+```
+.claude/agents/<slug>.md                 the subagent: platform prompt + Local Tool Routing
+.claude/agents/<slug>--<subagentId>.md   one per enabled configured helper (D15)
+.soleon/agents/<slug>/
+  SOUL.md  config.json  skills/<id>/SKILL.md (+ skill.json, package files)
+  evals/<evalId>.json  workspace/ (read-only snapshot)  workflows/<id>/SKILL.md
+  tools.json  prompt.json  pull.json  .pull/ (raw responses)
+```
+
+Talk to it with the Agent tool (`subagent_type: "<slug>"`). It reasons on the
+local model; **every external tool runs on Soleon** through the bundled
+`bin/soleon_agent_tools_mcp.py` stdio shim (each tool under its platform name
+and schema, executed via `call_agent_tool` with your credentials, the agent's
+tool policy and its approval gates — the subagent asks you first, then sends
+`approved: true`; the platform refuses without it). Workspace tools run locally
+via `bin/soleon_workspace_mcp.py` against the snapshot. Tool calls wait for the
+platform to finish — no client-side timeout, as on the platform.
+
+**The edit loop.** Edit `SOUL.md`, `config.json`, `skills/**` or
+`evals/*.json` and the plugin's PostToolUse hook (`hooks/hooks.json` →
+`bin/soleon_draft_sync.py`) pushes the change to your Soleon draft on every
+save (`patch_agent_draft`, guarded by the pulled `draftEtag`) and re-syncs the
+platform's test sandbox. A concurrent edit elsewhere is a conflict: the hook
+stops the session (exit 2) and asks — reload theirs (`/pull-agent <slug>`) or
+overwrite with yours (`pull_agent.py adopt-etag`, then save again). Nothing
+goes live; deploy with `deploy_agent_draft`. `config.json` is the nested
+config.json a deploy of your draft would ship; the hook maps it back onto the
+editor's flat fields with the platform's own table (`bin/soleon_agent_document.py`).
+
+```
+/run-local-eval <slug> [evalId]
+```
+
+runs each `evals/*.json` against the local subagent, fetches the platform's judge
+prompt live (`get_eval_judge_prompt` — never vendored), runs it on the same local
+model and writes `evals/results/<ts>-<evalId>.json` with `score` / `subScores` /
+`reasoning`. Scores only — the platform never adjudicates pass/fail, and neither
+does this.
+
+**What is NOT emulated** (platform-only, listed read-only in `config.json` and
+in the pull summary): channels, budgets, schedules, guardrails, online-eval
+sampling. The workspace snapshot never pushes back. Helper subagents and
+workflows follow the platform's steps (manager: assign → review → next decision
+until finish, bounded by the configured rounds; peer: bounded rounds)
+approximately, not identically.
+
+**Credentials — Linux vs macOS.** The shim and the hook run outside Claude
+Code's MCP connection, so they reuse the OAuth token Claude Code already holds
+for `soleon-agent-toolkit`. On Linux it is in `~/.claude/.credentials.json`
+(mode 0600, `mcpOAuth` map keyed by server); both read the entry whose
+`serverUrl` matches the plugin's server URL and refresh it through the server's
+`refresh_token` grant on a 401 (the file is rewritten with its mode kept). On
+macOS Claude Code stores it in the Keychain; reading it from the hook (e.g.
+`security find-generic-password`) is **untested** — until it is, export
+`SOLEON_MCP_TOKEN` in the environment Claude Code runs in. Tokens are never
+logged or printed.
 
 ## Authentication
 
@@ -112,7 +188,7 @@ Or from a local checkout of [oppizi/agent-toolkit-for-soleon](https://github.com
 ```
 
 (The only contents that matter at runtime are this directory's
-`contract.json`, `bin/`, and `skills/`.)
+`contract.json`, `bin/`, `hooks/`, and `skills/`.)
 
 ## Use
 
