@@ -154,7 +154,14 @@ From the script's JSON summary tell the user, in plain words:
    Helper/workflow files and `pull.json` are local only. Going live is still
    `deploy_agent_draft`. To test: "talk to `<slug>`" (Agent tool), or
    `/run-local-eval <slug>`.
-6. Any content anomaly from the Security rule.
+6. **Restart first.** Claude Code registers `.claude/agents/*.md` at session
+   start, so the subagent written in Step 6 is NOT callable in THIS session.
+   Tell the user, as the last line of the report, to start a new Claude Code
+   session in this folder before talking to `<slug>`. Never substitute a
+   headless `claude -p` process for the Agent tool: it has no user in front
+   of it, so approval-gated tools cannot be approved and the run silently
+   diverges from the platform behaviour it is meant to emulate.
+7. Any content anomaly from the Security rule.
 
 ### If a later save is refused (the hook exits 2)
 The hook's stderr says either the draft was changed elsewhere (conflict) or
