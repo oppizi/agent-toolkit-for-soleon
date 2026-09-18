@@ -248,8 +248,25 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("--credentials", default=None, help="Claude Code credentials file (default ~/.claude/.credentials.json)")
     ap.add_argument("--app-env", default="dev")
     ap.add_argument("--poll-interval", type=float, default=POLL_INTERVAL_S)
+    ap.add_argument("--only", default=None,
+                    help="comma-separated tool names: publish ONLY these (a configured helper's subset)")
     args = ap.parse_args(argv)
     tools = load_tools(args.tools)
+    if args.only is not None:
+        # A helper subagent's tool subset is applied HERE, in the server its
+        # agent file declares inline, because a subagent's `tools:` frontmatter
+        # is resolved against the PARENT session's pool before any inline
+        # server connects — an `mcp__soleon-agent-tools__<name>` entry there can
+        # never match, and Claude Code refuses to spawn the agent ("would be
+        # spawned with zero tools"). Verified against Claude Code 2.1.257.
+        wanted = [n.strip() for n in args.only.split(",") if n.strip()]
+        known = {t["name"] for t in tools}
+        unknown = [n for n in wanted if n not in known]
+        if unknown:
+            _log("--only names tools that are not in {}: {}".format(args.tools, ", ".join(unknown)))
+            return 2
+        keep = set(wanted)
+        tools = [t for t in tools if t["name"] in keep]
     client = SoleonMcpClient(args.server_url, credentials_path=args.credentials)
     server = AgentToolsServer(args.slug, tools, client, app_env=args.app_env, poll_interval_s=args.poll_interval)
     _log("serving {} external tool(s) for {} via {}".format(len(server.published), args.slug, client.server_url))

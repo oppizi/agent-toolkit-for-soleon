@@ -269,8 +269,26 @@ def _yaml_str(value: str) -> str:
 
 
 def subagent_frontmatter(name: str, description: str, model: str, effort: Optional[str],
-                         tools: List[str], plugin_root: Path, agent_dir: Path, slug: str,
-                         server_url: str) -> str:
+                         external_only: Optional[List[str]], plugin_root: Path, agent_dir: Path,
+                         slug: str, server_url: str) -> str:
+    """The subagent's YAML frontmatter.
+
+    `external_only`: None publishes EVERY external tool (the agent itself); a
+    list publishes only those names (a configured helper's subset, applied by
+    the tool server's `--only`); an EMPTY list omits the tool server (a helper
+    with no external tools).
+
+    `tools: []` is deliberate and load-bearing. A subagent's `tools:` list is
+    resolved against the PARENT session's tool pool BEFORE the inline servers
+    below connect, so `mcp__soleon-workspace__*` / `mcp__soleon-agent-tools__*`
+    entries there match nothing and Claude Code refuses to spawn the agent
+    ("would be spawned with zero tools — refusing … matched no tools in this
+    session"). An EMPTY list skips that refusal and — verified on Claude Code
+    2.1.257 — the agent then holds exactly the inline servers' tools: no
+    built-ins (Bash, Read, Write …) and none of the parent session's MCP
+    servers, which is spec D2 (every tool runs on Soleon). Omitting `tools:`
+    instead would hand the agent the whole parent pool, admin tools included.
+    """
     ws_py = str(plugin_root / "bin" / "soleon_workspace_mcp.py")
     tools_py = str(plugin_root / "bin" / "soleon_agent_tools_mcp.py")
     ws_dir = str(agent_dir.resolve() / "workspace")
@@ -284,19 +302,27 @@ def subagent_frontmatter(name: str, description: str, model: str, effort: Option
     if effort:
         lines.append("effort: {}".format(effort))
     lines += [
-        "tools: {}".format(", ".join(tools)),
+        "# tools is EMPTY on purpose: the agent gets exactly the inline servers below",
+        "# (no built-in tools, no parent-session MCP servers). Do not list them here —",
+        "# a subagent's tools list cannot see inline servers and the spawn is refused.",
+        "tools: []",
         "mcpServers:",
         "  - soleon-workspace:",
         "      type: stdio",
         "      command: python3",
         "      args: {}".format(json.dumps([ws_py, ws_dir, "--readable", str(agent_dir.resolve())])),
-        "  - soleon-agent-tools:",
-        "      type: stdio",
-        "      command: python3",
-        "      args: {}".format(json.dumps([tools_py, "--slug", slug, "--tools", tools_json, "--server-url", server_url])),
-        "---",
-        "",
     ]
+    if external_only is None or external_only:
+        tools_args = [tools_py, "--slug", slug, "--tools", tools_json, "--server-url", server_url]
+        if external_only:
+            tools_args += ["--only", ",".join(external_only)]
+        lines += [
+            "  - soleon-agent-tools:",
+            "      type: stdio",
+            "      command: python3",
+            "      args: {}".format(json.dumps(tools_args)),
+        ]
+    lines += ["---", ""]
     return "\n".join(lines)
 
 
@@ -597,7 +623,7 @@ def materialize(args: argparse.Namespace) -> int:
         display_name, pulled_at, display_name)
     fm = subagent_frontmatter(
         slug, main_desc, args.model, effort,
-        ["mcp__soleon-workspace__*", "mcp__soleon-agent-tools__*"],
+        None,  # the agent itself: every external tool
         plugin_root, agent_dir, slug, args.server_url,
     )
     main_path = agents_dir / "{}.md".format(slug)
@@ -606,7 +632,6 @@ def materialize(args: argparse.Namespace) -> int:
     helper_paths = []
     for h in helpers:
         ext = helper_tool_names(h.get("toolIds") or [], tools)
-        h_tools = ["mcp__soleon-workspace__*"] + ["mcp__soleon-agent-tools__{}".format(n) for n in ext]
         h_effort = None
         eff = h.get("effort")
         if isinstance(eff, dict):
@@ -616,7 +641,7 @@ def materialize(args: argparse.Namespace) -> int:
         h_desc = "Helper \"{}\" of Soleon agent \"{}\" (local emulation, pulled {}). {}".format(
             h.get("name") or h["id"], display_name, pulled_at, (h.get("whenToUse") or "").strip())
         h_fm = subagent_frontmatter(h_name, h_desc, _local_model_for(str(h.get("model") or "inherit"), args.model),
-                                    h_effort, h_tools, plugin_root, agent_dir, slug, args.server_url)
+                                    h_effort, ext, plugin_root, agent_dir, slug, args.server_url)
         p = agents_dir / "{}.md".format(h_name)
         p.write_text(h_fm + helper_body(h, slug, display_name, ext, agent_dir), encoding="utf-8")
         helper_paths.append(p)

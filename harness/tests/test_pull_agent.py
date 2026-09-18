@@ -96,7 +96,12 @@ def test_subagent_frontmatter_and_body(pulled):
     assert "Use when the user wants to talk to or test Demo Agent." in fm
     assert "model: sonnet\n" in fm
     assert "effort: high\n" in fm  # thorough → high
-    assert "tools: mcp__soleon-workspace__*, mcp__soleon-agent-tools__*" in fm
+    # An EMPTY tools list, on purpose: a subagent's `tools:` is resolved against
+    # the parent session's pool before its inline servers connect, so naming the
+    # inline servers there makes Claude Code refuse the spawn ("would be spawned
+    # with zero tools"). Empty = exactly the inline servers' tools, nothing else.
+    assert "\ntools: []\n" in fm
+    assert "mcp__soleon-workspace__*" not in fm and "mcp__soleon-agent-tools__*" not in fm
     assert "mcpServers:" in fm and "  - soleon-workspace:" in fm and "  - soleon-agent-tools:" in fm
     ws_args = re.search(r"soleon-workspace:\n\s+type: stdio\n\s+command: python3\n\s+args: (\[.*?\])\n", fm)
     assert ws_args, fm
@@ -151,17 +156,23 @@ def test_helper_subagents_and_workflows(pulled):
     assert f"name: {SLUG}--subagent_res1\n" in fm
     assert "model: sonnet\n" in fm  # inherit → the chosen model
     assert "effort: low\n" in fm  # its own band: swift → low
-    tools_line = next(l for l in fm.splitlines() if l.startswith("tools:"))
-    assert "mcp__soleon-workspace__*" in tools_line
-    assert "mcp__soleon-agent-tools__custom_echo-server_read" in tools_line
-    assert "mcp__soleon-agent-tools__web_search" in tools_line  # sys_web_prompt → the web_ family
-    assert "custom_echo-server_write" not in tools_line
+    # The helper's tool SUBSET rides the inline server's `--only`, never the
+    # `tools:` line (which cannot see inline servers — see the main-agent test).
+    assert "\ntools: []\n" in fm
+    only = re.search(r"soleon-agent-tools:\n\s+type: stdio\n\s+command: python3\n\s+args: (\[.*?\])(?:\n|$)", fm)
+    assert only, fm
+    h_args = json.loads(only.group(1))
+    assert h_args[-2] == "--only"
+    assert set(h_args[-1].split(",")) == {"custom_echo-server_read", "web_search"}  # sys_web_prompt → the web_ family
+    assert "custom_echo-server_write" not in h_args[-1]
     body = res.read_text(encoding="utf-8")
     assert "Research carefully." in body and "find a source" in body and "write copy" in body
     fm_w = _frontmatter(wri.read_text(encoding="utf-8"))
     assert "model: opus\n" in fm_w  # its own opus model id → opus
     assert "effort: high\n" in fm_w  # no own band → the agent's
-    assert "mcp__soleon-agent-tools__" not in next(l for l in fm_w.splitlines() if l.startswith("tools:"))
+    assert "\ntools: []\n" in fm_w
+    # no external tools → the workspace server only; the tool server is omitted
+    assert "soleon-agent-tools:" not in fm_w and "  - soleon-workspace:" in fm_w
     assert "Response contract" in wri.read_text(encoding="utf-8") and "`draft`" in wri.read_text(encoding="utf-8")
     # workflows
     mgr = agent_dir / "workflows/workflow_mgr1/SKILL.md"
