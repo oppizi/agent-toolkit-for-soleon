@@ -1,8 +1,8 @@
 # soleon-builder
 
 The Soleon agent build loop: everything `soleon-observer` can read, plus the
-scopes to create, update, deploy, promote and delete agents, bind channels, and
-author custom MCP servers and knowledge bases. It carries the `deploy-agent`
+scopes to create, update, deploy, promote and delete agents, run their evals,
+bind channels, and author custom MCP servers and knowledge bases. It carries the `deploy-agent`
 skill.
 
 > **Renamed from `soleon-deploy-agent`.** See *Upgrading* below — there is no
@@ -10,12 +10,12 @@ skill.
 
 ## Scopes this bundle requests
 
-Sixteen — the eight `soleon-observer` reads, plus:
+Seventeen — the eight `soleon-observer` reads, plus:
 
 ```
 soleon-mcp/agent.write   soleon-mcp/agent.deploy  soleon-mcp/agent.delete
 soleon-mcp/channel.write soleon-mcp/mcp.write     soleon-mcp/kb.write
-soleon-mcp/business.write soleon-mcp/wiki.write
+soleon-mcp/eval.run      soleon-mcp/business.write soleon-mcp/wiki.write
 ```
 
 Installing a broader bundle grants **no** additional access. Scope is a ceiling on
@@ -23,8 +23,10 @@ what the token may consent to, never a role — Soleon authorizes every request
 against your real permissions, so you see and reach only the tools you are already
 entitled to.
 
-The admin-only families (`channel.read`, `mcp.read`, `eval.run`, `discovery.*`) are
-deliberately absent; they live in `soleon-admin`.
+The admin-only families (`channel.read`, `mcp.read`, `discovery.*`) are
+deliberately absent; they live in `soleon-admin`. `eval.run` moved here from
+admin: running an agent's evals is gated on being able to edit that agent, so an
+agent editor who is not a platform admin can run the evals they author.
 
 ## What the deploy-agent skill does
 
