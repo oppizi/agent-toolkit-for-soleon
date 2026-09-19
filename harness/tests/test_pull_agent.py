@@ -110,6 +110,13 @@ def test_subagent_frontmatter_and_body(pulled):
     ws = json.loads(ws_args.group(1))
     assert ws[0] == str(PLUGIN / "bin" / "soleon_workspace_mcp.py")
     assert ws[1] == str(agent_dir.resolve() / "workspace")
+    # Claude Code's project data folder is a READ-ONLY root, so the agent can
+    # read the overflow copy of a large tool result (…/tool-results/*.txt)
+    # that Claude Code writes there instead of returning it inline.
+    readable = [ws[i + 1] for i, a in enumerate(ws) if a == "--readable"]
+    assert readable == [str(agent_dir.resolve()),
+                        str(root / ".claude" / "projects" / re.sub(r"[^A-Za-z0-9-]", "-", str(root.resolve())))]
+    assert "**Large tool results**" in text and "tool-results/" in text
     tools_args = re.search(r"soleon-agent-tools:\n\s+type: stdio\n\s+command: python3\n\s+args: (\[.*?\])(?:\n|$)", fm)
     assert tools_args, fm
     ta = json.loads(tools_args.group(1))

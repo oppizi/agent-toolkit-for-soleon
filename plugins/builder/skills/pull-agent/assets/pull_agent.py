@@ -232,6 +232,10 @@ def routing_section(display_name: str, slug: str, tools: List[Dict[str, Any]], a
         "- **Workspace tools** (server `soleon-workspace`, rooted at `{}` — a read-only snapshot of the "
         "person's platform workspace; local writes never push back): {}".format(
             agent_dir.resolve() / "workspace", ", ".join("`{}`".format(n) for n in workspace) or "none"),
+        "- **Large tool results**: when a tool answer says \"Output has been saved to <path>/tool-results/<file>.txt\", "
+        "that file is Claude Code's overflow copy of the FULL result and it is inside one of your readable roots — "
+        "read it with `read_file` (page with `offset`/`limit`) until you have all of it. Do not report the result as "
+        "inaccessible; do not use the built-in Read.",
         "- **Approval rule**: these tools are approval-gated — BEFORE calling one, tell the person exactly "
         "what the call will do and wait for a clear yes; then call it with `approved: true`. Never pass "
         "`approved: true` without that yes. If they decline, do not call it: {}".format(
@@ -268,10 +272,31 @@ def _yaml_str(value: str) -> str:
     return json.dumps(str(value), ensure_ascii=False)
 
 
+def claude_project_data_dir(project_root: Path) -> Path:
+    """Claude Code's per-project data folder, `~/.claude/projects/<encoded cwd>`.
+
+    When an MCP tool result is too large for the context, Claude Code writes
+    it to `<this dir>/<session>/tool-results/<server>-<tool>-<ts>.txt` and
+    tells the model "Output has been saved to <path> … use offset and limit".
+    The subagent has no built-in Read (spec D2), so the workspace shim must
+    be allowed to read that folder or every large Gmail/Sheets result is
+    unreachable ("outside my permitted workspace root", 2026-09-19).
+
+    Encoding as observed on 2.1.257: every character outside [A-Za-z0-9-]
+    becomes "-" (`/home/danny/soleon-local-dev` → `-home-danny-soleon-local-dev`,
+    `/tmp/claude-1000/-home-…` → `-tmp-claude-1000--home-…`).
+    """
+    encoded = re.sub(r"[^A-Za-z0-9-]", "-", str(project_root.resolve()))
+    return Path.home() / ".claude" / "projects" / encoded
+
+
 def subagent_frontmatter(name: str, description: str, model: str, effort: Optional[str],
                          external_only: Optional[List[str]], plugin_root: Path, agent_dir: Path,
-                         slug: str, server_url: str) -> str:
+                         slug: str, server_url: str, readable_extra: Optional[List[Path]] = None) -> str:
     """The subagent's YAML frontmatter.
+
+    `readable_extra`: additional READ-ONLY roots for the workspace shim (the
+    Claude Code project data folder, for overflow tool results).
 
     `external_only`: None publishes EVERY external tool (the agent itself); a
     list publishes only those names (a configured helper's subset, applied by
@@ -310,7 +335,9 @@ def subagent_frontmatter(name: str, description: str, model: str, effort: Option
         "  - soleon-workspace:",
         "      type: stdio",
         "      command: python3",
-        "      args: {}".format(json.dumps([ws_py, ws_dir, "--readable", str(agent_dir.resolve())])),
+        "      args: {}".format(json.dumps(
+            [ws_py, ws_dir, "--readable", str(agent_dir.resolve())]
+            + [a for d in (readable_extra or []) for a in ("--readable", str(d))])),
     ]
     if external_only is None or external_only:
         tools_args = [tools_py, "--slug", slug, "--tools", tools_json, "--server-url", server_url]
@@ -639,10 +666,11 @@ def materialize(args: argparse.Namespace) -> int:
         stale.unlink()
     main_desc = "Soleon agent \"{}\" — local emulation (pulled {}). Use when the user wants to talk to or test {}.".format(
         display_name, pulled_at, display_name)
+    readable_extra = [claude_project_data_dir(project_root)]
     fm = subagent_frontmatter(
         slug, main_desc, args.model, effort,
         None,  # the agent itself: every external tool
-        plugin_root, agent_dir, slug, args.server_url,
+        plugin_root, agent_dir, slug, args.server_url, readable_extra,
     )
     main_path = agents_dir / "{}.md".format(slug)
     main_path.write_text(fm + body, encoding="utf-8")
@@ -659,7 +687,7 @@ def materialize(args: argparse.Namespace) -> int:
         h_desc = "Helper \"{}\" of Soleon agent \"{}\" (local emulation, pulled {}). {}".format(
             h.get("name") or h["id"], display_name, pulled_at, (h.get("whenToUse") or "").strip())
         h_fm = subagent_frontmatter(h_name, h_desc, _local_model_for(str(h.get("model") or "inherit"), args.model),
-                                    h_effort, ext, plugin_root, agent_dir, slug, args.server_url)
+                                    h_effort, ext, plugin_root, agent_dir, slug, args.server_url, readable_extra)
         p = agents_dir / "{}.md".format(h_name)
         p.write_text(h_fm + helper_body(h, slug, display_name, ext, agent_dir), encoding="utf-8")
         helper_paths.append(p)
