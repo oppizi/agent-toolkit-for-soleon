@@ -48,7 +48,7 @@ from soleon_mcp_client import (  # noqa: E402
 )
 
 PROTOCOL_VERSION = "2025-03-26"
-SERVER_INFO = {"name": "soleon-agent-tools", "version": "0.4.5"}
+SERVER_INFO = {"name": "soleon-agent-tools", "version": "0.4.6"}
 APPROVAL_NOTE = "Requires human approval: ask the person first, then call with approved=true."
 POLL_INTERVAL_S = 1.5
 
@@ -122,9 +122,69 @@ def _render_tool_value(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, indent=2, default=str)
 
 
+CONVERSATION_IDLE_S = 30 * 60
+
+
+class ConversationTracker:
+    """Which PLATFORM session this local conversation's calls land in.
+
+    The platform starts one session per `conversation` id it is sent, so each
+    local conversation is its own Traces entry. This process lives only as
+    long as one subagent run (Claude Code starts the inline servers with the
+    subagent and stops them with it — a resumed conversation restarts them),
+    so the id cannot live in memory alone: it is kept in `<agent dir>/
+    .local-conversation.json` with the time of the last call, and REUSED while
+    the agent has been idle for less than `idle_s` (30 min — the platform's own
+    session-inactivity window). A longer gap mints a new id: a new conversation.
+    `None` path = no persistence (tests / ad-hoc runs): one id per process.
+    """
+
+    def __init__(self, path: Optional[str], idle_s: float = CONVERSATION_IDLE_S, now=None):
+        self.path = path
+        self.idle_s = idle_s
+        self._now = now or __import__("time").time
+        self._id: Optional[str] = None
+
+    def _load(self) -> Optional[Dict[str, Any]]:
+        if not self.path or not os.path.isfile(self.path):
+            return None
+        try:
+            with open(self.path, "r", encoding="utf-8") as fh:
+                data = json.load(fh)
+        except (OSError, ValueError):
+            return None
+        return data if isinstance(data, dict) else None
+
+    def current(self) -> str:
+        """The id to send with the NEXT call (touching the last-call time)."""
+        now = self._now()
+        data = self._load() or {}
+        cid = data.get("conversation") if isinstance(data.get("conversation"), str) else None
+        last = data.get("lastCallAt") if isinstance(data.get("lastCallAt"), (int, float)) else None
+        if self._id is None:
+            if cid and last is not None and (now - last) < self.idle_s:
+                self._id = cid
+                _log("continuing conversation {} ({:.0f}s since its last call)".format(cid, now - last))
+            else:
+                self._id = __import__("uuid").uuid4().hex[:24]
+                _log("new conversation {} → a new platform session".format(self._id))
+        self._save({"conversation": self._id, "lastCallAt": now})
+        return self._id
+
+    def _save(self, data: Dict[str, Any]) -> None:
+        if not self.path:
+            return
+        try:
+            with open(self.path, "w", encoding="utf-8") as fh:
+                json.dump(data, fh)
+        except OSError as exc:
+            _log("could not persist the conversation id: {}".format(exc))
+
+
 class AgentToolsServer:
     def __init__(self, slug: str, tools: List[Dict[str, Any]], client: SoleonMcpClient,
-                 app_env: str = "dev", poll_interval_s: float = POLL_INTERVAL_S):
+                 app_env: str = "dev", poll_interval_s: float = POLL_INTERVAL_S,
+                 conversation: Optional[ConversationTracker] = None):
         self.slug = slug
         self.app_env = app_env
         self.tools = tools
@@ -132,6 +192,7 @@ class AgentToolsServer:
         self._gated = {t["name"] for t in tools if t.get("approval")}
         self.client = client
         self.poll_interval_s = poll_interval_s
+        self.conversation = conversation or ConversationTracker(None)
 
     def call(self, name: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
         if name not in {t["name"] for t in self.published}:
@@ -142,6 +203,7 @@ class AgentToolsServer:
             envelope = self.client.call_tool("call_agent_tool", {
                 "slug": self.slug, "app_env": self.app_env,
                 "name": name, "args": args, "approved": approved,
+                "conversation": self.conversation.current(),
             })
             envelope = await_control(
                 self.client, self.slug, envelope, app_env=self.app_env,
@@ -268,7 +330,12 @@ def main(argv: Optional[List[str]] = None) -> int:
         keep = set(wanted)
         tools = [t for t in tools if t["name"] in keep]
     client = SoleonMcpClient(args.server_url, credentials_path=args.credentials)
-    server = AgentToolsServer(args.slug, tools, client, app_env=args.app_env, poll_interval_s=args.poll_interval)
+    # The conversation id lives next to tools.json (the pulled agent's dir),
+    # so every restart of this server for the same agent finds it.
+    tracker = ConversationTracker(os.path.join(os.path.dirname(os.path.abspath(args.tools)),
+                                               ".local-conversation.json"))
+    server = AgentToolsServer(args.slug, tools, client, app_env=args.app_env,
+                              poll_interval_s=args.poll_interval, conversation=tracker)
     _log("serving {} external tool(s) for {} via {}".format(len(server.published), args.slug, client.server_url))
     serve(server)
     return 0

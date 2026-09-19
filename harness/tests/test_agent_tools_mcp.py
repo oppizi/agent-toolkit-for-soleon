@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import stat
 import subprocess
 import sys
@@ -179,8 +180,43 @@ def test_done_envelope_returns_the_tools_own_result(soleon, tmp_path):
     assert json.loads(out["content"][0]["text"]) == {"echo": "hello"}
     name, args = state["calls"][-1]
     assert name == "call_agent_tool"
+    conversation = args.pop("conversation")
+    assert re.fullmatch(r"[0-9a-f]{24}", conversation)  # one platform session per local conversation
     assert args == {"slug": SLUG, "app_env": "dev", "name": "custom_echo-server_read",
                     "args": {"prompt": "hello"}, "approved": False}
+    # every call of this process carries the SAME id
+    server.call("custom_echo-server_read", {"prompt": "again"})
+    assert state["calls"][-1][1]["conversation"] == conversation
+
+
+def test_conversation_tracker_reuses_the_id_within_the_idle_window_and_mints_after(tmp_path):
+    """The tool server restarts with every subagent run, so the id is kept on
+    disk and reused while the agent has been idle < 30 min (the platform's own
+    session window); a longer gap is a new conversation → a new session."""
+    path = tmp_path / ".local-conversation.json"
+    clock = {"t": 1_000_000.0}
+    first = shim.ConversationTracker(str(path), idle_s=1800, now=lambda: clock["t"])
+    a = first.current()
+    assert re.fullmatch(r"[0-9a-f]{24}", a)
+    assert json.loads(path.read_text()) == {"conversation": a, "lastCallAt": clock["t"]}
+    clock["t"] += 600  # 10 min later, a NEW process (resumed subagent)
+    second = shim.ConversationTracker(str(path), idle_s=1800, now=lambda: clock["t"])
+    assert second.current() == a
+    assert json.loads(path.read_text())["lastCallAt"] == clock["t"]  # touched
+    clock["t"] += 1799  # still inside the window measured from the LAST call
+    assert shim.ConversationTracker(str(path), idle_s=1800, now=lambda: clock["t"]).current() == a
+    clock["t"] += 1801  # idle > 30 min → new conversation
+    b = shim.ConversationTracker(str(path), idle_s=1800, now=lambda: clock["t"]).current()
+    assert b != a and json.loads(path.read_text())["conversation"] == b
+    # a process keeps its id for its whole life even as the clock moves on
+    third = shim.ConversationTracker(str(path), idle_s=1800, now=lambda: clock["t"])
+    c = third.current()
+    clock["t"] += 5000
+    assert third.current() == c
+    # unreadable or missing state → a fresh id, never a crash
+    path.write_text("{not json")
+    assert re.fullmatch(r"[0-9a-f]{24}", shim.ConversationTracker(str(path), now=lambda: clock["t"]).current())
+    assert shim.ConversationTracker(None).current()  # no persistence: one id per process
 
 
 def test_pending_is_polled_until_done_without_giving_up(soleon, tmp_path):

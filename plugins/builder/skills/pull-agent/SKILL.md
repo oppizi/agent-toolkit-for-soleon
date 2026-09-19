@@ -158,7 +158,12 @@ From the script's JSON summary tell the user, in plain words:
    `workspace/` copy is read-only towards the platform (never pushed).
    Helper/workflow files and `pull.json` are local only. Going live is still
    `deploy_agent_draft`. To test: "talk to `<slug>`" (Agent tool), or
-   `/run-local-eval <slug>`.
+   `/run-local-eval <slug>`. Every tool call lands on the platform as a
+   trace: each local conversation is its own session — one entry in the
+   agent's Observability → Traces list (channel `Local`), dated when the
+   conversation started, holding all of its tool calls; a new conversation
+   begins after 30 idle minutes (the tool server keeps the id in
+   `$DIR/.local-conversation.json`).
 6. **Why the subagent lives in `~/.claude/agents/` (user scope), and when a
    restart is needed.** Claude Code starts a subagent's inline tool servers
    from a PROJECT `.claude/agents/` file only in a folder the person has
