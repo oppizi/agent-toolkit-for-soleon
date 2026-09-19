@@ -12,7 +12,7 @@ Subcommands (all offline — the LLM head does the MCP calls and saves them):
                          prompt.json        (get_agent_system_prompt, terminal envelope)
                          .pull/workspace.zip (get_agent_workspace_archive download, optional)
                   writes SOUL.md, config.json, skills/, evals/, workspace/, pull.json,
-                         .claude/agents/<slug>.md (+ one helper per enabled configured
+                         ~/.claude/agents/<slug>.md (+ one helper per enabled configured
                          subagent, + workflows/<id>/SKILL.md per workflow)
     default-model --dir D            → {"platformModel", "suggested", "warning"} (spec D6/D16)
     download      --url U --out F    → fetch the presigned workspace zip (no auth)
@@ -617,8 +617,26 @@ def materialize(args: argparse.Namespace) -> int:
         project_root = agent_dir.parents[2]
     else:
         project_root = Path.cwd()
-    agents_dir = project_root / ".claude" / "agents"
+    # The subagent files go to the USER scope (~/.claude/agents/), NOT the
+    # project's .claude/agents/. Two Claude Code rules decide this, both
+    # verified on 2.1.257 (2026-09-18):
+    #   1. Inline `mcpServers` in a PROJECT agent file start only after the
+    #      person has trusted that folder — and the VS Code extension does not
+    #      always ask, so the agent spawned with no tools and just stopped.
+    #      User-scope agent files load their inline servers with no trust
+    #      check at all.
+    #   2. ~/.claude/agents/ almost always exists when the session starts, so
+    #      the watcher picks the new file up within seconds: no restart. (A
+    #      project's first .claude/agents/ file needs one.)
+    # The files reference the pull directory by absolute path, so they work
+    # from any cwd. A stale project-scope copy from an earlier pull is removed
+    # so Claude Code does not see the same agent twice.
+    agents_dir = Path(args.agents_dir).expanduser() if args.agents_dir else Path.home() / ".claude" / "agents"
+    agents_dir_created = not agents_dir.is_dir()
     agents_dir.mkdir(parents=True, exist_ok=True)
+    stale = project_root / ".claude" / "agents" / "{}.md".format(slug)
+    if stale.is_file() and stale.resolve() != (agents_dir / "{}.md".format(slug)).resolve():
+        stale.unlink()
     main_desc = "Soleon agent \"{}\" — local emulation (pulled {}). Use when the user wants to talk to or test {}.".format(
         display_name, pulled_at, display_name)
     fm = subagent_frontmatter(
@@ -686,40 +704,15 @@ def materialize(args: argparse.Namespace) -> int:
         "workspaceTools": sorted(t["name"] for t in tools if t.get("kind") == "workspace"),
         "pathRewrites": ["{} -> {}".format(a, b) for a, b in applied],
         "notEmulated": not_emulated(config, document),
-        # True / False / None(unknown). False or None ⇒ the report must tell
-        # the user to trust the folder before the agent can hold any tool.
-        "folderTrusted": folder_trust(project_root),
         "projectRoot": str(project_root),
+        "agentsDir": str(agents_dir),
+        # True when ~/.claude/agents/ did not exist before this pull: the
+        # watcher only covers directories that existed at session start, so
+        # this one time a restart is needed before the agent is callable.
+        "agentsDirCreated": agents_dir_created,
     }
     print(json.dumps(summary, indent=2, ensure_ascii=False))
     return 0
-
-
-def folder_trust(project_root: Path, claude_json: Optional[Path] = None) -> Optional[bool]:
-    """Whether Claude Code has recorded trust for `project_root`.
-
-    Claude Code starts a subagent's INLINE `mcpServers` from a project's
-    `.claude/agents/` only in a folder the person has trusted (the
-    `projects["<path>"].hasTrustDialogAccepted` key in `~/.claude.json`,
-    since 2.1.238). In an untrusted folder the servers are skipped silently:
-    the agent spawns with `tools: []` and no servers, says "I'll do it" and
-    stops. The VS Code extension does not always show the trust prompt, so
-    the report must say it. Returns True / False, or None when the record is
-    unreadable (no file, malformed) — "unknown", not "trusted".
-    """
-    path = claude_json or (Path.home() / ".claude.json")
-    try:
-        with open(path, "r", encoding="utf-8") as fh:
-            data = json.load(fh)
-    except (OSError, ValueError):
-        return None
-    projects = data.get("projects") if isinstance(data, dict) else None
-    if not isinstance(projects, dict):
-        return None
-    entry = projects.get(str(project_root.resolve())) or projects.get(str(project_root))
-    if not isinstance(entry, dict):
-        return False
-    return bool(entry.get("hasTrustDialogAccepted"))
 
 
 def not_emulated(config: Dict[str, Any], document: Dict[str, Any]) -> Dict[str, Any]:
@@ -806,6 +799,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     m.add_argument("--dir", required=True)
     m.add_argument("--server-url", required=True)
     m.add_argument("--model", required=True, choices=LOCAL_MODELS)
+    m.add_argument("--agents-dir", default=None,
+                   help="where the subagent files go (default ~/.claude/agents — user scope, see materialize())")
     m.add_argument("--plugin-root", default=None)
     m.set_defaults(fn=materialize)
     d = sub.add_parser("default-model")

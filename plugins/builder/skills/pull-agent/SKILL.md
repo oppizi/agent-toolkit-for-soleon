@@ -124,8 +124,8 @@ platform-only keys stay visible), `skills/<id>/SKILL.md` + `skill.json` (+
 text package files), `evals/<evalId>.json` (one per standard eval),
 `workspace/` (the extracted snapshot), `pull.json` (`{slug, source:
 draft|deployed, draftEtag, pulledAt, model, serverUrl, namespace, …}`), and
-in the project: `.claude/agents/<slug>.md` — the subagent — plus one
-`.claude/agents/<slug>--<subagentId>.md` per enabled configured helper and
+in the USER scope: `~/.claude/agents/<slug>.md` — the subagent — plus one
+`~/.claude/agents/<slug>--<subagentId>.md` per enabled configured helper and
 one `workflows/<id>/SKILL.md` per workflow (spec D15: helpers run locally as
 Claude Code subagents; workflows follow the platform's steps — manager:
 assign → review → next decision until finish, bounded by the configured
@@ -154,27 +154,26 @@ From the script's JSON summary tell the user, in plain words:
    Helper/workflow files and `pull.json` are local only. Going live is still
    `deploy_agent_draft`. To test: "talk to `<slug>`" (Agent tool), or
    `/run-local-eval <slug>`.
-6. **Trust, then restart — two hard preconditions, said as the last lines
-   of the report.**
-   - **Trust.** Claude Code starts a subagent's inline tool servers only in
-     a folder the person has trusted; in an untrusted folder it skips them
-     silently and the agent spawns with NO tools (it says "I'll do it" and
-     stops — nothing runs on Soleon). The summary's `folderTrusted` says
-     what Claude Code has recorded for `projectRoot`: `true` → say nothing;
-     `false` or `null` → tell the user, verbatim: "Claude Code has not
-     recorded trust for this folder, so the agent would start with no
-     tools. In a terminal, run `claude` in `<projectRoot>`, accept the
-     trust prompt, then `/exit`." The VS Code extension does not always
-     show that prompt, which is why the terminal step is the instruction.
-   - **Restart.** Claude Code registers a scope's first `.claude/agents/*.md`
-     at session start, so the subagent written in Step 6 is NOT callable in
-     THIS session. Tell the user to start a new Claude Code session in this
-     folder before talking to `<slug>`.
+6. **Why the subagent lives in `~/.claude/agents/` (user scope), and when a
+   restart is needed.** Claude Code starts a subagent's inline tool servers
+   from a PROJECT `.claude/agents/` file only in a folder the person has
+   trusted, and the VS Code extension does not always ask — the agent then
+   spawns with NO tools, says "I'll do it" and stops. User-scope agent files
+   load their inline servers with no trust check, and the user watcher
+   picks a new file up within seconds. So: no trust step, and no restart —
+   EXCEPT when the summary says `agentsDirCreated: true` (the folder did
+   not exist when this session started, so the watcher is not covering
+   it): then, and only then, tell the user to start a new Claude Code
+   session before talking to `<slug>`. The Agent tool refusing with
+   "unknown subagent_type" a few seconds after the pull means the same
+   thing — restart, do not improvise.
    Never substitute a headless `claude -p` process for the Agent tool: it
    has no user in front of it, so approval-gated tools cannot be approved
    and the run silently diverges from the platform behaviour it is meant to
    emulate. If the agent later answers without calling any tool, or says it
-   has no tools, the trust precondition is the first thing to check.
+   has no tools, check that `~/.claude/agents/<slug>.md` is the file being
+   used (a stale project-scope copy is removed by the pull) and that both
+   tool servers start by hand.
 7. Any content anomaly from the Security rule.
 
 ### If a later save is refused (the hook exits 2)

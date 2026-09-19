@@ -198,7 +198,7 @@ The reverse arrow of `/deploy-agent` (`soleon-builder` v0.4.0):
 
 pulls your **dev draft** of a Soleon agent (else its deployed dev config —
 exactly what the platform's edit page opens) into the project as a Claude Code
-subagent, `.claude/agents/<slug>.md`, whose body is the system prompt the
+subagent, `~/.claude/agents/<slug>.md` (user scope), whose body is the system prompt the
 platform assembles for you, fetched live. **The local session is the brain;
 Soleon executes the tools**: every external tool (Gmail, web search, browser,
 custom MCPs, subagent pairs…) is published under its platform name and schema by

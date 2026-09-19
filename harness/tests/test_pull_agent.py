@@ -29,7 +29,9 @@ def _run(*args: str, cwd: Path):
     return subprocess.run(
         [sys.executable, str(PULL_ASSETS / "pull_agent.py"), *args],
         capture_output=True, text=True, timeout=60, cwd=str(cwd),
-        env={"PATH": "/usr/bin:/bin"},
+        # HOME → the tmp root, so the DEFAULT user-scope path (~/.claude/agents)
+        # is what the tests exercise; root/.claude/agents below IS that path.
+        env={"PATH": "/usr/bin:/bin", "HOME": str(cwd)},
     )
 
 
@@ -273,25 +275,49 @@ def test_config_roundtrip_flat_to_nested_to_flat():
     assert "name" not in flat_again and "soul" not in flat_again and "skills" not in flat_again
 
 
-def test_folder_trust_reads_claude_code_record(tmp_path):
-    """Inline tool servers start only in a TRUSTED folder; the summary carries
-    what Claude Code recorded so the report can say it (receipt: 2026-09-18,
-    a pulled agent spawned with no tools in an untrusted VS Code folder)."""
-    root = tmp_path / "proj"
-    root.mkdir()
-    cfg = tmp_path / "claude.json"
-    cfg.write_text(json.dumps({"projects": {str(root.resolve()): {"hasTrustDialogAccepted": True}}}))
-    assert pull_agent.folder_trust(root, cfg) is True
-    cfg.write_text(json.dumps({"projects": {str(root.resolve()): {"hasTrustDialogAccepted": False}}}))
-    assert pull_agent.folder_trust(root, cfg) is False
-    cfg.write_text(json.dumps({"projects": {"/elsewhere": {"hasTrustDialogAccepted": True}}}))
-    assert pull_agent.folder_trust(root, cfg) is False  # no entry ⇒ not trusted
-    cfg.write_text("{not json")
-    assert pull_agent.folder_trust(root, cfg) is None  # unreadable ⇒ unknown, never "trusted"
-    assert pull_agent.folder_trust(root, tmp_path / "missing.json") is None
+def test_subagent_lands_in_user_scope_and_a_stale_project_copy_is_removed(tmp_path):
+    """User scope (~/.claude/agents) on purpose: a PROJECT agent file starts its
+    inline MCP servers only in a trusted folder (VS Code does not always ask →
+    the agent spawned with no tools, 2026-09-18); user-scope files skip the
+    trust check and hot-load. A copy left by an older pull in the project's
+    .claude/agents/ would make Claude Code see the agent twice — it is removed."""
+    agent_dir = make_pulled_dir(tmp_path)
+    stale = tmp_path / ".claude" / "agents" / f"{SLUG}.md"
+    stale.parent.mkdir(parents=True)
+    stale.write_text("old")
+    home = tmp_path / "home"
+    home.mkdir()
+    proc = subprocess.run(
+        [sys.executable, str(PULL_ASSETS / "pull_agent.py"), "materialize", "--slug", SLUG, "--dir", str(agent_dir),
+         "--server-url", SERVER_URL, "--model", "sonnet", "--plugin-root", str(PLUGIN)],
+        capture_output=True, text=True, timeout=60, cwd=str(tmp_path),
+        env={"PATH": "/usr/bin:/bin", "HOME": str(home)},
+    )
+    assert proc.returncode == 0, proc.stderr
+    summary = json.loads(proc.stdout)
+    assert summary["agentsDir"] == str(home / ".claude" / "agents")
+    assert summary["agentsDirCreated"] is True  # did not exist before ⇒ the report says restart
+    assert (home / ".claude" / "agents" / f"{SLUG}.md").is_file()
+    assert summary["subagentFile"] == str(home / ".claude" / "agents" / f"{SLUG}.md")
+    assert not stale.exists()
+    assert summary["projectRoot"] == str(tmp_path)
 
 
-def test_summary_reports_folder_trust(pulled):
-    root, _agent_dir, summary = pulled
-    assert summary["projectRoot"] == str(root)
-    assert summary["folderTrusted"] in (True, False, None)
+def test_agents_dir_created_is_false_when_it_already_existed(tmp_path):
+    agent_dir = make_pulled_dir(tmp_path)
+    (tmp_path / ".claude" / "agents").mkdir(parents=True)  # HOME == tmp_path in _run
+    proc = _run("materialize", "--slug", SLUG, "--dir", str(agent_dir), "--server-url", SERVER_URL,
+                "--model", "sonnet", "--plugin-root", str(PLUGIN), cwd=tmp_path)
+    assert proc.returncode == 0, proc.stderr
+    summary = json.loads(proc.stdout)
+    assert summary["agentsDir"] == str(tmp_path / ".claude" / "agents")
+    assert summary["agentsDirCreated"] is False
+
+
+def test_agents_dir_override(tmp_path):
+    agent_dir = make_pulled_dir(tmp_path)
+    custom = tmp_path / "elsewhere"
+    proc = _run("materialize", "--slug", SLUG, "--dir", str(agent_dir), "--server-url", SERVER_URL,
+                "--model", "sonnet", "--plugin-root", str(PLUGIN), "--agents-dir", str(custom), cwd=tmp_path)
+    assert proc.returncode == 0, proc.stderr
+    assert (custom / f"{SLUG}.md").is_file()

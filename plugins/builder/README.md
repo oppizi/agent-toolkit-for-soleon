@@ -77,8 +77,8 @@ the closest match to the agent's Bedrock model; Kimi/Nova/GLM agents get a
 warning and no default) and writes:
 
 ```
-.claude/agents/<slug>.md                 the subagent: platform prompt + Local Tool Routing
-.claude/agents/<slug>--<subagentId>.md   one per enabled configured helper (D15)
+~/.claude/agents/<slug>.md               the subagent (USER scope): platform prompt + Local Tool Routing
+~/.claude/agents/<slug>--<subagentId>.md one per enabled configured helper (D15)
 .soleon/agents/<slug>/
   SOUL.md  config.json  skills/<id>/SKILL.md (+ skill.json, package files)
   evals/<evalId>.json  workspace/ (read-only snapshot)  workflows/<id>/SKILL.md
