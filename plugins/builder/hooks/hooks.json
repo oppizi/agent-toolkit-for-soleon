@@ -1,5 +1,5 @@
 {
-  "description": "Soleon local agent emulation — every save under .soleon/agents/<slug>/ (SOUL.md, config.json, skills/, evals/) is pushed to the platform draft instantly via patch_agent_draft; a conflict stops the session and asks (exit 2). Files anywhere else are ignored.",
+  "description": "Soleon local agent emulation — (1) every save under .soleon/agents/<slug>/ (SOUL.md, config.json, skills/, evals/) is pushed to the platform draft instantly via patch_agent_draft; a conflict stops the session and asks (exit 2); files anywhere else are ignored. (2) Each run of a pulled agent's subagent is recorded on the platform trace as ONE turn — the prompt, every tool call, the answer — via record_agent_turn (SubagentStart mints the turn id, SubagentStop reports the transcript); other subagents are untouched.",
   "hooks": {
     "PostToolUse": [
       {
@@ -9,6 +9,28 @@
             "type": "command",
             "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/bin/soleon_draft_sync.py\"",
             "timeout": 180
+          }
+        ]
+      }
+    ],
+    "SubagentStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/bin/soleon_turn_hooks.py\" start",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/bin/soleon_turn_hooks.py\" stop",
+            "timeout": 120
           }
         ]
       }

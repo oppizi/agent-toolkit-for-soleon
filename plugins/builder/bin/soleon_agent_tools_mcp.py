@@ -48,7 +48,7 @@ from soleon_mcp_client import (  # noqa: E402
 )
 
 PROTOCOL_VERSION = "2025-03-26"
-SERVER_INFO = {"name": "soleon-agent-tools", "version": "0.4.8"}
+SERVER_INFO = {"name": "soleon-agent-tools", "version": "0.4.9"}
 APPROVAL_NOTE = "Requires human approval: ask the person first, then call with approved=true."
 POLL_INTERVAL_S = 1.5
 
@@ -181,10 +181,77 @@ class ConversationTracker:
             _log("could not persist the conversation id: {}".format(exc))
 
 
+#: A hook-written turn file older than this (relative to the server's own
+#: start) belongs to an EARLIER subagent run, not to this one.
+TURN_FILE_FRESH_S = 60.0
+#: Where the turn id is kept, next to tools.json in the pulled agent's dir.
+TURN_FILE_NAME = ".local-turn.json"
+
+
+def mint_turn_id() -> str:
+    return __import__("uuid").uuid4().hex[:12]
+
+
+class TurnTracker:
+    """Which platform TURN this subagent run's calls land in.
+
+    One run of the subagent = one prompt = one turn on the platform trace.
+    The plugin's SubagentStart hook writes `<agent dir>/.local-turn.json`
+    (`{turn, agentId, startedAt, source: "hook"}`) the moment the subagent
+    spawns; this server — started for the same run — adopts that id on its
+    first call, so every platform tool call carries it and the SubagentStop
+    hook can finish the same turn with the prompt and the answer. Without a
+    fresh hook file (hooks not installed, or a file left by an earlier run)
+    the server mints its own id and writes the file so the stop hook can
+    still find it. `None` path = no persistence: one id per process.
+    """
+
+    def __init__(self, path: Optional[str], now=None, process_started_at: Optional[float] = None):
+        self.path = path
+        self._now = now or __import__("time").time
+        self._started = process_started_at if process_started_at is not None else self._now()
+        self._id: Optional[str] = None
+
+    def _load(self) -> Optional[Dict[str, Any]]:
+        if not self.path or not os.path.isfile(self.path):
+            return None
+        try:
+            with open(self.path, "r", encoding="utf-8") as fh:
+                data = json.load(fh)
+        except (OSError, ValueError):
+            return None
+        return data if isinstance(data, dict) else None
+
+    def current(self) -> str:
+        if self._id is not None:
+            return self._id
+        data = self._load() or {}
+        turn = data.get("turn") if isinstance(data.get("turn"), str) else None
+        started = data.get("startedAt") if isinstance(data.get("startedAt"), (int, float)) else None
+        if turn and started is not None and started >= self._started - TURN_FILE_FRESH_S:
+            self._id = turn
+            _log("joining turn {} (from the subagent-start hook)".format(turn))
+        else:
+            self._id = mint_turn_id()
+            _log("new turn {} (no fresh hook file — the stop hook will use this one)".format(self._id))
+            self._save({"turn": self._id, "agentId": None, "startedAt": self._now(), "source": "server"})
+        return self._id
+
+    def _save(self, data: Dict[str, Any]) -> None:
+        if not self.path:
+            return
+        try:
+            with open(self.path, "w", encoding="utf-8") as fh:
+                json.dump(data, fh)
+        except OSError as exc:
+            _log("could not persist the turn id: {}".format(exc))
+
+
 class AgentToolsServer:
     def __init__(self, slug: str, tools: List[Dict[str, Any]], client: SoleonMcpClient,
                  app_env: str = "dev", poll_interval_s: float = POLL_INTERVAL_S,
-                 conversation: Optional[ConversationTracker] = None):
+                 conversation: Optional[ConversationTracker] = None,
+                 turn: Optional[TurnTracker] = None):
         self.slug = slug
         self.app_env = app_env
         self.tools = tools
@@ -193,6 +260,7 @@ class AgentToolsServer:
         self.client = client
         self.poll_interval_s = poll_interval_s
         self.conversation = conversation or ConversationTracker(None)
+        self.turn = turn or TurnTracker(None)
 
     def call(self, name: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
         if name not in {t["name"] for t in self.published}:
@@ -204,6 +272,7 @@ class AgentToolsServer:
                 "slug": self.slug, "app_env": self.app_env,
                 "name": name, "args": args, "approved": approved,
                 "conversation": self.conversation.current(),
+                "turn": self.turn.current(),
             })
             envelope = await_control(
                 self.client, self.slug, envelope, app_env=self.app_env,
@@ -332,10 +401,13 @@ def main(argv: Optional[List[str]] = None) -> int:
     client = SoleonMcpClient(args.server_url, credentials_path=args.credentials)
     # The conversation id lives next to tools.json (the pulled agent's dir),
     # so every restart of this server for the same agent finds it.
-    tracker = ConversationTracker(os.path.join(os.path.dirname(os.path.abspath(args.tools)),
-                                               ".local-conversation.json"))
+    agent_dir = os.path.dirname(os.path.abspath(args.tools))
+    tracker = ConversationTracker(os.path.join(agent_dir, ".local-conversation.json"))
+    # The turn id lives there too: written by the SubagentStart hook for this
+    # run, read by the SubagentStop hook when it records the prompt + answer.
+    turn = TurnTracker(os.path.join(agent_dir, TURN_FILE_NAME))
     server = AgentToolsServer(args.slug, tools, client, app_env=args.app_env,
-                              poll_interval_s=args.poll_interval, conversation=tracker)
+                              poll_interval_s=args.poll_interval, conversation=tracker, turn=turn)
     _log("serving {} external tool(s) for {} via {}".format(len(server.published), args.slug, client.server_url))
     serve(server)
     return 0

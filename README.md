@@ -73,9 +73,10 @@ agent-toolkit-for-soleon/
 │   │   ├── .claude-plugin/  manifest
 │   │   ├── README.md        install, usage, supported platforms, escape hatches
 │   │   ├── bin/             vendored allium engine (v3.2.4, provenance in LICENSES/)
-│   │   │                    + the local-emulation stdio MCP servers, save hook and
-│   │   │                    shared client (stdlib Python)
-│   │   ├── hooks/           PostToolUse hook: saves under .soleon/agents/ → Soleon draft
+│   │   │                    + the local-emulation stdio MCP servers, save hook,
+│   │   │                    turn hooks and shared client (stdlib Python)
+│   │   ├── hooks/           PostToolUse: saves under .soleon/agents/ → Soleon draft;
+│   │   │                    SubagentStart/Stop: each local agent run → one trace turn
 │   │   ├── contract.json    platform validation contract, generated from source
 │   │   ├── LICENSES/        MIT notice + binary provenance chain
 │   │   ├── skills/deploy-agent/   local identity → Allium → validated POST /agents
@@ -223,6 +224,17 @@ sibling subagents `<slug>--<id>` and workflow skills that follow the platform's
 steps approximately. `/run-local-eval <slug>` runs the agent's standard evals
 against the local subagent and grades them with the platform's own judge prompt
 (fetched live) — scores only, never a pass/fail verdict.
+
+**Traces.** Every local run shows up in Soleon's Monitoring → Traces under
+"Draft Agents" (channel `Local`; the pull report links the pre-filtered view).
+Each local conversation is one session (a new one after 30 idle minutes), and
+each prompt to the agent is one turn inside it: the prompt the agent received,
+every tool call it made — the platform-run ones and the local workspace ones,
+as steps — and its answer. The tool server tags each platform call with the
+run's `conversation` + `turn` ids; the plugin's SubagentStart/SubagentStop
+hooks mint the turn id and, when the agent finishes, send the prompt, answer
+and local steps from the subagent's transcript (`record_agent_turn`). Only the
+LLM calls are missing, because the thinking happened on your machine.
 
 **Not emulated** (platform-only, shown read-only in `config.json`): channels,
 budgets, schedules, guardrails, online-eval sampling. Workspace edits never push

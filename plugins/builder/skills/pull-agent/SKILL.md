@@ -158,12 +158,18 @@ From the script's JSON summary tell the user, in plain words:
    `workspace/` copy is read-only towards the platform (never pushed).
    Helper/workflow files and `pull.json` are local only. Going live is still
    `deploy_agent_draft`. To test: "talk to `<slug>`" (Agent tool), or
-   `/run-local-eval <slug>`. Every tool call lands on the platform as a
-   trace: each local conversation is its own session — one entry in
+   `/run-local-eval <slug>`. Every run of the agent lands on the platform
+   as a trace: each local conversation is its own session — one entry in
    Monitoring → Traces (channel `Local`), dated when the conversation
-   started, holding all of its tool calls; a new conversation begins after
-   30 idle minutes (the tool server keeps the id in
-   `$DIR/.local-conversation.json`). **Give the user `tracesUrl` from the
+   started; a new conversation begins after 30 idle minutes (the tool
+   server keeps the id in `$DIR/.local-conversation.json`). Inside it,
+   **each prompt to the agent is one turn**: the prompt the agent received,
+   every tool call it made (platform tools and local workspace tools alike,
+   as steps), and its answer — the plugin's SubagentStart/SubagentStop hooks
+   record it (`record_agent_turn`) when the agent finishes, so a turn's
+   prompt and answer appear a few seconds after the reply. Only the LLM
+   calls are absent, because the thinking happened locally. **Give the
+   user `tracesUrl` from the
    summary as a clickable link** — it opens Traces with the Activity filter
    set to "Draft Agents", the agent selected and the last 24 h. Say why:
    local runs use the agent's draft session, so they file under "Draft

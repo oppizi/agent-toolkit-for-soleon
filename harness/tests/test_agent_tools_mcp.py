@@ -182,11 +182,38 @@ def test_done_envelope_returns_the_tools_own_result(soleon, tmp_path):
     assert name == "call_agent_tool"
     conversation = args.pop("conversation")
     assert re.fullmatch(r"[0-9a-f]{24}", conversation)  # one platform session per local conversation
+    turn = args.pop("turn")
+    assert re.fullmatch(r"[0-9a-f]{12}", turn)  # one platform turn per subagent run
     assert args == {"slug": SLUG, "app_env": "dev", "name": "custom_echo-server_read",
                     "args": {"prompt": "hello"}, "approved": False}
-    # every call of this process carries the SAME id
+    # every call of this process carries the SAME ids
     server.call("custom_echo-server_read", {"prompt": "again"})
     assert state["calls"][-1][1]["conversation"] == conversation
+    assert state["calls"][-1][1]["turn"] == turn
+
+
+def test_turn_tracker_adopts_a_fresh_hook_file_and_mints_otherwise(tmp_path):
+    """The SubagentStart hook writes the turn file for THIS run; the server
+    joins it. A stale file (an earlier run's) or none → the server mints its
+    own and leaves it for the stop hook."""
+    path = tmp_path / ".local-turn.json"
+    clock = {"t": 1_000_000.0}
+    now = lambda: clock["t"]  # noqa: E731
+    # fresh hook file, written 2s before this server started
+    path.write_text(json.dumps({"turn": "hookturn0001", "agentId": "a1", "startedAt": clock["t"] - 2, "source": "hook"}))
+    tracker = shim.TurnTracker(str(path), now=now, process_started_at=clock["t"])
+    assert tracker.current() == "hookturn0001" and tracker.current() == "hookturn0001"
+    assert json.loads(path.read_text())["source"] == "hook"  # untouched
+    # stale file from an earlier run → mint, and persist for the stop hook
+    path.write_text(json.dumps({"turn": "oldturn00001", "agentId": "a0", "startedAt": clock["t"] - 3600, "source": "hook"}))
+    minted = shim.TurnTracker(str(path), now=now, process_started_at=clock["t"]).current()
+    assert minted != "oldturn00001" and re.fullmatch(r"[0-9a-f]{12}", minted)
+    assert json.loads(path.read_text()) == {"turn": minted, "agentId": None, "startedAt": clock["t"], "source": "server"}
+    # no file at all
+    path.unlink()
+    fresh = shim.TurnTracker(str(path), now=now, process_started_at=clock["t"]).current()
+    assert re.fullmatch(r"[0-9a-f]{12}", fresh) and json.loads(path.read_text())["turn"] == fresh
+    assert shim.TurnTracker(None).current()  # no persistence: one id per process
 
 
 def test_conversation_tracker_reuses_the_id_within_the_idle_window_and_mints_after(tmp_path):

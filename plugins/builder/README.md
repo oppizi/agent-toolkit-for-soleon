@@ -94,6 +94,15 @@ tool policy and its approval gates — the subagent asks you first, then sends
 via `bin/soleon_workspace_mcp.py` against the snapshot. Tool calls wait for the
 platform to finish — no client-side timeout, as on the platform.
 
+**Traces.** Each run of the subagent is one turn on the platform trace
+(Monitoring → Traces, Activity "Draft Agents"; the pull report links the
+view): the tool server sends every platform call with the run's
+`conversation` + `turn` ids, and the plugin's SubagentStart/SubagentStop
+hooks (`hooks/hooks.json` → `bin/soleon_turn_hooks.py`) mint the turn id and,
+when the agent finishes, record the prompt, the answer and the locally-run
+tool calls from the subagent's transcript (`record_agent_turn`). A record
+that cannot be sent is reported as a system message, never a blocked session.
+
 **The edit loop.** Edit `SOUL.md`, `config.json`, `skills/**` or
 `evals/*.json` and the plugin's PostToolUse hook (`hooks/hooks.json` →
 `bin/soleon_draft_sync.py`) pushes the change to your Soleon draft on every
