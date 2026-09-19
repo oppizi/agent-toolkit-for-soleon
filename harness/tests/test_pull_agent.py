@@ -149,6 +149,16 @@ def test_local_tool_routing_section(pulled):
     assert "`custom_echo-server_read`" not in approval_line
     assert "BEFORE calling" in approval_line
     assert "`attach_file`" in routing  # in the prompt's toolNames but not routable locally
+    # The shim's four tools are ALWAYS listed as workspace tools, even when the
+    # platform list carries none (maverick's filesystem tools are child-native).
+    for name in ("read_file", "write_file", "edit_file", "list_dir"):
+        assert f"`{name}`" in ws_line
+    # The prompt spells hyphenated tool names sanitized (underscores); the
+    # routing section maps them back and never reports them as missing.
+    names_line = next(l for l in routing.splitlines() if "**Tool names**" in l)
+    assert "`custom_echo-server_read` (prompt: `custom_echo_server_read`)" in names_line
+    missing_line = next((l for l in routing.splitlines() if "**Not available locally**" in l), "")
+    assert "custom_echo_server_read" not in missing_line and "read_file" not in missing_line
     assert "channels, budgets, schedules, guardrails, online eval sampling" in routing
     assert summary["approvalGated"] == ["custom_echo-server_write"]
     assert summary["externalTools"] == ["custom_echo-server_read", "custom_echo-server_write", "web_search"]

@@ -210,14 +210,37 @@ def patch_prompt_paths(prompt: str, agent_dir: Path) -> Tuple[str, List[Tuple[st
     return prompt, applied
 
 
+#: The tools the local workspace shim always serves (soleon_workspace_mcp.py).
+SHIM_WORKSPACE_TOOLS = ("read_file", "write_file", "edit_file", "list_dir")
+
+
+def _sanitized_tool_name(name: str) -> str:
+    """The name the platform's model sees: every character outside
+    [A-Za-z0-9_] becomes "_" (LiteLLM's Bedrock tool-name sanitization)."""
+    return re.sub(r"[^A-Za-z0-9_]", "_", name)
+
+
 def routing_section(display_name: str, slug: str, tools: List[Dict[str, Any]], agent_dir: Path,
                     prompt_tool_names: List[str], helpers: List[Dict[str, Any]],
                     workflows: List[Dict[str, Any]]) -> str:
     external = sorted(t["name"] for t in tools if t.get("kind", "external") == "external")
-    workspace = sorted(t["name"] for t in tools if t.get("kind") == "workspace")
+    # The workspace surface is ALWAYS the local shim's four tools: on maverick
+    # the filesystem tools are native to the framework child, so they never
+    # appear in list_agent_tools at all (2026-09-19: a pulled agent's routing
+    # section read "Workspace tools: none" and listed read_file under "Not
+    # available locally" while the shim was serving it). Anything the platform
+    # DOES tag workspace (the collapsed system_filesystem pair) joins them.
+    workspace = sorted(set(SHIM_WORKSPACE_TOOLS) | {t["name"] for t in tools if t.get("kind") == "workspace"})
     gated = sorted(t["name"] for t in tools if t.get("approval"))
+    # The assembled prompt names tools as the MODEL sees them — LiteLLM's
+    # Bedrock sanitization turns every character outside [A-Za-z0-9_] into "_"
+    # (`mcp_clay_find-and-enrich-company` → `mcp_clay_find_and_enrich_company`)
+    # — so a registered tool is "known" when its sanitized name matches too.
     known = set(external) | set(workspace)
-    missing = sorted(n for n in (prompt_tool_names or []) if n not in known)
+    known_sanitized = {_sanitized_tool_name(n) for n in known}
+    missing = sorted(n for n in (prompt_tool_names or [])
+                     if n not in known and _sanitized_tool_name(n) not in known_sanitized)
+    renamed = sorted(n for n in external if _sanitized_tool_name(n) != n)
     lines = [
         "## Local Tool Routing",
         "",
@@ -232,6 +255,14 @@ def routing_section(display_name: str, slug: str, tools: List[Dict[str, Any]], a
         "- **Workspace tools** (server `soleon-workspace`, rooted at `{}` — a read-only snapshot of the "
         "person's platform workspace; local writes never push back): {}".format(
             agent_dir.resolve() / "workspace", ", ".join("`{}`".format(n) for n in workspace) or "none"),
+    ]
+    if renamed:
+        lines.append(
+            "- **Tool names**: the prompt above may spell a tool with underscores where the registered "
+            "name has other characters (the platform sanitizes names for the model); always call the "
+            "REGISTERED name listed under External tools: {}".format(
+                ", ".join("`{}` (prompt: `{}`)".format(n, _sanitized_tool_name(n)) for n in renamed)))
+    lines += [
         "- **Large tool results**: when a tool answer says \"Output has been saved to <path>/tool-results/<file>.txt\", "
         "that file is Claude Code's overflow copy of the FULL result and it is inside one of your readable roots — "
         "read it with `read_file` (page with `offset`/`limit`) until you have all of it. Do not report the result as "
