@@ -686,9 +686,40 @@ def materialize(args: argparse.Namespace) -> int:
         "workspaceTools": sorted(t["name"] for t in tools if t.get("kind") == "workspace"),
         "pathRewrites": ["{} -> {}".format(a, b) for a, b in applied],
         "notEmulated": not_emulated(config, document),
+        # True / False / None(unknown). False or None ⇒ the report must tell
+        # the user to trust the folder before the agent can hold any tool.
+        "folderTrusted": folder_trust(project_root),
+        "projectRoot": str(project_root),
     }
     print(json.dumps(summary, indent=2, ensure_ascii=False))
     return 0
+
+
+def folder_trust(project_root: Path, claude_json: Optional[Path] = None) -> Optional[bool]:
+    """Whether Claude Code has recorded trust for `project_root`.
+
+    Claude Code starts a subagent's INLINE `mcpServers` from a project's
+    `.claude/agents/` only in a folder the person has trusted (the
+    `projects["<path>"].hasTrustDialogAccepted` key in `~/.claude.json`,
+    since 2.1.238). In an untrusted folder the servers are skipped silently:
+    the agent spawns with `tools: []` and no servers, says "I'll do it" and
+    stops. The VS Code extension does not always show the trust prompt, so
+    the report must say it. Returns True / False, or None when the record is
+    unreadable (no file, malformed) — "unknown", not "trusted".
+    """
+    path = claude_json or (Path.home() / ".claude.json")
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+    except (OSError, ValueError):
+        return None
+    projects = data.get("projects") if isinstance(data, dict) else None
+    if not isinstance(projects, dict):
+        return None
+    entry = projects.get(str(project_root.resolve())) or projects.get(str(project_root))
+    if not isinstance(entry, dict):
+        return False
+    return bool(entry.get("hasTrustDialogAccepted"))
 
 
 def not_emulated(config: Dict[str, Any], document: Dict[str, Any]) -> Dict[str, Any]:

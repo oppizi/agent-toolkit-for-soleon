@@ -271,3 +271,27 @@ def test_config_roundtrip_flat_to_nested_to_flat():
         assert flat_again[key] == DOCUMENT[key], key
     assert flat_again["guardrails"] is False
     assert "name" not in flat_again and "soul" not in flat_again and "skills" not in flat_again
+
+
+def test_folder_trust_reads_claude_code_record(tmp_path):
+    """Inline tool servers start only in a TRUSTED folder; the summary carries
+    what Claude Code recorded so the report can say it (receipt: 2026-09-18,
+    a pulled agent spawned with no tools in an untrusted VS Code folder)."""
+    root = tmp_path / "proj"
+    root.mkdir()
+    cfg = tmp_path / "claude.json"
+    cfg.write_text(json.dumps({"projects": {str(root.resolve()): {"hasTrustDialogAccepted": True}}}))
+    assert pull_agent.folder_trust(root, cfg) is True
+    cfg.write_text(json.dumps({"projects": {str(root.resolve()): {"hasTrustDialogAccepted": False}}}))
+    assert pull_agent.folder_trust(root, cfg) is False
+    cfg.write_text(json.dumps({"projects": {"/elsewhere": {"hasTrustDialogAccepted": True}}}))
+    assert pull_agent.folder_trust(root, cfg) is False  # no entry ⇒ not trusted
+    cfg.write_text("{not json")
+    assert pull_agent.folder_trust(root, cfg) is None  # unreadable ⇒ unknown, never "trusted"
+    assert pull_agent.folder_trust(root, tmp_path / "missing.json") is None
+
+
+def test_summary_reports_folder_trust(pulled):
+    root, _agent_dir, summary = pulled
+    assert summary["projectRoot"] == str(root)
+    assert summary["folderTrusted"] in (True, False, None)
