@@ -733,6 +733,7 @@ def materialize(args: argparse.Namespace) -> int:
         "pathRewrites": ["{} -> {}".format(a, b) for a, b in applied],
         "notEmulated": not_emulated(config, document),
         "projectRoot": str(project_root),
+        "permissions": ensure_permission_allow(project_root),
         "agentsDir": str(agents_dir),
         # True when ~/.claude/agents/ did not exist before this pull: the
         # watcher only covers directories that existed at session start, so
@@ -741,6 +742,52 @@ def materialize(args: argparse.Namespace) -> int:
     }
     print(json.dumps(summary, indent=2, ensure_ascii=False))
     return 0
+
+
+PERMISSION_ALLOW_RULES = ("mcp__soleon-workspace", "mcp__soleon-agent-tools")
+
+
+def ensure_permission_allow(project_root: Path) -> Dict[str, Any]:
+    """Pre-approve the agent's two tool servers in the project's
+    `.claude/settings.local.json` (`permissions.allow`), merging into whatever
+    is there.
+
+    Without this Claude Code asks the person before EVERY tool call the
+    subagent makes (a Gmail search, a workspace read …), which made the user
+    switch the whole session to bypass mode (2026-09-19) — the wrong trade.
+    Two server-level rules are the narrow fix: they name only the servers
+    this pull declares inline, they live in the project's LOCAL settings (the
+    file Claude Code itself uses for per-machine rules, conventionally
+    gitignored), and plugins cannot ship permission rules themselves. The
+    platform's approval gate (D8) is unaffected: it is the agent asking the
+    person in conversation before an `approved: true` call, not a Claude Code
+    permission prompt.
+    """
+    path = project_root / ".claude" / "settings.local.json"
+    data: Dict[str, Any] = {}
+    if path.is_file():
+        with open(path, "r", encoding="utf-8") as fh:
+            loaded = json.load(fh)
+        if not isinstance(loaded, dict):
+            raise SystemExit("{} is not a JSON object; refusing to rewrite it".format(path))
+        data = loaded
+    perms = data.get("permissions")
+    if not isinstance(perms, dict):
+        perms = {}
+        data["permissions"] = perms
+    allow = perms.get("allow")
+    if not isinstance(allow, list):
+        allow = []
+        perms["allow"] = allow
+    added = [r for r in PERMISSION_ALLOW_RULES if r not in allow]
+    if added:
+        allow.extend(added)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "w", encoding="utf-8") as fh:
+            json.dump(data, fh, indent=2, ensure_ascii=False)
+            fh.write("\n")
+    return {"settingsFile": str(path), "permissionRulesAdded": added,
+            "permissionRules": list(PERMISSION_ALLOW_RULES)}
 
 
 def not_emulated(config: Dict[str, Any], document: Dict[str, Any]) -> Dict[str, Any]:

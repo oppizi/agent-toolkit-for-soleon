@@ -321,6 +321,28 @@ def test_agents_dir_created_is_false_when_it_already_existed(tmp_path):
     assert summary["agentsDirCreated"] is False
 
 
+def test_permission_allow_rules_merged_into_project_local_settings(pulled):
+    """Claude Code would otherwise prompt before every tool call the subagent
+    makes; the two server-level allow rules are merged into the project's
+    settings.local.json (never replacing what is there)."""
+    root, agent_dir, summary = pulled
+    path = root / ".claude" / "settings.local.json"
+    assert summary["permissions"]["settingsFile"] == str(path)
+    assert summary["permissions"]["permissionRulesAdded"] == ["mcp__soleon-workspace", "mcp__soleon-agent-tools"]
+    data = json.loads(path.read_text(encoding="utf-8"))
+    assert data == {"permissions": {"allow": ["mcp__soleon-workspace", "mcp__soleon-agent-tools"]}}
+    # idempotent, and existing content survives
+    path.write_text(json.dumps({"permissions": {"allow": ["Bash(ls *)", "mcp__soleon-agent-tools"], "deny": ["WebFetch"]},
+                                "other": 1}))
+    proc = _run("materialize", "--slug", SLUG, "--dir", str(agent_dir), "--server-url", SERVER_URL,
+                "--model", "sonnet", "--plugin-root", str(PLUGIN), cwd=root)
+    assert proc.returncode == 0, proc.stderr
+    assert json.loads(proc.stdout)["permissions"]["permissionRulesAdded"] == ["mcp__soleon-workspace"]
+    data = json.loads(path.read_text(encoding="utf-8"))
+    assert data["other"] == 1 and data["permissions"]["deny"] == ["WebFetch"]
+    assert data["permissions"]["allow"] == ["Bash(ls *)", "mcp__soleon-agent-tools", "mcp__soleon-workspace"]
+
+
 def test_agents_dir_override(tmp_path):
     agent_dir = make_pulled_dir(tmp_path)
     custom = tmp_path / "elsewhere"

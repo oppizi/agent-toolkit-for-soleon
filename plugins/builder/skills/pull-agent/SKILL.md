@@ -124,7 +124,12 @@ platform-only keys stay visible), `skills/<id>/SKILL.md` + `skill.json` (+
 text package files), `evals/<evalId>.json` (one per standard eval),
 `workspace/` (the extracted snapshot), `pull.json` (`{slug, source:
 draft|deployed, draftEtag, pulledAt, model, serverUrl, namespace, …}`), and
-in the USER scope: `~/.claude/agents/<slug>.md` — the subagent — plus one
+in the project `.claude/settings.local.json`: two `permissions.allow` rules
+(`mcp__soleon-workspace`, `mcp__soleon-agent-tools`) merged in, so Claude
+Code does not ask the person before every tool call the subagent makes
+(the platform's approval gate is separate and still applies — it is the agent
+asking in conversation, D8); and in the USER scope: `~/.claude/agents/<slug>.md`
+— the subagent — plus one
 `~/.claude/agents/<slug>--<subagentId>.md` per enabled configured helper and
 one `workflows/<id>/SKILL.md` per workflow (spec D15: helpers run locally as
 Claude Code subagents; workflows follow the platform's steps — manager:
