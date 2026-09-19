@@ -159,11 +159,17 @@ From the script's JSON summary tell the user, in plain words:
    Helper/workflow files and `pull.json` are local only. Going live is still
    `deploy_agent_draft`. To test: "talk to `<slug>`" (Agent tool), or
    `/run-local-eval <slug>`. Every tool call lands on the platform as a
-   trace: each local conversation is its own session — one entry in the
-   agent's Observability → Traces list (channel `Local`), dated when the
-   conversation started, holding all of its tool calls; a new conversation
-   begins after 30 idle minutes (the tool server keeps the id in
-   `$DIR/.local-conversation.json`).
+   trace: each local conversation is its own session — one entry in
+   Monitoring → Traces (channel `Local`), dated when the conversation
+   started, holding all of its tool calls; a new conversation begins after
+   30 idle minutes (the tool server keeps the id in
+   `$DIR/.local-conversation.json`). **Give the user `tracesUrl` from the
+   summary as a clickable link** — it opens Traces with the Activity filter
+   set to "Draft Agents", the agent selected and the last 24 h. Say why:
+   local runs use the agent's draft session, so they file under "Draft
+   Agents", and the Traces tab's default filter ("Live Agents") hides them.
+   If `tracesUrl` is null (older server), tell the user to set the Activity
+   dropdown to "Draft Agents" or "All" themselves.
 6. **Why the subagent lives in `~/.claude/agents/` (user scope), and when a
    restart is needed.** Claude Code starts a subagent's inline tool servers
    from a PROJECT `.claude/agents/` file only in a folder the person has

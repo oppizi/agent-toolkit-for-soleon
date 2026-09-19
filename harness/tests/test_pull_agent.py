@@ -16,7 +16,8 @@ from pathlib import Path
 import pytest
 
 from _local_emulation_fixtures import (
-    BIN, DOCUMENT, PLUGIN, PULL_ASSETS, SERVER_URL, SLUG, SOUL, make_pulled_dir,
+    BIN, DOCUMENT, PLUGIN, PULL_ASSETS, SERVER_URL, SLUG, SOUL, TRACES_URL, make_pulled_dir,
+    tools_envelope,
 )
 
 sys.path.insert(0, str(PULL_ASSETS))
@@ -230,6 +231,25 @@ def test_materialize_without_draft_records_deployed_source(tmp_path):
     pull = json.loads((agent_dir / "pull.json").read_text())
     assert pull["source"] == "deployed" and pull["draftEtag"] is None
     assert (agent_dir / "workspace" / "memory").is_dir()  # empty snapshot still yields a workspace root
+
+
+def test_summary_carries_the_platforms_traces_link(pulled):
+    """Local runs are filed under "Draft Agents", which the Traces tab's
+    default filter hides — the report hands the user the pre-filtered link
+    the platform built (2026-09-19: "i still dont see the trace")."""
+    _, _, summary = pulled
+    assert summary["tracesUrl"] == TRACES_URL
+
+
+def test_summary_traces_link_is_null_from_an_older_server(tmp_path):
+    agent_dir = make_pulled_dir(tmp_path)
+    env = tools_envelope()
+    del env["tracesUrl"]
+    (agent_dir / "tools.json").write_text(json.dumps(env))
+    proc = _run("materialize", "--slug", SLUG, "--dir", str(agent_dir), "--server-url", SERVER_URL,
+                "--model", "sonnet", "--plugin-root", str(PLUGIN), cwd=tmp_path)
+    assert proc.returncode == 0, proc.stderr
+    assert json.loads(proc.stdout)["tracesUrl"] is None
 
 
 def test_materialize_refuses_a_pending_tools_envelope(tmp_path):

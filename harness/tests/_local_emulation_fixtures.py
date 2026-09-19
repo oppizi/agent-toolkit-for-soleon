@@ -128,9 +128,15 @@ PROMPT = (
 )
 
 
+#: What list_agent_tools attaches next to its body since 0.4.8: the Traces
+#: view pre-filtered to "Draft Agents" (where local runs are filed).
+TRACES_URL = ("https://soleon-dev.oppizi.com/observability/traces"
+              "?env=dev&activityType=Draft%20Agents&agent=test-agent&tf=24h")
+
+
 def tools_envelope() -> dict:
     return {"status": 200, "state": "done", "call_id": "lc_" + "a" * 24, "op": "tool_list",
-            "session_id": "ses_x", "result": {"tools": TOOLS}}
+            "session_id": "ses_x", "result": {"tools": TOOLS}, "tracesUrl": TRACES_URL}
 
 
 def prompt_envelope() -> dict:

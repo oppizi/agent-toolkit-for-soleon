@@ -763,6 +763,12 @@ def materialize(args: argparse.Namespace) -> int:
         "workspaceTools": sorted(t["name"] for t in tools if t.get("kind") == "workspace"),
         "pathRewrites": ["{} -> {}".format(a, b) for a, b in applied],
         "notEmulated": not_emulated(config, document),
+        # The Soleon view where this agent's LOCAL runs show up. They run on
+        # the draft session, so the Traces tab files them under "Draft
+        # Agents" — its default "Live Agents" filter hides them (2026-09-19:
+        # "i still dont see the trace"). The platform builds the link
+        # (list_agent_tools → tracesUrl); an older server sends none.
+        "tracesUrl": tools_env.get("tracesUrl") if isinstance(tools_env, dict) else None,
         "projectRoot": str(project_root),
         "permissions": ensure_permission_allow(project_root),
         "agentsDir": str(agents_dir),
