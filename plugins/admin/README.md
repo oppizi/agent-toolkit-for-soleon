@@ -1,8 +1,8 @@
 # soleon-admin
 
 The full Soleon surface for platform administrators. Everything `soleon-builder`
-covers, plus the five families whose tools are platform-admin-only: channel instance
-reads, custom-MCP instance reads, on-demand eval runs, and the discovery workspace.
+covers, plus the four families whose tools are platform-admin-only: channel instance
+reads, custom-MCP instance reads, and the discovery workspace.
 
 Install this if you are a Soleon platform admin. If you build agents but do not
 administer the platform, `soleon-builder` is the better fit — it consents to less.
@@ -22,7 +22,7 @@ soleon-mcp/wiki.read       soleon-mcp/wiki.write      soleon-mcp/discovery.read
 soleon-mcp/discovery.write
 ```
 
-The five beyond `soleon-builder` — `channel.read`, `mcp.read`, `eval.run`,
+The four beyond `soleon-builder` — `channel.read`, `mcp.read`,
 `discovery.read`, `discovery.write` — cover only tools Soleon already restricts to
 platform admins. That is exactly why they are here and not in a lower bundle.
 
