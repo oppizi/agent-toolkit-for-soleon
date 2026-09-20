@@ -121,8 +121,15 @@ def refresh(agent_dir: Path, pull: Dict[str, Any], draft_raw: Dict[str, Any], cl
     plugin_root = Path(str(pull.get("pluginRoot") or os.environ.get("CLAUDE_PLUGIN_ROOT") or Path(__file__).resolve().parents[1]))
     server_url = str(pull.get("serverUrl") or DEFAULT_SERVER_URL)
     model = str(pull.get("model") or "sonnet")
-    subagent_file = pull.get("subagentFile")
-    agents_dir = Path(subagent_file).parent if isinstance(subagent_file, str) and subagent_file else None
+    # The subagent file goes where materialize puts it TODAY (the user scope,
+    # ~/.claude/agents/), never where an older pull.json says it went. The
+    # first version of this hook re-used pull.json's `subagentFile` — a
+    # pre-user-scope pull had recorded the PROJECT `.claude/agents/` path — and
+    # so recreated a project-scope copy that shadows the user-scope one; in a
+    # folder the person has not trusted, Claude Code skips a project agent's
+    # inline MCP servers, and the agent spawned with no tools and printed tool
+    # names as text (2026-09-20, fund-raising-agent). materialize also removes a
+    # stale project-scope copy, which undoes that damage on the next refresh.
 
     # Read everything first; only then write, so a failed read changes nothing.
     config_env = client.call_tool("get_agent_config", {"slug": slug, "app_env": app_env})
@@ -148,8 +155,6 @@ def refresh(agent_dir: Path, pull: Dict[str, Any], draft_raw: Dict[str, Any], cl
     cmd = [sys.executable, str(plugin_root / "skills" / "pull-agent" / "assets" / "pull_agent.py"), "materialize",
            "--slug", slug, "--dir", str(agent_dir), "--server-url", server_url, "--model", model,
            "--plugin-root", str(plugin_root), "--keep-workspace"]
-    if agents_dir is not None:
-        cmd += ["--agents-dir", str(agents_dir)]
     proc = runner(cmd, capture_output=True, text=True, timeout=120)
     if proc.returncode != 0:
         raise RefreshError("materialize failed: {}".format((proc.stderr or proc.stdout or "").strip()[-800:]))

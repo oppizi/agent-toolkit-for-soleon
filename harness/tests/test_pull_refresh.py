@@ -149,6 +149,44 @@ def test_changed_draft_is_re_pulled_and_re_materialized(tmp_path):
                                              "additionalContext": payload["systemMessage"]}
 
 
+def test_refresh_writes_the_user_scope_subagent_even_when_pull_json_names_a_project_path(tmp_path):
+    """A pre-user-scope pull recorded `subagentFile` under the PROJECT's
+    .claude/agents/. Re-using that path recreated a project-scope agent that
+    shadows the user-scope one and, in an untrusted folder, spawns with its
+    inline MCP servers skipped — no tools (2026-09-20). The refresh must write
+    where materialize writes today (~/.claude/agents) and drop the stale
+    project copy."""
+    home = tmp_path / "home"
+    project = tmp_path / "proj"
+    home.mkdir(); project.mkdir()
+    agent_dir = make_pulled_dir(project)
+    project_agents = project / ".claude" / "agents"
+    proc = subprocess.run(
+        [sys.executable, str(PULL_ASSETS / "pull_agent.py"), "materialize", "--slug", SLUG, "--dir", str(agent_dir),
+         "--server-url", SERVER_URL, "--model", "sonnet", "--plugin-root", str(PLUGIN), "--agents-dir", str(project_agents)],
+        capture_output=True, text=True, timeout=60, cwd=str(project), env={"PATH": "/usr/bin:/bin", "HOME": str(home)},
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert (project_agents / "{}.md".format(SLUG)).is_file()
+    assert json.loads((agent_dir / "pull.json").read_text())["subagentFile"] == str(project_agents / "{}.md".format(SLUG))
+
+    def factory(url):
+        return FakeClient(url, draft=draft_envelope(True, NEW_ETAG))
+
+    out, err = io.StringIO(), io.StringIO()
+    sys.stdout, sys.stderr = out, err
+    try:
+        rc = refresh.main(stream=io.StringIO(json.dumps({"cwd": str(project)})), client_factory=factory,
+                          runner=_real_runner_with_home(home))
+    finally:
+        sys.stdout, sys.stderr = sys.__stdout__, sys.__stderr__
+    assert rc == 0 and "refreshed" in json.loads(out.getvalue())["systemMessage"]
+    user_file = home / ".claude" / "agents" / "{}.md".format(SLUG)
+    assert user_file.is_file(), "the refreshed subagent must live in the user scope"
+    assert not (project_agents / "{}.md".format(SLUG)).exists(), "the stale project-scope copy must be gone"
+    assert json.loads((agent_dir / "pull.json").read_text())["subagentFile"] == str(user_file)
+
+
 def test_pending_conflict_is_never_overwritten(tmp_path):
     agent_dir = _pulled(tmp_path)
     (agent_dir / ".pull" / "conflict.json").write_text("{}", encoding="utf-8")
