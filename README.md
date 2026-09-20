@@ -218,7 +218,11 @@ of the first four to your Soleon draft (`patch_agent_draft`), then re-syncs the
 platform's test sandbox. The draft IS the local state; there is no separate push.
 An edit made elsewhere in the meantime (the Soleon editor, another session) is a
 conflict: the hook stops the session and asks you to reload theirs
-(`/pull-agent` again) or overwrite with yours. Going live is still
+(`/pull-agent` again) or overwrite with yours. The reverse direction is
+automatic: before every prompt the plugin checks each pulled agent's draft
+version on the platform and, when it changed elsewhere (the Soleon editor,
+another session), re-pulls the local copy — everything but `workspace/` — so
+the run uses the current agent; you are told when that happened. Going live is still
 `deploy_agent_draft`. Configured helper subagents and workflows are pulled too, as
 sibling subagents `<slug>--<id>` and workflow skills that follow the platform's
 steps approximately. `/run-local-eval <slug>` runs the agent's standard evals

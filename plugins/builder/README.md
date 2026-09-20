@@ -114,6 +114,18 @@ goes live; deploy with `deploy_agent_draft`. `config.json` is the nested
 config.json a deploy of your draft would ship; the hook maps it back onto the
 editor's flat fields with the platform's own table (`bin/soleon_agent_document.py`).
 
+**The other direction is automatic too.** Before every prompt, the plugin's
+UserPromptSubmit hook (`hooks/hooks.json` → `bin/soleon_pull_refresh.py`)
+asks the platform for each pulled agent's draft version (one
+`get_agent_draft` read); when it differs from what the last pull or save
+recorded — an edit in the Soleon editor, a save from another session — the
+local copy is re-pulled and re-materialized on the spot, so the subagent that
+answers that prompt reasons with the current SOUL, config, skills, evals and
+system prompt. `workspace/` is never touched (it is session data you may have
+edited), a pending save conflict is never overwritten (resolve it first), and
+the hook never blocks the prompt: a failed refresh is reported and the local
+copy stays as it was. You are told when a refresh happened.
+
 ```
 /run-local-eval <slug> [evalId]
 ```

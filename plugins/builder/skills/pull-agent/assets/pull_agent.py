@@ -652,7 +652,10 @@ def materialize(args: argparse.Namespace) -> int:
 
     ws_dir = agent_dir / "workspace"
     ws_files = 0
-    if (pull_dir / "workspace.zip").is_file():
+    # --keep-workspace: a REFRESH (bin/soleon_pull_refresh.py) re-materializes
+    # the agent definition over an existing pull; the workspace is session
+    # data the person may have edited, so the old snapshot is not re-extracted.
+    if (pull_dir / "workspace.zip").is_file() and not getattr(args, "keep_workspace", False):
         ws_files = extract_workspace(pull_dir / "workspace.zip", ws_dir)
     else:
         ws_dir.mkdir(parents=True, exist_ok=True)
@@ -914,6 +917,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     m.add_argument("--agents-dir", default=None,
                    help="where the subagent files go (default ~/.claude/agents — user scope, see materialize())")
     m.add_argument("--plugin-root", default=None)
+    m.add_argument("--keep-workspace", action="store_true",
+                   help="leave workspace/ as it is (a refresh over an existing pull)")
     m.set_defaults(fn=materialize)
     d = sub.add_parser("default-model")
     d.add_argument("--dir", required=True)
