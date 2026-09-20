@@ -152,6 +152,38 @@ def test_unknown_tool_and_method(server):
     assert resp["error"]["code"] == -32601
 
 
+def test_whole_file_read_of_a_big_file_pages_under_claude_codes_output_cap(tmp_path):
+    """A 58 KB HTML newsletter read with no offset/limit used to come back whole,
+    trip Claude Code's 25k-token MCP output cap, and reach the agent as an
+    "exceeds maximum allowed tokens" error (a failed step on the trace). The
+    page must stay under the cap even for dense markup and end in the
+    platform's own continuation tail, so the agent pages instead of failing."""
+    ws = ws_mod.Workspace(str(tmp_path))
+    # 141 lines of ~420 dense chars, like a minified HTML email body.
+    line = ("<td style=\"padding:0;margin:0\"><a href=\"https://x.y/z\">" * 8)[:420]
+    (tmp_path / "mail.txt").write_text("\n".join(line for _ in range(141)) + "\n", encoding="utf-8")
+    out = ws_mod._read_file(ws, path="mail.txt")
+    assert not out.startswith("Error")
+    # ~1.5 chars/token for markup this dense → 30k chars ≈ 20k tokens < 25k.
+    assert len(out) <= ws_mod._READ_MAX_CHARS + 200
+    assert "Use offset=" in out and "of 141" in out
+    # Following the tail page by page reaches the end with every line seen
+    # exactly once, and each page stays under the cap.
+    seen, page, pages = 0, out, 0
+    while True:
+        pages += 1
+        assert len(page) <= ws_mod._READ_MAX_CHARS + 200
+        body = page.split("\n\n(", 1)[0]
+        seen += body.count("\n") + 1
+        if "(End of file" in page:
+            break
+        nxt = int(page.rsplit("offset=", 1)[1].split(" ", 1)[0])
+        assert nxt == seen + 1
+        page = ws_mod._read_file(ws, path="mail.txt", offset=nxt)
+        assert page.startswith("{}| ".format(nxt))
+    assert seen == 141 and pages > 1 and page.rstrip().endswith("(End of file — 141 lines total)")
+
+
 def test_edit_file_tolerates_whitespace_and_crlf(tmp_path):
     ws = ws_mod.Workspace(str(tmp_path))
     (tmp_path / "a.txt").write_bytes(b"line one\r\n  line two\r\nline three\r\n")

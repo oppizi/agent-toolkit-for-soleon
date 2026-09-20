@@ -35,12 +35,21 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 PROTOCOL_VERSION = "2025-03-26"
-SERVER_INFO = {"name": "soleon-workspace", "version": "0.4.9"}
+SERVER_INFO = {"name": "soleon-workspace", "version": "0.4.10"}
 
 #: Container paths the platform prompt and memory files mention; they alias the root.
 CONTAINER_WORKSPACE_ALIASES = ("/mnt/workspace", "/app/workspace")
 
-_READ_MAX_CHARS = 128_000
+#: Per-call page size. The platform tool serves up to 128k chars per read, but
+#: Claude Code refuses any MCP result over MAX_MCP_OUTPUT_TOKENS (default
+#: 25,000 tokens): it spills the result to a file and hands the agent an
+#: "exceeds maximum allowed tokens" error, which the Traces UI then shows as a
+#: failed step. Dense HTML tokenises at ~1.5 chars/token, so a 128k page can
+#: never reach the model here. 30k chars stays under the cap at that density,
+#: and the "(Showing lines a-b of N. Use offset=… to continue.)" tail — the
+#: platform's own paging mechanic — carries the rest, so a whole-file read of
+#: a big file pages instead of failing.
+_READ_MAX_CHARS = 30_000
 _READ_DEFAULT_LIMIT = 2000
 _LIST_DEFAULT_MAX = 200
 _IGNORE_DIRS = {
