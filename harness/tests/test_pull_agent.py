@@ -351,26 +351,47 @@ def test_agents_dir_created_is_false_when_it_already_existed(tmp_path):
     assert summary["agentsDirCreated"] is False
 
 
+RULES = ["mcp__soleon-workspace", "mcp__soleon-agent-tools",
+         "Edit(/.soleon/agents/**)", "Write(/.soleon/agents/**)"]
+
+
 def test_permission_allow_rules_merged_into_project_local_settings(pulled):
     """Claude Code would otherwise prompt before every tool call the subagent
-    makes; the two server-level allow rules are merged into the project's
-    settings.local.json (never replacing what is there)."""
+    makes, and DENY every edit to the pulled agent itself; the four allow rules
+    are merged into the project's settings.local.json (never replacing what is
+    there)."""
     root, agent_dir, summary = pulled
     path = root / ".claude" / "settings.local.json"
     assert summary["permissions"]["settingsFile"] == str(path)
-    assert summary["permissions"]["permissionRulesAdded"] == ["mcp__soleon-workspace", "mcp__soleon-agent-tools"]
+    assert summary["permissions"]["permissionRulesAdded"] == RULES
     data = json.loads(path.read_text(encoding="utf-8"))
-    assert data == {"permissions": {"allow": ["mcp__soleon-workspace", "mcp__soleon-agent-tools"]}}
+    assert data == {"permissions": {"allow": RULES}}
     # idempotent, and existing content survives
     path.write_text(json.dumps({"permissions": {"allow": ["Bash(ls *)", "mcp__soleon-agent-tools"], "deny": ["WebFetch"]},
                                 "other": 1}))
     proc = _run("materialize", "--slug", SLUG, "--dir", str(agent_dir), "--server-url", SERVER_URL,
                 "--model", "sonnet", "--plugin-root", str(PLUGIN), cwd=root)
     assert proc.returncode == 0, proc.stderr
-    assert json.loads(proc.stdout)["permissions"]["permissionRulesAdded"] == ["mcp__soleon-workspace"]
+    assert json.loads(proc.stdout)["permissions"]["permissionRulesAdded"] == [
+        "mcp__soleon-workspace", "Edit(/.soleon/agents/**)", "Write(/.soleon/agents/**)"]
     data = json.loads(path.read_text(encoding="utf-8"))
     assert data["other"] == 1 and data["permissions"]["deny"] == ["WebFetch"]
-    assert data["permissions"]["allow"] == ["Bash(ls *)", "mcp__soleon-agent-tools", "mcp__soleon-workspace"]
+    assert data["permissions"]["allow"] == ["Bash(ls *)", "mcp__soleon-agent-tools",
+                                            "mcp__soleon-workspace",
+                                            "Edit(/.soleon/agents/**)", "Write(/.soleon/agents/**)"]
+
+
+def test_the_edit_rule_anchors_at_the_project_root_not_the_cwd(pulled):
+    """The `/` prefix means "relative to the settings source" (the project
+    root), so the grant holds from any subdirectory. A bare `.soleon/...`
+    pattern would match only when cwd happens to BE the root — which is not
+    where a session editing a pulled agent necessarily starts."""
+    _root, _agent_dir, summary = pulled
+    file_rules = [r for r in summary["permissions"]["permissionRules"]
+                  if r.startswith(("Edit(", "Write("))]
+    assert file_rules, "the pull must grant itself write access to what it wrote"
+    for rule in file_rules:
+        assert rule.endswith("(/.soleon/agents/**)"), rule
 
 
 def test_agents_dir_override(tmp_path):

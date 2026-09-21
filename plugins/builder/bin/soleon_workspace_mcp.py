@@ -35,7 +35,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 PROTOCOL_VERSION = "2025-03-26"
-SERVER_INFO = {"name": "soleon-workspace", "version": "0.4.12"}
+SERVER_INFO = {"name": "soleon-workspace", "version": "0.4.13"}
 
 #: Container paths the platform prompt and memory files mention; they alias the root.
 CONTAINER_WORKSPACE_ALIASES = ("/mnt/workspace", "/app/workspace")

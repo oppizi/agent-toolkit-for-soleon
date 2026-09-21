@@ -792,19 +792,34 @@ def materialize(args: argparse.Namespace) -> int:
     return 0
 
 
-PERMISSION_ALLOW_RULES = ("mcp__soleon-workspace", "mcp__soleon-agent-tools")
+PERMISSION_ALLOW_RULES = (
+    "mcp__soleon-workspace",
+    "mcp__soleon-agent-tools",
+    # Editing the pulled agent IS the local authoring loop: a save under
+    # `.soleon/agents/<slug>/` is pushed to the platform draft by the
+    # PostToolUse hook. Without these, "change the agent's SOUL" is denied —
+    # silently in `dontAsk` mode, which auto-denies anything not pre-approved
+    # here (2026-09-21: the person asked for a SOUL change, the edit was
+    # refused with no prompt, and the only honest thing left to say was "my
+    # file edit was blocked"). The `/`-prefix anchors at the SETTINGS SOURCE
+    # (the project root), so the rule holds from any subdirectory; a bare
+    # `.soleon/...` pattern would only match when cwd happens to be the root.
+    "Edit(/.soleon/agents/**)",
+    "Write(/.soleon/agents/**)",
+)
 
 
 def ensure_permission_allow(project_root: Path) -> Dict[str, Any]:
-    """Pre-approve the agent's two tool servers in the project's
-    `.claude/settings.local.json` (`permissions.allow`), merging into whatever
-    is there.
+    """Pre-approve this pull's tool servers AND its own authoring files in the
+    project's `.claude/settings.local.json` (`permissions.allow`), merging into
+    whatever is there.
 
-    Without this Claude Code asks the person before EVERY tool call the
-    subagent makes (a Gmail search, a workspace read …), which made the user
+    Without the server rules Claude Code asks the person before EVERY tool call
+    the subagent makes (a Gmail search, a workspace read …), which made the user
     switch the whole session to bypass mode (2026-09-19) — the wrong trade.
-    Two server-level rules are the narrow fix: they name only the servers
-    this pull declares inline, they live in the project's LOCAL settings (the
+    Without the file rules the agent cannot be EDITED locally at all. Each rule
+    is narrow: they name only the servers this pull declares inline and only the
+    directory this pull writes, they live in the project's LOCAL settings (the
     file Claude Code itself uses for per-machine rules, conventionally
     gitignored), and plugins cannot ship permission rules themselves. The
     platform's approval gate (D8) is unaffected: it is the agent asking the
