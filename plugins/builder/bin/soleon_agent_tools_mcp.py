@@ -48,9 +48,54 @@ from soleon_mcp_client import (  # noqa: E402
 )
 
 PROTOCOL_VERSION = "2025-03-26"
-SERVER_INFO = {"name": "soleon-agent-tools", "version": "0.4.11"}
+SERVER_INFO = {"name": "soleon-agent-tools", "version": "0.4.12"}
 APPROVAL_NOTE = "Requires human approval: ask the person first, then call with approved=true."
 POLL_INTERVAL_S = 1.5
+
+#: A parameter whose schema default is an email address names the account the
+#: PLATFORM connection is authorized for — the platform filled that default in
+#: from the stored credential. A LOCAL model has an unrelated address in front
+#: of it (Claude Code tells every session "the user's email address is …",
+#: which is the local login, not the connected account), and substituting it
+#: fails silently: the upstream server looks the address up in its credential
+#: store, finds nothing, and answers with a fresh OAuth consent link instead
+#: of doing the work. Receipt: fund-raising-agent, 2026-09-21 — the agent
+#: called ``create_spreadsheet`` with ``user_google_email`` set to the local
+#: login while the connection held ``dan@oppizi.com``; the person was handed a
+#: localhost OAuth URL for a connection that was never broken, and read it as
+#: the approval flow misfiring.
+IDENTITY_DEFAULT_NOTE = (
+    "This default is the account the platform connection is authorized for. "
+    "Leave the parameter out and let the default stand, unless the person names "
+    "a different account themselves — never substitute your local login."
+)
+
+
+#: An upstream MCP tool that answers ``isError`` does NOT reach us as an error
+#: envelope: ``mcp_proxy`` renders it as ``"(MCP tool error: …)"`` and returns
+#: it as a perfectly successful ``state: done`` result (the container owns that
+#: exact prefix — `containers/shared/tools/mcp_proxy.py`). So "did this call
+#: fail" cannot be read off ``isError`` alone, and a hint gated on that flag
+#: would never fire for the very failure it was written for.
+PLATFORM_TOOL_ERROR_PREFIX = "(MCP tool error:"
+
+
+def _looks_failed(out: Dict[str, Any]) -> bool:
+    if out.get("isError"):
+        return True
+    for block in out.get("content") or []:
+        if PLATFORM_TOOL_ERROR_PREFIX in str(block.get("text") or ""):
+            return True
+    return False
+
+
+def _is_email(value: Any) -> bool:
+    """An email-SHAPED string. Deliberately loose: it only decides whether to
+    add a note or a hint, never whether a call runs."""
+    if not isinstance(value, str):
+        return False
+    v = value.strip()
+    return "@" in v and " " not in v and not v.startswith("@") and not v.endswith("@")
 
 
 def _log(msg: str) -> None:
@@ -77,6 +122,52 @@ def load_tools(path: str) -> List[Dict[str, Any]]:
     return [t for t in data if isinstance(t, dict) and t.get("name")]
 
 
+def _identity_defaults(schema: Any) -> Dict[str, str]:
+    """`{property: default}` for every property whose default is an email —
+    i.e. every parameter that names the connection's own account."""
+    props = (schema or {}).get("properties") if isinstance(schema, dict) else None
+    if not isinstance(props, dict):
+        return {}
+    return {
+        key: spec["default"] for key, spec in props.items()
+        if isinstance(spec, dict) and _is_email(spec.get("default"))
+    }
+
+
+def _annotate_identity_defaults(schema: Dict[str, Any]) -> None:
+    """Say, at the point the model reads the parameter, that the default is
+    the connected account. In place, on the already-copied schema."""
+    props = schema.get("properties")
+    if not isinstance(props, dict):
+        return
+    for key in _identity_defaults(schema):
+        spec = props[key]
+        existing = str(spec.get("description") or "").rstrip()
+        spec["description"] = (existing + " " if existing else "") + IDENTITY_DEFAULT_NOTE
+
+
+def identity_mismatch_hint(schema: Any, args: Dict[str, Any]) -> Optional[str]:
+    """The call supplied an address for a parameter that already defaults to
+    the connected account, and it is a DIFFERENT address.
+
+    Returned only alongside a failure, never to block a call: acting on a
+    second authorized account is legitimate, so this names the likely cause
+    instead of deciding it. Without it the model sees only the upstream's
+    "authorize this app" link and reports a healthy connection as broken.
+    """
+    for key, default in _identity_defaults(schema).items():
+        supplied = args.get(key)
+        if _is_email(supplied) and supplied.strip().lower() != default.strip().lower():
+            return (
+                "Note: you passed {}={!r}, but this connection is authorized for {!r} "
+                "(the parameter's default). An address the platform holds no credential "
+                "for is answered with a fresh authorization link, which is very likely "
+                "what happened here. Retry WITHOUT {} so the connected account is used. "
+                "Do not ask the person to re-authorize until that retry fails too."
+            ).format(key, supplied, default, key)
+    return None
+
+
 def published_tools(tools: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """Every `kind == external` tool, own name + own schema; approval-gated ones
     gain the optional `approved` boolean and the approval note."""
@@ -88,6 +179,7 @@ def published_tools(tools: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         if not isinstance(schema, dict):
             schema = {"type": "object", "properties": {}}
         schema = json.loads(json.dumps(schema))  # deep copy, JSON-clean
+        _annotate_identity_defaults(schema)
         description = str(t.get("description") or "")
         if t.get("approval"):
             props = schema.setdefault("properties", {})
@@ -290,7 +382,24 @@ class AgentToolsServer:
             return _text_result("Soleon refused the call — " + text, True)
         except TransportError as exc:
             return _text_result("Could not reach Soleon: {}. Retry once the platform is reachable.".format(exc), True)
-        return self.render(name, envelope)
+        return self._with_identity_hint(name, args, self.render(name, envelope))
+
+    def _schema_for(self, name: str) -> Dict[str, Any]:
+        for t in self.published:
+            if t["name"] == name:
+                return t.get("inputSchema") or {}
+        return {}
+
+    def _with_identity_hint(self, name: str, args: Dict[str, Any],
+                            out: Dict[str, Any]) -> Dict[str, Any]:
+        """A failed call that overrode the connection's own account gets the
+        cause named. Only on failure — a call that worked needs no note."""
+        if not _looks_failed(out):
+            return out
+        hint = identity_mismatch_hint(self._schema_for(name), args)
+        if hint:
+            out["content"].append({"type": "text", "text": hint})
+        return out
 
     def render(self, name: str, envelope: Any) -> Dict[str, Any]:
         if not isinstance(envelope, dict):

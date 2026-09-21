@@ -41,9 +41,20 @@ STDLIB_OK = {
     "dataclasses", "functools", "textwrap", "difflib",
 }
 # The plugin's OWN modules that its scripts import from a sibling path (they ship
-# together, so they are not third-party): the deploy-agent engine seam and the two
-# bin/ helpers the stdio servers, the save hook and pull_agent.py share.
-PLUGIN_LOCAL_MODULES = {"engine", "soleon_mcp_client", "soleon_agent_document"}
+# together, so they are not third-party): the deploy-agent engine seam plus every
+# bin/ and skill-asset module the stdio servers, the hooks and pull_agent.py share.
+# DERIVED from what the plugin actually ships — a hand-written list went stale the
+# moment a bin/ server imported a new sibling (`soleon_turn_hooks` importing
+# `soleon_agent_tools_mcp` is precisely the "sibling plugin module" the assertion
+# below says it allows, and it was reported as a third-party dependency instead).
+def _plugin_local_modules():
+    names = {p.stem for p in (PLUGIN / "bin").glob("*.py")}
+    names |= {p.stem for p in (PLUGIN / "skills").glob("*/assets/*.py")}
+    assert names, "no plugin Python found — layout changed?"
+    return names | {"engine"}
+
+
+PLUGIN_LOCAL_MODULES = _plugin_local_modules()
 
 
 def _plugin_python_files():

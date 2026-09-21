@@ -267,6 +267,14 @@ def routing_section(display_name: str, slug: str, tools: List[Dict[str, Any]], a
         "that file is Claude Code's overflow copy of the FULL result and it is inside one of your readable roots — "
         "read it with `read_file` (page with `offset`/`limit`) until you have all of it. Do not report the result as "
         "inaccessible; do not use the built-in Read.",
+        "- **Whose account a tool acts on**: every tool runs under the connection the person authorized "
+        "on the PLATFORM, never under your local Claude Code account. The address Claude Code reports as "
+        "\"the user's email address\" is the local login and is usually a DIFFERENT address from the "
+        "connected account — never pass it as a tool argument. When a parameter already carries a default "
+        "email (`user_google_email` and friends), that default IS the connected account: omit the "
+        "parameter and let it stand unless the person names another account themselves. Substituting an "
+        "address the platform holds no credential for does not fail loudly — the upstream answers with a "
+        "fresh authorization link, which reads like a broken connection when nothing is broken.",
         "- **Approval rule**: these tools are approval-gated — BEFORE calling one, tell the person exactly "
         "what the call will do and wait for a clear yes; then call it with `approved: true`. Never pass "
         "`approved: true` without that yes. If they decline, do not call it: {}".format(
