@@ -13,11 +13,22 @@ from pathlib import Path
 
 import pytest
 
-from _local_emulation_fixtures import BIN, DOCUMENT, PLUGIN, PULL_ASSETS, SERVER_URL, SLUG, make_pulled_dir
+from _local_emulation_fixtures import (
+    BIN, DOCUMENT, PLUGIN, PULL_ASSETS, SERVER_URL, SLUG, config_envelope, draft_envelope, make_pulled_dir,
+    prompt_envelope, skills_envelope, tools_envelope,
+)
 
 sys.path.insert(0, str(BIN))
 import soleon_draft_sync as hook  # noqa: E402
 import soleon_mcp_client as client_mod  # noqa: E402
+
+
+# A save is followed by the rebuild read-set (get_agent_draft → config → skills →
+# sandbox sync → tools → system prompt), so the local copy the next run spawns
+# from carries what was just saved.
+REBUILD_CALLS = ["get_agent_draft", "get_agent_config", "get_agent_skills", "sync_draft_test_chat",
+                 "list_agent_tools", "get_agent_system_prompt"]
+NEW_ETAG = "1726560099999"
 
 
 class FakeClient:
@@ -28,9 +39,13 @@ class FakeClient:
     def __init__(self, server_url):
         self.server_url = server_url
         self.calls = []
+        self._sleep = lambda seconds: None
         self.patch_answer = {"status": 200, "body": {"patched": True, "changed_keys": [], "deleted_keys": [],
-                                                      "previous_draft_etag": "1726560000000", "draft_etag": "1726560099999",
+                                                      "previous_draft_etag": "1726560000000", "draft_etag": NEW_ETAG,
                                                       "next_action": "Review with get_agent_draft"}}
+        # What the platform serves the rebuild AFTER the save landed.
+        self.draft_after_save = draft_envelope(True, NEW_ETAG)
+        self.prompt_after_save = prompt_envelope()
         FakeClient.instances.append(self)
 
     def call_tool(self, name, arguments):
@@ -40,9 +55,17 @@ class FakeClient:
             if isinstance(answer, Exception):
                 raise answer
             return json.loads(json.dumps(answer))
-        if name == "sync_draft_test_chat":
-            return {"status": 200, "body": {"synced": True, "hasDraft": True}}
-        raise AssertionError("unexpected tool " + name)
+        answers = {
+            "get_agent_draft": self.draft_after_save,
+            "get_agent_config": config_envelope(),
+            "get_agent_skills": skills_envelope(),
+            "sync_draft_test_chat": {"status": 200, "body": {"synced": True, "hasDraft": True}},
+            "list_agent_tools": tools_envelope(),
+            "get_agent_system_prompt": self.prompt_after_save,
+        }
+        if name not in answers:
+            raise AssertionError("unexpected tool " + name)
+        return json.loads(json.dumps(answers[name]))
 
 
 def _materialize(tmp_path) -> Path:
@@ -50,19 +73,48 @@ def _materialize(tmp_path) -> Path:
     proc = subprocess.run(
         [sys.executable, str(PULL_ASSETS / "pull_agent.py"), "materialize", "--slug", SLUG, "--dir", str(agent_dir),
          "--server-url", SERVER_URL, "--model", "sonnet", "--plugin-root", str(PLUGIN)],
-        capture_output=True, text=True, timeout=60, cwd=str(tmp_path), env={"PATH": "/usr/bin:/bin"},
+        capture_output=True, text=True, timeout=60, cwd=str(tmp_path),
+        # HOME → the tmp root, as in test_pull_agent.py / test_pull_refresh.py.
+        # materialize writes the subagent file to $HOME/.claude/agents/, and with
+        # HOME unset Python falls back to the pwd database — so this fixture used
+        # to overwrite the REAL ~/.claude/agents/demo-agent.md (and its helpers)
+        # on every run, replacing a pulled agent with this file's DEMO fixture.
+        env={"PATH": "/usr/bin:/bin", "HOME": str(tmp_path)},
     )
     assert proc.returncode == 0, proc.stderr
     return agent_dir
+
+
+def _project_root_of(path: Path):
+    """`<root>/.soleon/agents/<slug>/...` → `<root>`; None for any other path."""
+    for parent in path.parents:
+        if parent.name == ".soleon":
+            return parent.parent
+    return None
+
+
+def _sandboxed_runner(home):
+    """materialize writes the subagent file to `$HOME/.claude/agents/` — pin HOME
+    at the tmp root so a test never touches the real one."""
+    def run(cmd, **kw):
+        kw.setdefault("env", {"PATH": "/usr/bin:/bin", "HOME": str(home)})
+        return subprocess.run(cmd, **kw)
+    return run
 
 
 def _run_hook(path: Path, capsys, factory=FakeClient, tool="Write"):
     FakeClient.instances = []
     payload = {"hook_event_name": "PostToolUse", "tool_name": tool,
                "tool_input": {"file_path": str(path), "content": "x"}, "tool_response": {}}
-    code = hook.main(io.StringIO(json.dumps(payload)), client_factory=factory)
+    root = _project_root_of(path)
+    runner = _sandboxed_runner(root) if root else subprocess.run
+    code = hook.main(io.StringIO(json.dumps(payload)), client_factory=factory, runner=runner)
     captured = capsys.readouterr()
     return code, captured.out, captured.err
+
+
+def _subagent_file(root: Path) -> Path:
+    return root / ".claude" / "agents" / "{}.md".format(SLUG)
 
 
 @pytest.fixture()
@@ -77,13 +129,14 @@ def test_soul_save_patches_soul_with_the_pulled_etag(agent_dir, capsys):
     (client,) = FakeClient.instances
     assert client.server_url == SERVER_URL
     names = [c[0] for c in client.calls]
-    assert names == ["patch_agent_draft", "sync_draft_test_chat"]
+    assert names == ["patch_agent_draft"] + REBUILD_CALLS
     _, args = client.calls[0]
     assert args == {"slug": SLUG, "app_env": "dev", "changes": {"soul": "# Demo\n\nBe terse.\n"},
                     "expected_updated_at": 1726560000000}
     assert client.calls[1][1] == {"slug": SLUG, "app_env": "dev"}
     msg = json.loads(out.strip())
     assert msg["systemMessage"].startswith("Soleon draft updated from SOUL.md (etag 1726560099999")
+    assert "subagent definition rebuilt" in msg["systemMessage"]
     pull = json.loads((agent_dir / "pull.json").read_text())
     assert pull["draftEtag"] == "1726560099999" and pull["lastSyncedFile"] == "SOUL.md"
 
@@ -265,6 +318,8 @@ def test_first_save_without_a_draft_omits_expected_updated_at(tmp_path, capsys):
             super().__init__(server_url)
             self.patch_answer = {"status": 201, "body": {"patched": True, "draft_created": True, "draft_etag": "42",
                                                           "changed_keys": ["soul"], "deleted_keys": []}}
+            # the rebuild reads back the draft this save just created
+            self.draft_after_save = draft_envelope(True, "42")
 
     code, out, err = _run_hook(agent_dir / "SOUL.md", capsys, factory=CreateClient)
     assert code == 0, err
@@ -292,3 +347,51 @@ def test_hooks_json_wires_the_script_on_write_edit_multiedit():
     (cmd,) = entry["hooks"]
     assert cmd["type"] == "command"
     assert cmd["command"] == 'python3 "${CLAUDE_PLUGIN_ROOT}/bin/soleon_draft_sync.py"'
+
+
+def test_save_rebuilds_the_subagent_definition_the_next_run_spawns_from(agent_dir, tmp_path, capsys):
+    """A save that moves only the platform draft is half-applied.
+
+    The subagent file carries its own copy of the rendered system prompt, and
+    nothing else rewrites it: leave it alone and the agent keeps answering under
+    the rules it was materialized with, refusing the change the person just made
+    and citing its old configuration as the reason (2026-09-21,
+    fund-raising-agent). Re-materializing is what makes the save real locally.
+    """
+    rule = "Small plain-text scratch files in the workspace are allowed on request."
+
+    class RenderedClient(FakeClient):
+        def __init__(self, server_url):
+            super().__init__(server_url)
+            rendered = prompt_envelope()
+            rendered["result"]["prompt"] += "\n\n---\n\n" + rule
+            self.prompt_after_save = rendered
+
+    subagent = _subagent_file(tmp_path)
+    assert rule not in subagent.read_text(encoding="utf-8")
+
+    (agent_dir / "SOUL.md").write_text("# Demo\n\n" + rule + "\n", encoding="utf-8")
+    code, out, err = _run_hook(agent_dir / "SOUL.md", capsys, factory=RenderedClient)
+
+    assert code == 0, err
+    assert rule in subagent.read_text(encoding="utf-8"), "the next run would still spawn with the old rules"
+    assert "subagent definition rebuilt" in json.loads(out)["systemMessage"]
+
+
+def test_a_failed_rebuild_says_the_agent_still_holds_the_old_rules(agent_dir, capsys):
+    """The save landed on the platform, so the session is not blocked — but a
+    silent half-apply is exactly the failure this hook exists to prevent, so the
+    note has to name the consequence and the way out."""
+    class BrokenRebuildClient(FakeClient):
+        def call_tool(self, name, arguments):
+            if name == "get_agent_system_prompt":
+                self.calls.append((name, arguments))
+                raise client_mod.SoleonClientError("HTTP 503")
+            return super().call_tool(name, arguments)
+
+    (agent_dir / "SOUL.md").write_text("# Demo\n\nBe terse.\n", encoding="utf-8")
+    code, out, err = _run_hook(agent_dir / "SOUL.md", capsys, factory=BrokenRebuildClient)
+
+    assert code == 0, err  # the platform save succeeded; never block on the rebuild
+    message = json.loads(out)["systemMessage"]
+    assert "NOT rebuilt" in message and "OLD rules" in message and "/pull-agent" in message

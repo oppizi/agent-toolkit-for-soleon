@@ -13,9 +13,13 @@ hook payload on stdin, and:
   `soleon_agent_document.py`, and calls `patch_agent_draft` with
   `expected_updated_at = pull.json.draftEtag` (omitted when the pull found no
   draft — the first write then CREATES the draft);
-* on success writes the new `draftEtag` into `pull.json`, re-syncs the platform's
-  test-chat sandbox (`sync_draft_test_chat`) so the tool session runs the new
-  draft, and prints `{"systemMessage": ...}` on stdout (exit 0);
+* on success writes the new `draftEtag` into `pull.json`, then re-pulls and
+  re-materializes the local copy (`soleon_pull_refresh.refresh`, which also
+  re-syncs the test-chat sandbox via `sync_draft_test_chat`) so that BOTH the
+  platform draft and the subagent definition the next run spawns from carry the
+  save, and prints `{"systemMessage": ...}` on stdout (exit 0). A save that
+  moved only the draft leaves the agent running the rules it was materialized
+  with — see `_rebuild_local_copy`;
 * on a CONFLICT (someone changed the draft elsewhere — the Soleon editor, another
   session) writes the current platform draft to `.pull/conflict.json`, prints the
   two ways out on STDERR and exits 2, which stops the session and makes Claude
@@ -30,6 +34,7 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
 import sys
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -37,6 +42,7 @@ from typing import Any, Dict, Optional
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import soleon_agent_document as doc  # noqa: E402
+import soleon_pull_refresh as pull_refresh  # noqa: E402  (refresh() only; no cycle — it imports neither this module nor the hook)
 from soleon_mcp_client import (  # noqa: E402
     DEFAULT_SERVER_URL,
     SoleonClientError,
@@ -116,7 +122,56 @@ def _conflict_message(slug: str, agent_dir: Path) -> str:
     ).format(slug=slug, conflict=agent_dir / doc.PULL_DIR / doc.CONFLICT_JSON, dir=agent_dir)
 
 
-def sync(agent_dir: Path, kind: str, detail: str, client_factory=SoleonMcpClient) -> int:
+def _rebuild_local_copy(agent_dir: Path, client, slug: str, app_env: str,
+                        runner=subprocess.run) -> str:
+    """Re-pull and re-materialize after a save landed, so the subagent
+    definition the NEXT run spawns from carries what was just saved.
+
+    Without this the save is only half-applied: the platform draft moves, but
+    `~/.claude/agents/<slug>.md` keeps the prompt it was last materialized
+    with, and every run — including one started later in this same turn —
+    reasons under the old rules. The person then gets a refusal citing the old
+    configuration and no hint that the file is stale (2026-09-21,
+    fund-raising-agent: a SOUL.md exception was saved, and the agent declined
+    to act on it three times).
+
+    The read-back is not optional: the subagent body is the PLATFORM-RENDERED
+    system prompt (`pull_agent.py` materialize → `patch_prompt_paths`), not the
+    local SOUL.md, so re-materializing from local files alone would rebuild the
+    file from the old prompt and change nothing. `refresh()` re-syncs the test
+    chat as part of the same read sequence, so the save keeps that guarantee.
+
+    Never raises: the save itself already succeeded on the platform, so a
+    failed rebuild is a loud note, not a blocked session.
+    """
+    try:
+        envelope = client.call_tool("get_agent_draft", {"slug": slug, "app_env": app_env})
+        if is_platform_error(envelope):
+            raise pull_refresh.RefreshError("get_agent_draft: {}".format(describe_error(envelope)))
+        draft_raw = doc.unwrap(envelope)
+        if not isinstance(draft_raw, dict) or not isinstance(draft_raw.get("agent"), dict):
+            raise pull_refresh.RefreshError("unexpected get_agent_draft answer")
+        before = doc.load_pull(agent_dir)
+        pull_refresh.refresh(agent_dir, before, draft_raw, client, runner=runner)
+        # materialize rewrites pull.json from the platform document, which drops
+        # the save provenance written moments ago; refresh only restores its own
+        # (refreshedAt/refreshedFrom). Put the save's back, and keep the
+        # rebuild's draftEtag — that one came from the platform.
+        fresh = doc.load_pull(agent_dir)
+        for key in ("lastSyncedAt", "lastSyncedFile"):
+            if before.get(key) not in (None, ""):
+                fresh[key] = before[key]
+        fresh["source"] = "draft"
+        doc.save_pull(agent_dir, fresh)
+    except (pull_refresh.RefreshError, SoleonClientError, ToolError, subprocess.TimeoutExpired,
+            OSError, json.JSONDecodeError) as exc:
+        return ("; the local copy was NOT rebuilt ({}) — a run started now would still use the OLD rules. "
+                "Re-run /pull-agent {} before asking the agent to act on this change.".format(exc, slug))
+    return ", test session re-synced, local copy and subagent definition rebuilt"
+
+
+def sync(agent_dir: Path, kind: str, detail: str, client_factory=SoleonMcpClient,
+         runner=subprocess.run) -> int:
     pull = doc.load_pull(agent_dir)
     slug = str(pull.get("slug") or agent_dir.name)
     server_url = str(pull.get("serverUrl") or DEFAULT_SERVER_URL)
@@ -166,13 +221,7 @@ def sync(agent_dir: Path, kind: str, detail: str, client_factory=SoleonMcpClient
     pull["lastSyncedFile"] = detail
     doc.save_pull(agent_dir, pull)
 
-    synced_note = ""
-    try:
-        sync_env = doc.unwrap(client.call_tool("sync_draft_test_chat", {"slug": slug, "app_env": app_env}))
-        if isinstance(sync_env, dict) and sync_env.get("synced"):
-            synced_note = ", test session re-synced"
-    except SoleonClientError as exc:
-        synced_note = "; test-chat re-sync failed: {}".format(exc)
+    synced_note = _rebuild_local_copy(agent_dir, client, slug, app_env, runner=runner)
 
     if body.get("no_change"):
         message = "Soleon draft already matched {} (etag {}){}".format(detail, pull.get("draftEtag"), synced_note)
@@ -190,7 +239,7 @@ def _now_iso() -> str:
     return datetime.datetime.now(datetime.timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
-def main(stream=None, client_factory=SoleonMcpClient) -> int:
+def main(stream=None, client_factory=SoleonMcpClient, runner=subprocess.run) -> int:
     hook = read_hook_input(stream)
     fp = file_path_of(hook)
     if not fp:
@@ -205,7 +254,7 @@ def main(stream=None, client_factory=SoleonMcpClient) -> int:
         return EXIT_OK  # not a pulled agent dir (no pull.json) — nothing to sync to
     kind, detail = hit
     try:
-        return sync(agent_dir, kind, detail, client_factory=client_factory)
+        return sync(agent_dir, kind, detail, client_factory=client_factory, runner=runner)
     except Exception as exc:  # noqa: BLE001 — surfaced, never silent
         _stderr("Soleon draft sync failed for {}: {}: {}".format(fp, type(exc).__name__, exc))
         return EXIT_BLOCK

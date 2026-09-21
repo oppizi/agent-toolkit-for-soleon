@@ -91,6 +91,24 @@ def local_version_of(pull: Dict[str, Any]) -> str:
     return "deployed:{}".format(pull.get("baselineEtag") or "")
 
 
+def materialized_version_of(pull: Dict[str, Any]) -> str:
+    """What the files on disk — above all the subagent definition — were BUILT
+    from: `refreshedFrom`, never `draftEtag`.
+
+    `draftEtag` tracks what was last PUSHED, and soleon_draft_sync.py writes the
+    new etag there on every local save. Comparing it against the platform makes
+    a local edit satisfy its own freshness check: the draft moved, the check
+    passed, and the subagent file kept the SOUL it was materialized with — so
+    the agent went on answering under the old rules and refused the new ones
+    (2026-09-21, fund-raising-agent: draftEtag 1790006169070 vs refreshedFrom
+    draft:1790004498310). Falls back to the pushed version for a pull.json
+    written before this field existed.
+    """
+    if pull.get("refreshedFrom") not in (None, ""):
+        return str(pull["refreshedFrom"])
+    return local_version_of(pull)
+
+
 def _now_iso() -> str:
     return datetime.datetime.now(datetime.timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
@@ -192,7 +210,7 @@ def check_agent(agent_dir: Path, client_factory=SoleonMcpClient, runner=subproce
                 display, describe_error(draft_raw))
         return "Soleon: unexpected get_agent_draft answer for {}; using the local copy.".format(display)
 
-    remote, local = version_of(draft_raw), local_version_of(pull)
+    remote, local = version_of(draft_raw), materialized_version_of(pull)
     if remote == local:
         return None
     if (agent_dir / doc.PULL_DIR / doc.CONFLICT_JSON).is_file():
@@ -202,9 +220,9 @@ def check_agent(agent_dir: Path, client_factory=SoleonMcpClient, runner=subproce
     try:
         summary = refresh(agent_dir, pull, draft_raw, client, runner=runner)
     except (RefreshError, SoleonClientError, subprocess.TimeoutExpired) as exc:
-        return "Soleon: {} changed on the platform ({} → {}) but the refresh failed ({}); the local copy is unchanged.".format(
-            display, local, remote, exc)
-    return ("Soleon: {} was changed on the platform ({} → {}); the local copy was refreshed — SOUL.md, config.json, "
+        return ("Soleon: {} is out of date ({} → {}) but the refresh failed ({}); the local copy is unchanged, so a run "
+                "NOW would use the old rules.").format(display, local, remote, exc)
+    return ("Soleon: {} was out of date ({} → {}); the local copy was refreshed — SOUL.md, config.json, "
             "{} skill(s), {} eval(s), the system prompt and the subagent definition. workspace/ untouched."
             ).format(display, local, remote, len(summary.get("skills") or []), len(summary.get("evals") or []))
 

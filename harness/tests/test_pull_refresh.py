@@ -256,3 +256,44 @@ def test_version_strings():
     assert refresh.version_of({"hasDraft": False, "baselineEtag": "7"}) == "deployed:7"
     assert refresh.version_of({"hasDraft": True}) == "deployed:"
     assert refresh.local_version_of({"draftEtag": None, "baselineEtag": "7"}) == "deployed:7"
+
+
+def test_a_local_save_does_not_satisfy_its_own_freshness_check(tmp_path):
+    """`draftEtag` is what was last PUSHED, not what was last MATERIALIZED.
+
+    soleon_draft_sync.py writes the new etag there on every local save, so
+    comparing it against the platform made a local edit pass its own check: the
+    draft had moved, the hook said "already matches", and the subagent file kept
+    the prompt it was built from — the agent went on refusing the rule the
+    person had just written (2026-09-21, fund-raising-agent, where pull.json
+    read draftEtag 1790006169070 against refreshedFrom draft:1790004498310).
+    The materialized version is the one that has to be compared.
+    """
+    agent_dir = _pulled(tmp_path)
+    new_doc = json.loads(json.dumps(DOCUMENT))
+    new_doc["soul"] = NEW_SOUL
+    new_draft = draft_envelope(True, NEW_ETAG)
+    new_draft["body"]["agent"] = new_doc
+
+    # exactly what a local save leaves behind: the pushed etag is current, the
+    # files on disk are still a generation behind it
+    pull = json.loads((agent_dir / "pull.json").read_text())
+    pull["draftEtag"] = NEW_ETAG
+    pull["refreshedFrom"] = "draft:" + OLD_ETAG
+    (agent_dir / "pull.json").write_text(json.dumps(pull), encoding="utf-8")
+
+    FakeClient.instances.clear()
+    rc, out, _ = _run(tmp_path, lambda url: FakeClient(url, draft=new_draft),
+                      runner=_real_runner_with_home(tmp_path))
+
+    assert rc == 0
+    assert out, "a stale local copy must be refreshed, not reported as up to date"
+    assert (agent_dir / "SOUL.md").read_text(encoding="utf-8") == NEW_SOUL
+    assert json.loads((agent_dir / "pull.json").read_text())["refreshedFrom"] == "draft:" + NEW_ETAG
+
+
+def test_materialized_version_prefers_refreshed_from_and_falls_back(tmp_path):
+    """A pull.json written before `refreshedFrom` existed still has to work."""
+    assert refresh.materialized_version_of({"draftEtag": "9", "refreshedFrom": "draft:4"}) == "draft:4"
+    assert refresh.materialized_version_of({"draftEtag": "9"}) == "draft:9"
+    assert refresh.materialized_version_of({"baselineEtag": "7"}) == "deployed:7"
