@@ -695,8 +695,17 @@ def materialize(args: argparse.Namespace) -> int:
     #      User-scope agent files load their inline servers with no trust
     #      check at all.
     #   2. ~/.claude/agents/ almost always exists when the session starts, so
-    #      the watcher picks the new file up within seconds: no restart. (A
+    #      the watcher picks a NEW file up within seconds: no restart. (A
     #      project's first .claude/agents/ file needs one.)
+    #      This does NOT extend to a REWRITE of a file the session has already
+    #      spawned from. Measured on 2.1.257 (2026-09-21, fund-raising-agent):
+    #      the file was rewritten with a new rule at 17:47:18Z and three agents
+    #      spawned 15-19 minutes later — distinct ids, not resumes — all still
+    #      answered from the pre-rewrite prompt, and the agent list still
+    #      advertised the old `pulled` timestamp. The docs' "changes take effect
+    #      within seconds" did not hold for the spawn path. A session that has
+    #      already talked to the agent needs a NEW session to see a re-pull,
+    #      which is why the rebuild message says so.
     # The files reference the pull directory by absolute path, so they work
     # from any cwd. A stale project-scope copy from an earlier pull is removed
     # so Claude Code does not see the same agent twice.

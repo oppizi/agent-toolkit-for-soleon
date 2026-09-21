@@ -167,7 +167,14 @@ def _rebuild_local_copy(agent_dir: Path, client, slug: str, app_env: str,
             OSError, json.JSONDecodeError) as exc:
         return ("; the local copy was NOT rebuilt ({}) — a run started now would still use the OLD rules. "
                 "Re-run /pull-agent {} before asking the agent to act on this change.".format(exc, slug))
-    return ", test session re-synced, local copy and subagent definition rebuilt"
+    # Claude Code does not re-read an agent definition a session has already
+    # spawned from (measured on 2.1.257 — see pull_agent.py materialize). The
+    # rebuild is therefore necessary but not always sufficient, and saying so
+    # here is the difference between a one-line instruction and an hour of an
+    # agent citing rules the person has already changed.
+    return (", test session re-synced, local copy and subagent definition rebuilt"
+            " — if you have already talked to this agent in this session, start a NEW session"
+            " for the change to reach it")
 
 
 def sync(agent_dir: Path, kind: str, detail: str, client_factory=SoleonMcpClient,
