@@ -351,8 +351,11 @@ def test_agents_dir_created_is_false_when_it_already_existed(tmp_path):
     assert summary["agentsDirCreated"] is False
 
 
+# The toolkit's OWN server is derived from the plugin that runs the pull, so
+# the same server under soleon-admin/-observer names a different rule.
+TOOLKIT_RULE = "mcp__plugin_soleon-builder_soleon-agent-toolkit__*"
 RULES = ["mcp__soleon-workspace", "mcp__soleon-agent-tools",
-         "Edit(/.soleon/agents/**)", "Write(/.soleon/agents/**)"]
+         "Edit(/.soleon/agents/**)", "Write(/.soleon/agents/**)", TOOLKIT_RULE]
 
 
 def test_permission_allow_rules_merged_into_project_local_settings(pulled):
@@ -373,12 +376,13 @@ def test_permission_allow_rules_merged_into_project_local_settings(pulled):
                 "--model", "sonnet", "--plugin-root", str(PLUGIN), cwd=root)
     assert proc.returncode == 0, proc.stderr
     assert json.loads(proc.stdout)["permissions"]["permissionRulesAdded"] == [
-        "mcp__soleon-workspace", "Edit(/.soleon/agents/**)", "Write(/.soleon/agents/**)"]
+        "mcp__soleon-workspace", "Edit(/.soleon/agents/**)", "Write(/.soleon/agents/**)", TOOLKIT_RULE]
     data = json.loads(path.read_text(encoding="utf-8"))
     assert data["other"] == 1 and data["permissions"]["deny"] == ["WebFetch"]
     assert data["permissions"]["allow"] == ["Bash(ls *)", "mcp__soleon-agent-tools",
                                             "mcp__soleon-workspace",
-                                            "Edit(/.soleon/agents/**)", "Write(/.soleon/agents/**)"]
+                                            "Edit(/.soleon/agents/**)", "Write(/.soleon/agents/**)",
+                                            TOOLKIT_RULE]
 
 
 def test_the_edit_rule_anchors_at_the_project_root_not_the_cwd(pulled):
@@ -401,3 +405,37 @@ def test_agents_dir_override(tmp_path):
                 "--model", "sonnet", "--plugin-root", str(PLUGIN), "--agents-dir", str(custom), cwd=tmp_path)
     assert proc.returncode == 0, proc.stderr
     assert (custom / f"{SLUG}.md").is_file()
+
+
+def test_the_pull_grants_the_toolkit_its_own_mcp_server(pulled):
+    """The four rules above cover the servers the SUBAGENT declares and the files
+    the authoring loop writes — not the toolkit server that authors the agent.
+
+    Claude Code approves no MCP tool by default, so under `dontAsk` every
+    `put_standard_eval` / `patch_agent_draft` call is auto-denied with no prompt,
+    and the session cannot earn the approval interactively because there is no
+    prompt to accept. Receipt (2026-09-21): three `put_standard_eval` calls
+    denied in a row, the evals written to a scratch file instead, and the person
+    looking for them on a platform they had never reached.
+    """
+    _root, _agent_dir, summary = pulled
+    rules = summary["permissions"]["permissionRules"]
+    assert TOOLKIT_RULE in rules, "a pull that cannot author is not a pull"
+    assert summary["permissions"]["pluginServerRulesUnresolved"] is False
+
+
+def test_the_toolkit_rule_is_derived_from_the_running_plugin(tmp_path):
+    """soleon-builder, -admin and -observer all ship the SAME server name, so a
+    hard-coded rule would grant the wrong plugin's tools. The plugin name is the
+    part that varies, and it comes from the plugin that is actually running."""
+    sys.path.insert(0, str(PULL_ASSETS))
+    import pull_agent
+
+    plugin = tmp_path / "some-plugin"
+    (plugin / ".claude-plugin").mkdir(parents=True)
+    (plugin / ".claude-plugin" / "plugin.json").write_text(json.dumps({"name": "soleon-admin"}))
+    (plugin / ".mcp.json").write_text(json.dumps({"mcpServers": {"soleon-agent-toolkit": {}}}))
+    assert pull_agent.plugin_mcp_allow_rules(plugin) == ["mcp__plugin_soleon-admin_soleon-agent-toolkit__*"]
+
+    # a plugin we cannot read must not crash the pull — it is reported instead
+    assert pull_agent.plugin_mcp_allow_rules(tmp_path / "missing") == []

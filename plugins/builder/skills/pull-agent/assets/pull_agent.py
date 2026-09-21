@@ -790,7 +790,7 @@ def materialize(args: argparse.Namespace) -> int:
         # (list_agent_tools → tracesUrl); an older server sends none.
         "tracesUrl": tools_env.get("tracesUrl") if isinstance(tools_env, dict) else None,
         "projectRoot": str(project_root),
-        "permissions": ensure_permission_allow(project_root),
+        "permissions": ensure_permission_allow(project_root, plugin_root),
         "agentsDir": str(agents_dir),
         # True when ~/.claude/agents/ did not exist before this pull: the
         # watcher only covers directories that existed at session start, so
@@ -818,7 +818,39 @@ PERMISSION_ALLOW_RULES = (
 )
 
 
-def ensure_permission_allow(project_root: Path) -> Dict[str, Any]:
+def plugin_mcp_allow_rules(plugin_root: Path) -> List[str]:
+    """`mcp__plugin_<plugin>_<server>__*` for every server THIS plugin bundles.
+
+    The rules above cover the servers the pulled SUBAGENT declares inline, and
+    the files the authoring loop writes — but not the toolkit's own MCP server,
+    the one that authors the agent (put_standard_eval, patch_agent_draft,
+    deploy_agent_draft …). Claude Code approves no MCP tool by default, so under
+    `dontAsk` every one of those calls is auto-denied with no prompt, and a
+    session cannot even earn the approval interactively: there is no prompt to
+    accept. Receipt (2026-09-21): three `put_standard_eval` calls were denied in
+    a row, the session fell back to writing the evals into a scratch file, and
+    the person went looking for them on the platform where they had never
+    arrived.
+
+    Derived, never hard-coded: the same server ships in soleon-builder,
+    soleon-admin and soleon-observer, so the plugin NAME is what varies and the
+    rule has to name the plugin that is actually running. The trailing `__*` is
+    the documented form — a glob is allowed only after a literal
+    `mcp__<server>__` prefix, and the server segment itself may not be a glob.
+    """
+    try:
+        with open(plugin_root / ".claude-plugin" / "plugin.json", "r", encoding="utf-8") as fh:
+            name = json.load(fh).get("name")
+        with open(plugin_root / ".mcp.json", "r", encoding="utf-8") as fh:
+            servers = json.load(fh).get("mcpServers")
+    except (OSError, ValueError):
+        return []
+    if not name or not isinstance(servers, dict):
+        return []
+    return ["mcp__plugin_{}_{}__*".format(name, server) for server in sorted(servers)]
+
+
+def ensure_permission_allow(project_root: Path, plugin_root: Optional[Path] = None) -> Dict[str, Any]:
     """Pre-approve this pull's tool servers AND its own authoring files in the
     project's `.claude/settings.local.json` (`permissions.allow`), merging into
     whatever is there.
@@ -834,6 +866,10 @@ def ensure_permission_allow(project_root: Path) -> Dict[str, Any]:
     platform's approval gate (D8) is unaffected: it is the agent asking the
     person in conversation before an `approved: true` call, not a Claude Code
     permission prompt.
+
+    `plugin_root` adds this plugin's own MCP server (see
+    `plugin_mcp_allow_rules`); omitting it keeps the static rules only, which is
+    what a caller that cannot name its plugin should get.
     """
     path = project_root / ".claude" / "settings.local.json"
     data: Dict[str, Any] = {}
@@ -851,15 +887,22 @@ def ensure_permission_allow(project_root: Path) -> Dict[str, Any]:
     if not isinstance(allow, list):
         allow = []
         perms["allow"] = allow
-    added = [r for r in PERMISSION_ALLOW_RULES if r not in allow]
+    rules = list(PERMISSION_ALLOW_RULES)
+    derived = plugin_mcp_allow_rules(plugin_root) if plugin_root is not None else []
+    rules.extend(r for r in derived if r not in rules)
+    added = [r for r in rules if r not in allow]
     if added:
         allow.extend(added)
         path.parent.mkdir(parents=True, exist_ok=True)
         with open(path, "w", encoding="utf-8") as fh:
             json.dump(data, fh, indent=2, ensure_ascii=False)
             fh.write("\n")
+    # A plugin whose own server could not be derived is reported, never
+    # skipped quietly: the symptom of the missing rule is a silent denial.
+    unresolved = plugin_root is not None and not derived
     return {"settingsFile": str(path), "permissionRulesAdded": added,
-            "permissionRules": list(PERMISSION_ALLOW_RULES)}
+            "permissionRules": rules,
+            "pluginServerRulesUnresolved": unresolved}
 
 
 def not_emulated(config: Dict[str, Any], document: Dict[str, Any]) -> Dict[str, Any]:

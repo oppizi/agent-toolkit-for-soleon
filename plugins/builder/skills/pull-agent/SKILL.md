@@ -124,13 +124,17 @@ platform-only keys stay visible), `skills/<id>/SKILL.md` + `skill.json` (+
 text package files), `evals/<evalId>.json` (one per standard eval),
 `workspace/` (the extracted snapshot), `pull.json` (`{slug, source:
 draft|deployed, draftEtag, pulledAt, model, serverUrl, namespace, …}`), and
-in the project `.claude/settings.local.json`: four `permissions.allow` rules
+in the project `.claude/settings.local.json`: five `permissions.allow` rules
 merged in — `mcp__soleon-workspace` and `mcp__soleon-agent-tools`, so Claude
-Code does not ask the person before every tool call the subagent makes, plus
+Code does not ask the person before every tool call the subagent makes;
 `Edit(/.soleon/agents/**)` and `Write(/.soleon/agents/**)`, so the pulled agent
 can be EDITED locally (a save there is pushed to the platform draft by the
 PostToolUse hook; without the rule that edit is denied, and in `dontAsk` mode
-denied with no prompt at all). The platform's approval gate is separate and
+denied with no prompt at all); and `mcp__plugin_<this-plugin>_<server>__*`
+(derived from the plugin that runs the pull, since the same server ships under
+three plugin names), so the toolkit's OWN authoring tools work — no MCP tool is
+approved by default, and under `dontAsk` a session cannot even earn the approval
+interactively, because there is no prompt to accept. The platform's approval gate is separate and
 still applies — it is the agent asking in conversation, D8. And in the USER
 scope: `~/.claude/agents/<slug>.md`
 — the subagent — plus one
