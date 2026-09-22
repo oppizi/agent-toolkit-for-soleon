@@ -63,6 +63,40 @@ elicitation — those phases are offline and produce only local JSON.
 `config.schedules` and `config.tools` are deferred (no honest identity signal /
 a dependency the plugin avoids); visibility is `private` only in this slice.
 
+## Create a new agent from an idea
+
+```
+/create-agent
+```
+
+Describe the agent you want in your own words. The skill works out what your
+description already answers and asks only about what's missing and matters:
+usually one to three questions, drawn from what you said, never a fixed form.
+It never asks for plumbing (model ids, slugs, tool ids, cron syntax). It
+proposes those itself and names them as assumptions you can correct.
+
+It then shows you exactly what it will build — what the agent can read, what
+it can change, and what asks you first — and creates nothing until you say
+so. On your yes it creates the agent on dev, attaches its integrations and
+knowledge bases, writes its instructions and evals, and validates the draft.
+It deploys only on a second yes, then offers `/pull-agent` so you can talk to
+it straight away.
+
+Approval is set by what an action does, not by tool name. Every change an
+attached integration can make asks first, unless you explicitly say
+otherwise, and your words are recorded in the brief. A rule that only the
+agent's instructions carry is named as such, because instructions are
+followed most of the time, not always. The model it proposes is the one your
+existing agents run on, read live, never a pinned id.
+
+**What it does NOT do:** create scheduled automations. They need your
+Soleon person id, which no tool can look up, so it hands you the exact
+schedule and prompt to add in Soleon. It also can't list the integration
+catalogue (there is no tool for it), so it maps your words to the standard
+integrations it knows, and asks for the name of anything else as it appears
+on the Tools page. To convert an *existing* `.claude/agents/` file, use
+`deploy-agent` instead.
+
 ## Pull a Soleon agent into Claude Code
 
 ```
