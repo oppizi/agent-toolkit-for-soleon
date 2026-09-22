@@ -153,11 +153,45 @@ def test_no_integrations_never_claims_the_agent_can_only_talk():
     assert not any("only talk" in l for l in lines)
 
 
+def test_web_off_is_one_call_on_the_ref_that_owns_every_web_op():
+    """`enabled: false` on `sys_web_prompt` makes the runtime skip both its
+    collapsed and per-op registration — web_search, web_fetch and browser_*."""
+    out = ca.plan(_brief(webAccess=False))
+    off = [c for c in out["calls"] if c["step"] == "web:off"]
+    assert off == [{"step": "web:off", "tool": "set_agent_tool",
+                    "arguments": {"slug": "investor-inbox", "app_env": "dev",
+                                  "tool_id": "sys_web_prompt", "enabled": False}}]
+    assert out["calls"][-1]["tool"] == "validate_agent_draft"
+
+
+def test_web_stays_on_unless_the_brief_says_false():
+    for brief in (_brief(), _brief(webAccess=True)):
+        assert not [c for c in ca.plan(brief)["calls"] if c["step"] == "web:off"]
+
+
+def test_with_web_off_the_summary_never_claims_web_access():
+    lines = ca.plan(_brief(webAccess=False))["summary"]
+    assert lines[-1] == ca.BASELINE_NO_WEB_LINE
+    assert lines[-1].startswith("Web: switched off")
+    assert not any("search, read and browse the web" in l for l in lines)
+    # the document tools are NOT behind the web switch — still named
+    assert "Excel and PowerPoint" in lines[-1]
+
+
+def test_web_access_must_be_a_boolean():
+    assert any("webAccess" in e for e in _errors(_brief(webAccess="no")))
+
+
 def test_every_summary_names_the_template_baseline_last():
+    """Read off `list_agent_tools` on a fresh agent: web + browser, the
+    .xlsx/.pptx makers and attach_file, workspace files — all approval:false.
+    The document tools are not refs, so they were missed once already."""
     for brief in (_brief(), _brief(integrations=[])):
         lines = ca.plan(brief)["summary"]
         assert lines[-1] == ca.BASELINE_LINE
-        assert "search and read the web" in lines[-1] and "without asking" in lines[-1]
+        for capability in ("search, read and browse the web", "Excel and PowerPoint",
+                           "its own workspace", "without asking", "None of that uses your accounts"):
+            assert capability in lines[-1], capability
 
 
 @pytest.mark.parametrize("integrations", [

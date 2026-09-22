@@ -48,6 +48,11 @@ new agents start on dev, and reach staging/prod later by promotion.
 3. `python3 $ASSETS/create_agent.py defaults --agents $WORK/list_agents.json`
    → `{takenSlugs, defaultModel, defaultModelReason, modelsInUse, knownIntegrations}`.
 
+Use this; don't narrate it. The person asked for an agent, not an inventory —
+open with their agent, never with "I found 30 agents on dev". A fact from
+here earns a mention only when it shapes a question (offering the
+integrations that actually exist as the options, say).
+
 Keep this in mind for the whole run. `defaultModel` is what your agents
 actually run on, so it is the model you propose — never one from memory.
 `knownIntegrations` maps an id to its name, so it is how "my inbox" becomes
@@ -239,6 +244,7 @@ Write `$WORK/brief.json`:
     {"id": "hubspot", "access": "write", "writeApproval": false,
      "writeApprovalReason": "<the person's own words asking for it>"}
   ],
+  "webAccess": true,
   "knowledgeBases": ["<kb slug>"],
   "skills": [{"name": "…", "description": "…", "content": "…"}],
   "evals": [{"name": "…", "inputs": [{"role": "user", "content": "…"}],
@@ -256,7 +262,23 @@ Write `$WORK/brief.json`:
   `writeApproval: false` is only for when the person explicitly asked for
   changes without approval, and it needs `writeApprovalReason` in their own
   words. Custom MCP servers: `"kind": "custom"`, `id` = the server slug.
-- **`knowledgeBases`** — only slugs the person named or confirmed.
+- **`webAccess`** — every new agent can search and read the web by default.
+  Set `false` when the job says its answers must come from somewhere specific
+  ("only from our pricing KB", "only from our help docs") or the person says it
+  must never look things up online. The rule then holds because the web tools
+  are gone, not because the instructions ask. An "only from X" agent that can
+  still search the web quietly answers from whatever it finds. Don't ask about
+  it; decide from the job, and the summary names it.
+- **`knowledgeBases`** — only knowledge bases that EXIST. When the person
+  names one, check it with `list_knowledge_bases(app_env="dev")`. That tool is
+  platform-admin only, so if it refuses, take their slug as given and let
+  `attach_knowledge_base` settle it. If it doesn't exist, say so plainly, name
+  any close match, and let them choose: build without it for now, or create
+  it in Soleon first and re-run. **Never put a knowledge base you know is
+  missing into the brief** — its attach fails, and Step 6 stops there with a
+  half-configured agent on dev. **This skill never creates a knowledge base**
+  — that is its own decision about what content the platform holds, and
+  offering to "scaffold" one is out of scope.
 - **`skills`** — only for a distinct, repeatable procedure the soul would
   otherwise have to spell out at length. Most new agents need none.
 - **`schedules`** — recorded for the person to add in Soleon: a scheduled
@@ -336,12 +358,26 @@ as given. Never add, drop or rename fields.
   single-field draft tools (`edit_agent_soul`, `put_standard_eval`,
   `set_agent_tool`, …), then re-validate. Anything that needs their decision
   becomes one question. Never deploy an invalid draft.
-- **Draft valid** → read the draft back with `get_agent_draft(slug,
-  app_env="dev")` and list its `tools` refs in plain words: which can read,
-  which can change, which ask first. Name anything the brief did not ask for.
-  The platform template adds its own (web search, web fetch, workspace
-  files), and the person should see them as they really are, not as the brief
-  imagined. If they want one off, `set_agent_tool(..., enabled=false)`.
+- **Draft valid** → show what the agent will REALLY be able to do, read off
+  the runtime rather than the config. `sync_draft_test_chat(slug,
+  app_env="dev")`, then `list_agent_tools(slug, app_env="dev")`. On `pending`,
+  poll `get_agent_tool_result(slug, app_env="dev", call_id)` every ~2 s until
+  `done`, and never give up — a cold container takes minutes. Say once that
+  it's starting. Don't use `get_agent_draft` for this: the built-in document
+  tools aren't tool refs, so a config readback never shows them. Group the
+  registered tools in plain words:
+  - each **integration** — which tools read, which change, which ask first
+    (`approval`);
+  - **built in** — web (`web_*`, `browser_*`), files it makes and hands over
+    (`create_spreadsheet`, `create_deck`, their `edit_*` twins,
+    `attach_file`), its own workspace (`read_file` … `list_dir`);
+  - **Soleon plumbing** — `discovery_*`, `create_idea`, `emit_document`,
+    which act only inside Soleon's Discovery, Ideas and knowledge-base
+    flows. Name them in one line; don't explain them.
+
+  Name anything the brief did not ask for. The person should see the agent as
+  it really is, not as the brief imagined it. To switch the web off after all,
+  `set_agent_tool(tool_id="sys_web_prompt", enabled=false)`.
   Then say exactly what exists now: the agent is created on dev and running
   its instructions, but **with none of its integrations, knowledge bases,
   skills or evals** — those are saved in a draft that is not live yet. Then

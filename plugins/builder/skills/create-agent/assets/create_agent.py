@@ -209,6 +209,9 @@ def validate(brief: Any, contract: Dict[str, Any],
     if brief.get("description") is not None and not isinstance(brief.get("description"), str):
         errors.append("description must be a string")
 
+    if "webAccess" in brief and not isinstance(brief["webAccess"], bool):
+        errors.append("webAccess must be true or false")
+
     ci = brief.get("channelInstanceId")
     if ci is not None and not (isinstance(ci, str) and CHANNEL_INSTANCE_RE.match(ci)):
         errors.append("channelInstanceId {!r} must look like ci_ followed by 24 hex characters".format(ci))
@@ -420,6 +423,14 @@ def plan(brief: Dict[str, Any]) -> Dict[str, Any]:
             calls.append({"step": "integration:{}:read-only".format(entry["id"]), "tool": "set_agent_tool",
                           "arguments": dict(base, tool_id=_write_ref(entry), enabled=False)})
 
+    if brief.get("webAccess") is False:
+        # ONE ref: `enabled: false` on `sys_web_prompt` makes the runtime skip
+        # both its collapsed and its per-op registration paths, so web_search,
+        # web_fetch and every browser_* op go together (containers/shared/
+        # mcp_server.py, the per-ref enable gate — the Tools page's own toggle).
+        calls.append({"step": "web:off", "tool": "set_agent_tool",
+                      "arguments": dict(base, tool_id=WEB_REF, enabled=False)})
+
     for kb in brief.get("knowledgeBases") or []:
         calls.append({"step": "knowledge-base:{}".format(kb), "tool": "attach_knowledge_base",
                       "arguments": dict(base, kb_slug=kb)})
@@ -483,19 +494,39 @@ def summary(brief: Dict[str, Any]) -> List[str]:
     for s in brief.get("schedules") or []:
         lines.append("Schedule \"{}\" ({} {}): you add this in Soleon — it needs your person id, "
                      "which no tool can look up".format(s["name"], s["cron"], s.get("timezone") or "America/New_York"))
-    lines.append(BASELINE_LINE)
+    lines.append(BASELINE_NO_WEB_LINE if brief.get("webAccess") is False else BASELINE_LINE)
     return lines
 
 
-#: What `create_agent` seeds from the platform template on EVERY new agent,
-#: whatever the brief says — observed live on dev 2026-09-22: `sys_web_search`,
-#: `sys_web_fetch` and the workspace file tools, none behind approval. The
-#: summary used to list only the brief's integrations and, with none, said the
-#: agent "can only talk" — while it could browse the web. Stated on every
-#: summary so the person approves what the agent will really be able to do;
-#: Step 7 then lists the exact refs read back from the draft.
-BASELINE_LINE = ("Like every new Soleon agent, it can also search and read the web, and keep notes in its "
-                 "own workspace, without asking — the exact list is shown after it is created")
+#: The ref that owns web_search / web_fetch / browser_* (AHP-940's owner table).
+WEB_REF = "sys_web_prompt"
+
+#: What EVERY new agent can do, whatever the brief says — read off the
+#: runtime's own registration (`list_agent_tools` on a fresh agent, dev,
+#: 2026-09-22), all with `approval: false`: web_search, web_fetch and
+#: browser_navigate/interact/screenshot; create_spreadsheet (.xlsx),
+#: create_deck (.pptx), their edit twins and attach_file; read/write/edit/
+#: list_dir on its own workspace; plus discovery_*, create_idea and
+#: emit_document, which act only inside Soleon's Discovery / Ideas /
+#: knowledge-base flows. None of them use the person's integrations.
+#:
+#: Stated on every summary because leaving them out was twice a false claim:
+#: the first summary said an agent with no integrations "can only talk" while
+#: it could browse the web, and the fix after it still missed the document
+#: tools — which are not tool REFS, so a config readback never shows them.
+#: Step 7 lists what the runtime actually registers.
+BASELINE_LINE = ("Like every new Soleon agent it can also, without asking: search, read and browse the web; "
+                 "make Excel and PowerPoint files and hand them to you; and keep notes in its own workspace. "
+                 "None of that uses your accounts — the full list is shown after it is created")
+
+#: With `webAccess: false` the baseline claim above would be FALSE, and an
+#: "answers only from our pricing KB" agent that can still search the web
+#: quietly answers from whatever it finds online. So the summary says the web
+#: is off, as a fact about the agent's tools, not a request in its instructions.
+BASELINE_NO_WEB_LINE = ("Web: switched off — it cannot search, read or browse the web. Like every new Soleon "
+                        "agent it can still, without asking: make Excel and PowerPoint files and hand them to "
+                        "you, and keep notes in its own workspace. None of that uses your accounts — the full "
+                        "list is shown after it is created")
 
 
 # ---------------------------------------------------------------------------
