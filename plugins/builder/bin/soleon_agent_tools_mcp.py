@@ -48,7 +48,7 @@ from soleon_mcp_client import (  # noqa: E402
 )
 
 PROTOCOL_VERSION = "2025-03-26"
-SERVER_INFO = {"name": "soleon-agent-tools", "version": "0.4.14"}
+SERVER_INFO = {"name": "soleon-agent-tools", "version": "0.4.15"}
 APPROVAL_NOTE = "Requires human approval: ask the person first, then call with approved=true."
 POLL_INTERVAL_S = 1.5
 

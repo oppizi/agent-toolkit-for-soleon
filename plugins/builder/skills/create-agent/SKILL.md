@@ -62,6 +62,29 @@ as it appears on the Soleon Tools page, and let `attach_mcp_server` decide.
 
 ---
 
+### Looking a platform fact up instead of guessing
+
+Two tools answer "how does Soleon work" from the platform's own reviewed
+documentation — the same System Reference the admin UI shows:
+
+- `search_system_reference(query, limit)` → ranked topics with a section path
+  and the matching snippet.
+- `get_system_reference_topic(topic_id)` → one topic in full, with its default
+  value and allowed values when it documents a setting.
+
+Use them whenever a platform fact would change what you build or say: what a
+setting does, what it defaults to, what a tab controls, what an automation
+needs. That is better than guessing and better than asking the person, who
+is describing an agent, not administering a platform.
+
+Two honesty rules. **Say where a claim came from** when you pass a platform
+fact on ("System Reference, *Loop → Effort*: …"). And the reference is curated
+documentation built from source, not a live read of it — it can lag recent
+changes, and it is currently known to trail dev. So when it disagrees with
+something you observed live (a tool list, a refusal, a config you just read),
+**the live observation wins** and the disagreement is worth mentioning. Never
+let a reference topic override what the platform just told you.
+
 ## Step 1 — The opening description
 
 Use whatever the person already said when they asked for the agent. If they
@@ -144,6 +167,11 @@ questionnaire.
 
 When they answer "I don't know" or "you decide", take the safe default and
 name it as an assumption. Don't ask the same question again in other words.
+
+When an answer turns on how Soleon behaves — "would it remember what we
+discussed last week?", "can it run itself every morning?" — look it up with
+`search_system_reference` and answer them, rather than turning their question
+into another question.
 
 ### Calibration — the same rules on three descriptions
 
@@ -304,6 +332,9 @@ python3 $ASSETS/create_agent.py plan --brief $WORK/brief.json --agents $WORK/lis
 
 Present, in this order:
 
+0. If any choice here rests on a platform behaviour you are not certain of,
+   check it with `search_system_reference` BEFORE presenting it. The summary
+   is what the person approves; a wrong claim in it is the expensive kind.
 1. **What it does** — two or three plain sentences in your words.
 2. **What it will be able to do** — the `summary` lines, **verbatim**. They
    are rendered from the same brief as the calls, so they are exactly what

@@ -89,6 +89,12 @@ agent's instructions carry is named as such, because instructions are
 followed most of the time, not always. The model it proposes is the one your
 existing agents run on, read live, never a pinned id.
 
+It answers platform questions from Soleon's own System Reference rather than
+guessing — `search_system_reference` / `get_system_reference_topic`, the same
+reviewed documentation the admin UI shows — and cites the topic when it passes
+a fact on. That reference is built from source, not read live, so where it
+disagrees with something observed on the platform, the live observation wins.
+
 **What it does NOT do:** create scheduled automations. They need your
 Soleon person id, which no tool can look up, so it hands you the exact
 schedule and prompt to add in Soleon. It also can't list the integration

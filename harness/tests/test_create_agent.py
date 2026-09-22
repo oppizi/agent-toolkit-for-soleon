@@ -448,6 +448,19 @@ def test_skill_has_both_gates_and_never_deploys_on_its_own():
     assert "nothing in Step 6 runs before" in SKILL
 
 
+def test_skill_looks_platform_facts_up_instead_of_guessing():
+    """The interview's weak spot was "how does Soleon work" facts — there was no
+    lookup, so they were guessed or turned into questions. Both reference tools
+    are named, with the rule that a live observation beats a reference topic."""
+    flat = " ".join(SKILL.split())  # the skill is hard-wrapped; assert on the prose
+    for tool in ("search_system_reference", "get_system_reference_topic"):
+        assert tool in SKILL, tool
+    assert "the live observation wins" in flat
+    assert "it can lag recent changes" in flat
+    # and it cites what it repeats
+    assert "System Reference, *Loop → Effort*" in flat
+
+
 def test_skill_forbids_the_questionnaire():
     """The interview adapts to the description: there is no fixed question
     list, the aspects are NOT questions, and plumbing is never asked."""
