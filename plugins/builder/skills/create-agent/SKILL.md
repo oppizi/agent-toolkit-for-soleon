@@ -64,13 +64,20 @@ as it appears on the Soleon Tools page, and let `attach_mcp_server` decide.
 
 ### Looking a platform fact up instead of guessing
 
-Two tools answer "how does Soleon work" from the platform's own reviewed
+Tools answer "how does Soleon work" from the platform's own reviewed
 documentation — the same System Reference the admin UI shows:
 
 - `search_system_reference(query, limit)` → ranked topics with a section path
   and the matching snippet.
 - `get_system_reference_topic(topic_id)` → one topic in full, with its default
   value and allowed values when it documents a setting.
+
+A third tool answers "who is this person" — `resolve_people`, which returns the
+person id (`pn_…`) of the caller and of any email address handed to it, each
+with the channels they can be reached on. A schedule's recipients are person ids
+and nothing else, so this is what lets an automation be built rather than handed
+back. It is a point lookup, not a directory: it cannot search by name, so an
+address the person does not know is a question for them, not a guess for you.
 
 Use them whenever a platform fact would change what you build or say: what a
 setting does, what it defaults to, what a tab controls, what an automation
@@ -115,7 +122,7 @@ answered by the description, or can safely be assumed:
 | **Reads** | Which systems or documents it needs to look at | it works on data at all |
 | **Changes** | What it creates, sends, edits or deletes, and where | it changes anything outside the chat |
 | **Limits** | What must never happen; what should ask first | it can change anything |
-| **Reach** | How it's used: on demand in chat, Slack, on a schedule | a schedule or a channel is implied |
+| **Reach** | How it's used: on demand in chat, Slack, on a schedule — and, for a schedule, WHO it runs for | a schedule or a channel is implied |
 | **Good output** | Format, length, tone, what a great answer contains | the output goes to someone other than them |
 
 Mark each one, silently:
@@ -130,6 +137,13 @@ The defaults you assume rather than ask about:
   person can relax this, but you do not ask whether they want it.
 - **Access is read-only** unless the job needs changes.
 - **Soleon chat** only, unless they mention Slack or a schedule.
+- **A schedule runs for the person you are talking to.** "Send me a digest
+  every morning" needs no question about recipients: call `resolve_people`
+  with no arguments, use `me`, and let the summary name them. Ask only when
+  they mention other people ("the sales team gets it too") — and then ask for
+  the email addresses, which is what `resolve_people` takes.
+- **Timezone** is theirs. Take it from the machine's zone and name it in the
+  summary; it is a correction, not a question.
 - **Professional tone**, concise.
 - **Model:** `defaultModel`.
 - **Name and slug** come from the description.
@@ -210,6 +224,9 @@ whether it may contact them. One or two questions.
 - "Should sending require your approval?" — it does by default. Ask only when
   they signal autonomy ("send them automatically", "without bothering me"), and
   then about what it may do alone, in their terms.
+- "What is your person id?" / "Who should receive the schedule?" when they
+  said "send me" — `resolve_people` already knows who you are talking to. Ask
+  only when the recipients are other people.
 
 ---
 
@@ -278,7 +295,8 @@ Write `$WORK/brief.json`:
   "evals": [{"name": "…", "inputs": [{"role": "user", "content": "…"}],
              "weightedCriteria": [{"text": "…", "points": 60}, {"text": "…", "points": 40}]}],
   "schedules": [{"name": "Morning triage", "cron": "0 8 * * 1-5",
-                 "timezone": "Europe/London", "prompt": "…"}],
+                 "timezone": "Europe/London", "prompt": "…",
+                 "recipients": [{"personId": "pn_…", "name": "Danny Silva"}]}],
   "channelInstanceId": null
 }
 ```
@@ -309,8 +327,21 @@ Write `$WORK/brief.json`:
   offering to "scaffold" one is out of scope.
 - **`skills`** — only for a distinct, repeatable procedure the soul would
   otherwise have to spell out at length. Most new agents need none.
-- **`schedules`** — recorded for the person to add in Soleon: a scheduled
-  automation needs their person id, which no tool can look up. Never invent one.
+- **`schedules`** — created WITH the agent, not handed back. A schedule runs
+  once for each named person, so `recipients` is required and holds platform
+  person ids (`pn_…`). Get them from `resolve_people`: a bare call returns the
+  person you are talking to (`me`), which is the usual answer, and
+  `resolve_people(emails=["sam@…"])` resolves a colleague they name. **Never
+  invent a `pn_` id, and never guess at an email variant** — an address nobody
+  owns comes back `found: false`, and the right move is to ask which address
+  that person signs in with. **Check `reachable` before using an id**: a person
+  in the org directory who has never signed in is a real person with no channel
+  at all, and a schedule addressed to them is refused at deploy — say so and ask
+  for someone else rather than building it. `cron` is 5 fields; `timezone` is a
+  real IANA zone (default `America/New_York`), never `user_local`. The deploy
+  re-checks reachability against the channels THIS agent is attached to, so
+  `AUTOMATION_RECIPIENT_UNAVAILABLE` at Step 7 names a real person who cannot
+  receive it — report which one and why, don't retry.
 - **`slug`** — `python3 $ASSETS/create_agent.py suggest-slug --name "<displayName>"
   --agents $WORK/list_agents.json` returns a free one.
 
@@ -425,11 +456,10 @@ as given. Never add, drop or rename fields.
    person's own login, so the agent can't use it until they connect it in
    Soleon. Name each one. Until then, its tools answer
    `connections_required`.
-2. **Schedules** (`handoff.schedules`): give each one exactly — name, when
-   in plain words and as cron, timezone, and the prompt to paste — and say
-   where it goes (Soleon → the agent → Automations).
-3. **Anything that failed** in Step 6, by name.
-4. Offer: **"Want to try it here? I can pull it into this project with
+2. **Anything that failed** in Step 6, by name. A schedule that could not be
+   created is one of these — say which one and why, rather than telling them
+   to add it themselves as if that were the plan.
+3. Offer: **"Want to try it here? I can pull it into this project with
    `/pull-agent <slug>` so you can talk to it straight away."**
 
 End with a short summary: what was created, whether it's deployed, and the

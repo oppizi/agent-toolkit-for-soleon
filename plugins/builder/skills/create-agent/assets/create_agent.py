@@ -35,6 +35,11 @@ from typing import Any, Dict, List, Optional, Tuple
 APP_ENV = "dev"
 FRAMEWORK = "maverick"
 AUTOMATION_PROMPT_MAX = 4096
+#: A schedule runs once for each NAMED person — there is no "everyone" and no
+#: group (the platform's automation_contract.selected_recipients). Ids come from
+#: the MCP tool resolve_people, which is the only way to obtain one.
+PERSON_ID_RE = re.compile(r"^pn_[0-9a-f]{24}$")
+DEFAULT_TIMEZONE = "America/New_York"
 CHANNEL_INSTANCE_RE = re.compile(r"^ci_[0-9a-f]{24}$")
 # Tool Library ids are kebab-case (`google-sheets`); admin-authored instances
 # are `am_<hex>`; custom MCP servers are slugs. One pattern admits all three.
@@ -380,6 +385,24 @@ def _validate_schedules(brief: Dict[str, Any], errors: List[str]) -> None:
             errors.append("{} ({}): needs the prompt it runs".format(where, s["name"]))
         elif len(s["prompt"].encode("utf-8")) > AUTOMATION_PROMPT_MAX:
             errors.append("{} ({}): prompt is over {} bytes".format(where, s["name"], AUTOMATION_PROMPT_MAX))
+        _validate_recipients(s.get("recipients"), where, s["name"], errors)
+
+
+def _validate_recipients(raw: Any, where: str, name: str, errors: List[str]) -> None:
+    """A schedule with nobody to send to cannot be created — the platform refuses
+    it (AUTOMATION_RECIPIENTS_REQUIRED), so catching it here keeps the failure in
+    the interview, where the question "who is this for?" can still be asked."""
+    if not isinstance(raw, list) or not raw:
+        errors.append("{} ({}): needs recipients — the people it runs for. Get their ids from "
+                      "resolve_people (a bare call returns the person you are talking to)."
+                      .format(where, name))
+        return
+    for j, person in enumerate(raw):
+        pid = person.get("personId") if isinstance(person, dict) else person
+        if not isinstance(pid, str) or not PERSON_ID_RE.match(pid):
+            errors.append("{} ({}): recipients[{}] must be a platform person id (pn_…) from "
+                          "resolve_people, not an email, a name or a group."
+                          .format(where, name, j))
 
 
 # ---------------------------------------------------------------------------
@@ -448,6 +471,19 @@ def plan(brief: Dict[str, Any]) -> Dict[str, Any]:
         calls.append({"step": "eval:{}".format(slugify(e["name"])), "tool": "put_standard_eval",
                       "arguments": dict(base, eval=ev)})
 
+    for s in brief.get("schedules") or []:
+        # One automation per schedule, created up front on the draft and deployed
+        # with everything else. `recipients` is the only field that cannot be
+        # written from the conversation — the interview resolves it through
+        # resolve_people. deliveryChannels is deliberately omitted: absent means
+        # "every channel this agent is attached to", which is what a person means
+        # by "send it to me" whether they read it in Soleon chat or Slack.
+        calls.append({"step": "automation:{}".format(slugify(s["name"])), "tool": "put_agent_automation",
+                      "arguments": dict(base, automation={
+                          "name": s["name"], "type": "schedule", "schedule": s["cron"],
+                          "timezone": s.get("timezone") or DEFAULT_TIMEZONE,
+                          "prompt": s["prompt"], "recipients": _recipient_ids(s)})})
+
     calls.append({"step": "validate", "tool": "validate_agent_draft", "arguments": dict(base)})
 
     return {
@@ -458,12 +494,65 @@ def plan(brief: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+_DAY_NAMES = {"0": "Sunday", "1": "Monday", "2": "Tuesday", "3": "Wednesday",
+              "4": "Thursday", "5": "Friday", "6": "Saturday", "7": "Sunday"}
+
+
+def _cron_in_words(cron: str) -> str:
+    """Plain English for the shapes an interview actually produces, and NOTHING
+    else. The raw expression is printed beside this everywhere it is used, so an
+    unrecognised shape degrades to "on a schedule" rather than to a wrong reading
+    — a summary that misdescribes when an agent runs is worse than one that
+    declines to."""
+    fields = (cron or "").split()
+    if len(fields) != 5:
+        return "on a schedule"
+    minute, hour, dom, month, dow = fields
+    if not (minute.isdigit() and hour.isdigit()) or month != "*" or dom != "*":
+        return "on a schedule"
+    at = "{}:{:02d}".format(int(hour), int(minute))
+    if dow == "*":
+        return "every day at {}".format(at)
+    if dow in ("1-5", "MON-FRI", "mon-fri"):
+        return "every weekday at {}".format(at)
+    if dow in _DAY_NAMES:
+        return "every {} at {}".format(_DAY_NAMES[dow], at)
+    return "on a schedule"
+
+
+def _recipient_ids(schedule: Dict[str, Any]) -> List[str]:
+    """Person ids in the order the interview collected them, de-duplicated. A
+    recipient may be given as a bare id or as `{personId, name}` — the name is
+    for the summary, and the platform only ever stores the id."""
+    ids: List[str] = []
+    for person in schedule.get("recipients") or []:
+        pid = person.get("personId") if isinstance(person, dict) else person
+        if pid not in ids:
+            ids.append(pid)
+    return ids
+
+
+def _recipient_names(schedule: Dict[str, Any]) -> List[str]:
+    names: List[str] = []
+    for person in schedule.get("recipients") or []:
+        if isinstance(person, dict):
+            names.append(person.get("name") or person.get("personId") or "")
+        else:
+            names.append(person)
+    return [n for n in names if n]
+
+
 def handoff(brief: Dict[str, Any]) -> Dict[str, Any]:
-    """What the person has to do in Soleon themselves — named, never skipped."""
+    """What the person has to do in Soleon themselves — named, never skipped.
+
+    Schedules are NOT here any more: they are created by the plan
+    (`put_agent_automation`). Before resolve_people existed there was no way to
+    obtain a recipient id, so the whole automation was handed back and the person
+    re-entered a name, a cron, a timezone and a prompt the interview had already
+    written. Connecting an integration stays a handoff — it is an OAuth consent
+    that only the account holder can give."""
     connect = [display_of(e) for e in _integrations(brief) if e.get("kind", "mcp") == "mcp"]
-    schedules = [{"name": s["name"], "cron": s["cron"], "timezone": s.get("timezone") or "America/New_York",
-                  "prompt": s["prompt"]} for s in brief.get("schedules") or []]
-    return {"connect": connect, "schedules": schedules}
+    return {"connect": connect, "schedules": []}
 
 
 def summary(brief: Dict[str, Any]) -> List[str]:
@@ -492,8 +581,10 @@ def summary(brief: Dict[str, Any]) -> List[str]:
     for e in brief.get("evals") or []:
         lines.append("Tested against: {}".format(e["name"]))
     for s in brief.get("schedules") or []:
-        lines.append("Schedule \"{}\" ({} {}): you add this in Soleon — it needs your person id, "
-                     "which no tool can look up".format(s["name"], s["cron"], s.get("timezone") or "America/New_York"))
+        who = _recipient_names(s)
+        lines.append("Runs on its own \"{}\" — {} {} [{}], for {}".format(
+            s["name"], _cron_in_words(s["cron"]), s.get("timezone") or DEFAULT_TIMEZONE, s["cron"],
+            ", ".join(who) if who else "the people you named"))
     lines.append(BASELINE_NO_WEB_LINE if brief.get("webAccess") is False else BASELINE_LINE)
     return lines
 

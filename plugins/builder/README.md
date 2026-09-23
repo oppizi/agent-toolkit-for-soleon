@@ -95,13 +95,17 @@ reviewed documentation the admin UI shows — and cites the topic when it passes
 a fact on. That reference is built from source, not read live, so where it
 disagrees with something observed on the platform, the live observation wins.
 
-**What it does NOT do:** create scheduled automations. They need your
-Soleon person id, which no tool can look up, so it hands you the exact
-schedule and prompt to add in Soleon. It also can't list the integration
-catalogue (there is no tool for it), so it maps your words to the standard
-integrations it knows, and asks for the name of anything else as it appears
-on the Tools page. To convert an *existing* `.claude/agents/` file, use
-`deploy-agent` instead.
+Scheduled automations are built with the agent, not handed back. A schedule
+runs once for each named person, so it resolves the recipients first with
+`resolve_people` — you, by default, without being asked; a colleague from the
+email address you give — and creates the automation as part of the same
+deploy. `resolve_people` is a point lookup, not a directory: it cannot search
+by name, so an address nobody owns is reported rather than guessed at.
+
+**What it does NOT do:** list the integration catalogue (there is no tool for
+it), so it maps your words to the standard integrations it knows, and asks for
+the name of anything else as it appears on the Tools page. To convert an
+*existing* `.claude/agents/` file, use `deploy-agent` instead.
 
 ## Pull a Soleon agent into Claude Code
 

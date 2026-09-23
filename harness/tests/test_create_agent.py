@@ -261,16 +261,88 @@ def test_knowledge_bases_skills_and_evals_become_their_own_calls():
     assert ev["enabled"] is True and ev["weightedCriteria"][0]["points"] == 60
 
 
-def test_schedules_are_handed_off_never_created():
-    """A scheduled automation needs the person's `pn_` id and no tool returns
-    it — so the plan never calls put_agent_automation with an invented one."""
-    b = _brief(schedules=[{"name": "Morning triage", "cron": "0 8 * * 1-5",
-                           "timezone": "Europe/London", "prompt": "Triage the inbox."}])
-    out = ca.plan(b)
-    assert all(c["tool"] != "put_agent_automation" for c in out["calls"])
-    assert out["handoff"]["schedules"] == [{"name": "Morning triage", "cron": "0 8 * * 1-5",
-                                            "timezone": "Europe/London", "prompt": "Triage the inbox."}]
-    assert any("you add this in Soleon" in l for l in out["summary"])
+DAN = "pn_baedd774105f40979259957c"
+SAM = "pn_1111111111111111111111ab"
+
+
+def _schedule(**over):
+    s = {"name": "Morning triage", "cron": "0 8 * * 1-5", "timezone": "Europe/London",
+         "prompt": "Triage the inbox.",
+         "recipients": [{"personId": DAN, "name": "Danny Silva"}]}
+    s.update(over)
+    return s
+
+
+def test_a_schedule_is_created_with_the_agent_not_handed_back():
+    """Recipients used to be unobtainable, so the whole automation was handed back
+    and the person re-entered a name, a cron, a timezone and a prompt the interview
+    had already written. resolve_people supplies the ids; the plan builds it."""
+    out = ca.plan(_brief(schedules=[_schedule()]))
+    call = next(c for c in out["calls"] if c["tool"] == "put_agent_automation")
+    assert call["arguments"]["automation"] == {
+        "name": "Morning triage", "type": "schedule", "schedule": "0 8 * * 1-5",
+        "timezone": "Europe/London", "prompt": "Triage the inbox.", "recipients": [DAN]}
+    assert out["handoff"]["schedules"] == []
+
+
+def test_the_automation_is_created_before_the_draft_is_validated():
+    steps = [c["step"] for c in _calls(_brief(schedules=[_schedule()]))]
+    assert steps.index("automation:morning-triage") < steps.index("validate")
+
+
+def test_a_recipient_may_be_a_bare_id_and_duplicates_collapse():
+    out = ca.plan(_brief(schedules=[_schedule(recipients=[DAN, {"personId": DAN}, SAM])]))
+    call = next(c for c in out["calls"] if c["tool"] == "put_agent_automation")
+    assert call["arguments"]["automation"]["recipients"] == [DAN, SAM]
+
+
+def test_the_timezone_defaults_rather_than_being_omitted():
+    """An absent timezone would leave "6am" meaning whatever the container thinks."""
+    out = ca.plan(_brief(schedules=[_schedule(timezone=None)]))
+    call = next(c for c in out["calls"] if c["tool"] == "put_agent_automation")
+    assert call["arguments"]["automation"]["timezone"] == ca.DEFAULT_TIMEZONE
+
+
+def test_delivery_channels_are_left_absent_so_every_attached_channel_gets_it():
+    """Absent means "every channel this agent is attached to" — what a person
+    means by "send it to me". An empty list for an env would run it nowhere."""
+    out = ca.plan(_brief(schedules=[_schedule()]))
+    call = next(c for c in out["calls"] if c["tool"] == "put_agent_automation")
+    assert "deliveryChannels" not in call["arguments"]["automation"]
+
+
+def test_the_summary_says_when_it_runs_and_who_for():
+    line = next(l for l in ca.plan(_brief(schedules=[_schedule()]))["summary"]
+                if l.startswith("Runs on its own"))
+    assert "every weekday at 8:00" in line
+    assert "Europe/London" in line and "0 8 * * 1-5" in line
+    assert "Danny Silva" in line
+
+
+@pytest.mark.parametrize("cron,words", [
+    ("0 6 * * *", "every day at 6:00"),
+    ("30 17 * * 1-5", "every weekday at 17:30"),
+    ("0 9 * * 1", "every Monday at 9:00"),
+    ("*/5 * * * *", "on a schedule"),      # unrecognised — never guessed at
+    ("0 6 1 * *", "on a schedule"),        # monthly — not a shape we claim to read
+    ("nonsense", "on a schedule"),
+])
+def test_cron_is_put_in_words_only_when_it_is_certain(cron, words):
+    assert ca._cron_in_words(cron) == words
+
+
+@pytest.mark.parametrize("recipients,needle", [
+    (None, "needs recipients"),
+    ([], "needs recipients"),
+    (["dan@oppizi.com"], "must be a platform person id"),
+    ([{"personId": "everyone"}], "must be a platform person id"),
+    ([{"name": "Danny"}], "must be a platform person id"),
+])
+def test_a_schedule_without_real_recipients_is_refused(recipients, needle):
+    """The platform refuses it too (AUTOMATION_RECIPIENTS_REQUIRED); failing here
+    keeps "who is this for?" a question the interview can still ask."""
+    errors = _errors(_brief(schedules=[_schedule(recipients=recipients)]), AGENTS)
+    assert any(needle in e for e in errors), errors
 
 
 def test_handoff_names_the_accounts_to_connect():
@@ -459,6 +531,19 @@ def test_skill_looks_platform_facts_up_instead_of_guessing():
     assert "it can lag recent changes" in flat
     # and it cites what it repeats
     assert "System Reference, *Loop → Effort*" in flat
+
+
+def test_skill_builds_the_schedule_instead_of_handing_it_back():
+    """The whole automation used to be handed back because no tool could produce a
+    recipient id. The skill must now name the tool that can, default the recipient
+    to the person being interviewed, and never ask for an id."""
+    flat = " ".join(SKILL.split())
+    assert "resolve_people" in SKILL
+    assert "A schedule runs for the person you are talking to." in flat
+    assert '"What is your person id?"' in flat
+    # the old instruction must be gone from every surface
+    assert "you add this in Soleon" not in flat
+    assert "which no tool can look up" not in flat
 
 
 def test_skill_forbids_the_questionnaire():
