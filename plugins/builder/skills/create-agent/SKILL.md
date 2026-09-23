@@ -149,7 +149,8 @@ The defaults you assume rather than ask about:
 - **Timezone** is theirs. Take it from the machine's zone and name it in the
   summary; it is a correction, not a question.
 - **Professional tone**, concise.
-- **Model:** `defaultModel`.
+- **Model:** `defaultModel`, carrying `defaultModelReason` into the brief as
+  `modelReason` so the summary says which model AND why it is that one.
 - **Name and slug** come from the description.
 
 **Ask only what is Missing AND Critical.** Anything else becomes a named
@@ -286,6 +287,7 @@ Write `$WORK/brief.json`:
   "displayName": "Investor Inbox",
   "description": "Flags the investor emails that need a reply each morning.",
   "model": "<defaultModel>",
+  "modelReason": "<defaultModelReason, or your own one-line reason>",
   "soul": "<the soul, markdown>",
   "integrations": [
     {"id": "gmail", "access": "read"},
@@ -301,7 +303,9 @@ Write `$WORK/brief.json`:
   "schedules": [{"name": "Morning triage", "cron": "0 8 * * 1-5",
                  "timezone": "Europe/London", "prompt": "…",
                  "recipients": [{"personId": "pn_…", "name": "Danny Silva"}]}],
-  "channelInstanceId": null
+  "channelInstanceId": null,
+  "channelName": null,
+  "channelType": null
 }
 ```
 
@@ -346,6 +350,21 @@ Write `$WORK/brief.json`:
   re-checks reachability against the channels THIS agent is attached to, so
   `AUTOMATION_RECIPIENT_UNAVAILABLE` at Step 7 names a real person who cannot
   receive it — report which one and why, don't retry.
+- **`model` / `modelReason`** — the id from Step 0's `defaultModel`, and its
+  `defaultModelReason` verbatim. The summary prints the readable name, the
+  exact id and the reason, so the person can see WHICH model they are
+  approving and why it was chosen rather than a bare `us.anthropic.…` string.
+  When they name a model themselves, `modelReason` is "you asked for it".
+- **`channelInstanceId` / `channelName` / `channelType`** — only when they want
+  it reachable somewhere besides Soleon chat. `channelName` is what they call
+  that workspace and `channelType` is `slack` or `talkjs`; both exist so the
+  summary can say *Slack "Oppizi"* instead of `ci_9f3…`, which tells them
+  nothing about what they just wired the agent into. **This plugin cannot look
+  a channel up** — `list_channel_instances` is platform-admin only and is not
+  in the builder plugin's OAuth consent, so asking for the id is not laziness:
+  it is the only way. Ask for it from Soleon → Channels (it starts `ci_`) and
+  for what to call it, in ONE question. If they'd rather not, build for Soleon
+  chat and say a channel can be added there any time.
 - **`slug`** — `python3 $ASSETS/create_agent.py suggest-slug --name "<displayName>"
   --agents $WORK/list_agents.json` returns a free one.
 
@@ -371,10 +390,22 @@ Present, in this order:
 0. If any choice here rests on a platform behaviour you are not certain of,
    check it with `search_system_reference` BEFORE presenting it. The summary
    is what the person approves; a wrong claim in it is the expensive kind.
-1. **What it does** — two or three plain sentences in your words.
-2. **What it will be able to do** — the `summary` lines, **verbatim**. They
-   are rendered from the same brief as the calls, so they are exactly what
-   will be applied, especially read / change / asks-you-first.
+1. **What it does** — two or three plain sentences in your words. This is the
+   ONLY prose in the whole presentation.
+2. **What it will be** — every `summary` entry, as its own line, in the order
+   given:
+
+   ```
+   **<label>:** <value>
+   ```
+
+   The `label` and the `value` are **verbatim** — rendered from the same brief
+   as the calls, so they are exactly what will be applied. Do NOT merge them
+   into sentences, re-order them, drop the ones that look obvious (Name, Model,
+   Channels and Web are the attributes people scan for first), or "improve" a
+   value. A person approving an agent reads this list to find one fact —
+   which model, which channels, what it may change without asking — and a
+   paragraph makes them read all of it to find any of it.
 3. **What I assumed** — every Assumed aspect from Step 2, one line each, so
    they can correct any of them.
 4. **What stays with you** — anything in `handoff` (accounts to connect,
@@ -432,7 +463,8 @@ as given. Never add, drop or rename fields.
   `done`, and never give up — a cold container takes minutes. Say once that
   it's starting. Don't use `get_agent_draft` for this: the built-in document
   tools aren't tool refs, so a config readback never shows them. Group the
-  registered tools in plain words:
+  registered tools in plain words — a labelled line per group, same shape as
+  the Step 5 list, never a paragraph:
   - each **integration** — which tools read, which change, which ask first
     (`approval`);
   - **built in** — web (`web_*`, `browser_*`), files it makes and hands over

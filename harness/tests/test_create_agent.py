@@ -73,6 +73,15 @@ def _calls(brief):
     return ca.plan(brief)["calls"]
 
 
+def _facts(brief):
+    """The summary as `{label: value}` — it is a list of labelled facts, not prose."""
+    return {f["label"]: f["value"] for f in ca.plan(brief)["summary"]}
+
+
+def _lines(brief):
+    return ["{}: {}".format(f["label"], f["value"]) for f in ca.plan(brief)["summary"]]
+
+
 # ---------------------------------------------------------------------------
 # approval: by effect, never by tool name
 # ---------------------------------------------------------------------------
@@ -131,26 +140,26 @@ def test_a_custom_mcp_server_uses_the_custom_ref_prefix():
 # ---------------------------------------------------------------------------
 
 def test_summary_states_read_change_and_ask_first_per_integration():
-    lines = ca.plan(_brief())["summary"]
-    assert "Gmail: can read, cannot change anything" in lines
-    assert "Google Sheets: can read, and can make changes — every change asks you first" in lines
-    assert "Tested against: Flags a real investor reply" in lines
+    facts = _facts(_brief())
+    assert facts["Gmail"] == "can read, cannot change anything"
+    assert facts["Google Sheets"] == "can read, and can make changes — every change asks you first"
+    assert facts["Tested against"] == "Flags a real investor reply"
 
 
 def test_summary_quotes_the_person_when_approval_is_off():
     b = _brief(integrations=[{"id": "hubspot", "access": "write", "writeApproval": False,
                               "writeApprovalReason": "let it update deal stages"}])
-    lines = ca.plan(b)["summary"]
-    assert 'HubSpot: can read and make changes WITHOUT asking you (you said: "let it update deal stages")' in lines
+    assert _facts(b)["HubSpot"] == (
+        'can read and make changes WITHOUT asking you (you said: "let it update deal stages")')
 
 
 def test_no_integrations_never_claims_the_agent_can_only_talk():
     """Every new agent gets the template's web search / web fetch / workspace
     files, none gated (seen live on dev). An earlier summary said an agent
     with no integrations "can only talk" while it could browse the web."""
-    lines = ca.plan(_brief(integrations=[]))["summary"]
-    assert "Integrations: none — it cannot read or change anything in your accounts" in lines
-    assert not any("only talk" in l for l in lines)
+    facts = _facts(_brief(integrations=[]))
+    assert facts["Your accounts"] == "none connected — it cannot read or change anything in them"
+    assert not any("only talk" in v for v in facts.values())
 
 
 def test_web_off_is_one_call_on_the_ref_that_owns_every_web_op():
@@ -170,12 +179,12 @@ def test_web_stays_on_unless_the_brief_says_false():
 
 
 def test_with_web_off_the_summary_never_claims_web_access():
-    lines = ca.plan(_brief(webAccess=False))["summary"]
-    assert lines[-1] == ca.BASELINE_NO_WEB_LINE
-    assert lines[-1].startswith("Web: switched off")
-    assert not any("search, read and browse the web" in l for l in lines)
+    facts = _facts(_brief(webAccess=False))
+    assert facts["Web"] == ca.WEB_OFF_VALUE
+    assert facts["Web"].startswith("OFF")
+    assert not any("browse the web" in v for v in facts.values() if v != facts["Web"])
     # the document tools are NOT behind the web switch — still named
-    assert "Excel and PowerPoint" in lines[-1]
+    assert "Excel and PowerPoint" in facts["Also built in"]
 
 
 def test_web_access_must_be_a_boolean():
@@ -187,11 +196,13 @@ def test_every_summary_names_the_template_baseline_last():
     .xlsx/.pptx makers and attach_file, workspace files — all approval:false.
     The document tools are not refs, so they were missed once already."""
     for brief in (_brief(), _brief(integrations=[])):
-        lines = ca.plan(brief)["summary"]
-        assert lines[-1] == ca.BASELINE_LINE
+        facts = ca.plan(brief)["summary"]
+        assert [f["label"] for f in facts][-2:] == ["Web", "Also built in"]
+        assert facts[-1]["value"] == ca.BASELINE_VALUE
+        assert facts[-2]["value"] == ca.WEB_ON_VALUE
         for capability in ("search, read and browse the web", "Excel and PowerPoint",
-                           "its own workspace", "without asking", "None of that uses your accounts"):
-            assert capability in lines[-1], capability
+                           "its own workspace", "without asking", "without using any of your accounts"):
+            assert capability in facts[-1]["value"] + " " + facts[-2]["value"], capability
 
 
 @pytest.mark.parametrize("integrations", [
@@ -203,12 +214,12 @@ def test_summary_and_calls_agree_on_approval(integrations):
     """Rendered from one brief: the summary's claim about approval is exactly
     what attach_mcp_server + set_agent_tool will apply."""
     out = ca.plan(_brief(integrations=integrations))
-    line = next(l for l in out["summary"] if l.startswith("Gmail:"))
+    line = next(f["value"] for f in out["summary"] if f["label"] == "Gmail")
     calls = {c["step"]: c for c in out["calls"]}
     gated = calls["integration:gmail"]["arguments"]["write_approval"]
     writes_off = "integration:gmail:read-only" in calls
     if writes_off:
-        assert line == "Gmail: can read, cannot change anything"
+        assert line == "can read, cannot change anything"
     elif gated:
         assert line.endswith("every change asks you first")
     else:
@@ -312,8 +323,7 @@ def test_delivery_channels_are_left_absent_so_every_attached_channel_gets_it():
 
 
 def test_the_summary_says_when_it_runs_and_who_for():
-    line = next(l for l in ca.plan(_brief(schedules=[_schedule()]))["summary"]
-                if l.startswith("Runs on its own"))
+    line = _facts(_brief(schedules=[_schedule()]))["Runs on its own"]
     assert "every weekday at 8:00" in line
     assert "Europe/London" in line and "0 8 * * 1-5" in line
     assert "Danny Silva" in line
@@ -603,3 +613,77 @@ def test_the_skill_gives_the_link_and_never_invents_one():
     assert "--server-url \"$SOLEON_MCP_URL\"" in flat
     assert "links.agent" in flat
     assert "give NO URL rather than a guessed one" in flat
+
+
+# ---------------------------------------------------------------------------
+# the summary is LABELLED FACTS — scannable, not a paragraph
+# ---------------------------------------------------------------------------
+
+def test_the_summary_is_labelled_facts_not_prose():
+    """USER 2026-09-23: the old summary was "a long blob of text that is hard to
+    process". Every entry is now addressable by label."""
+    facts = ca.plan(_brief())["summary"]
+    assert all(set(f) == {"label", "value"} for f in facts)
+    assert all(f["label"] and f["value"] for f in facts)
+    # the attributes a person scans for first, always present and in this order
+    labels = [f["label"] for f in facts]
+    assert labels[:3] == ["Name", "Model", "Channels"]
+    assert "Web" in labels
+
+
+@pytest.mark.parametrize("model_id,expected", [
+    ("us.anthropic.claude-sonnet-5", "Claude Sonnet 5"),
+    ("us.anthropic.claude-haiku-4-5-20251001", "Claude Haiku 4.5"),   # a release date is not a version
+    ("us.anthropic.claude-opus-4-8", "Claude Opus 4.8"),              # 4-8 is one number
+    ("us.anthropic.claude-sonnet-5::reasoning", "Claude Sonnet 5"),   # the mode suffix is plumbing
+    ("global.amazon.nova-pro-v1:0", "Nova Pro"),
+    ("moonshotai.kimi-k2.5", "Kimi K2.5"),
+    ("minimax.minimax-m2.5", "Minimax M2.5"),
+    ("", ""),
+])
+def test_a_model_id_is_rendered_as_the_name_a_person_would_say(model_id, expected):
+    assert ca.model_label(model_id) == expected
+
+
+def test_the_model_fact_names_it_shows_the_id_and_says_why():
+    """An id alone is unreadable; a name alone hides what deploys. Both, plus
+    the reason it was chosen — which the person is approving too."""
+    value = _facts(_brief(modelReason="the Claude model most of your agents run on (4 of 6)"))["Model"]
+    assert value == ("Claude Sonnet 5 (`us.anthropic.claude-sonnet-5`) — "
+                     "the Claude model most of your agents run on (4 of 6)")
+
+
+def test_an_unreadable_model_id_still_shows_the_id():
+    assert _facts(_brief(model="weird-thing"))["Model"] == "Weird Thing (`weird-thing`)"
+
+
+def test_with_no_channel_it_says_soleon_chat_only():
+    assert _facts(_brief())["Channels"] == "Soleon chat only — nothing else is connected to it"
+
+
+def test_a_channel_is_named_not_just_its_id():
+    """`ci_9f3…` tells the person nothing about which workspace their agent was
+    just wired into, and Soleon chat is still one of the places it answers."""
+    value = _facts(_brief(channelInstanceId="ci_" + "a" * 24,
+                          channelName="Oppizi", channelType="slack"))["Channels"]
+    assert value == "Soleon chat, and Slack “Oppizi” (`ci_" + "a" * 24 + "`)"
+
+
+def test_a_channel_with_no_name_still_reads_and_warns():
+    """The bind works without a name, so it is a warning, not an error — but the
+    summary then cannot say more than the id, and the skill is told to ask."""
+    brief = _brief(channelInstanceId="ci_" + "b" * 24)
+    assert _facts(brief)["Channels"].startswith("Soleon chat, and the channel you named")
+    assert any("channelName" in w for w in ca.validate(brief, CONTRACT, None)[1])
+
+
+def test_web_is_its_own_fact_because_it_is_the_one_baseline_you_can_switch_off():
+    assert _facts(_brief())["Web"].startswith("on")
+    assert _facts(_brief(webAccess=False))["Web"].startswith("OFF")
+
+
+def test_the_skill_renders_every_fact_on_its_own_line():
+    flat = " ".join(SKILL.split())
+    assert "**<label>:** <value>" in flat
+    assert "Do NOT merge them into sentences" in flat
+    assert "modelReason" in SKILL and "channelName" in SKILL

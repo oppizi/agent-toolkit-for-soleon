@@ -222,6 +222,11 @@ def validate(brief: Any, contract: Dict[str, Any],
     ci = brief.get("channelInstanceId")
     if ci is not None and not (isinstance(ci, str) and CHANNEL_INSTANCE_RE.match(ci)):
         errors.append("channelInstanceId {!r} must look like ci_ followed by 24 hex characters".format(ci))
+    elif ci and not str(brief.get("channelName") or "").strip():
+        # A warning, not an error: the bind works either way. But the person
+        # approves a summary, and `ci_9f3…` tells them nothing about which
+        # workspace they just wired their agent into.
+        warnings.append("channelInstanceId is set with no channelName — the summary can only show the id")
 
     _validate_integrations(brief, errors, warnings)
     _validate_knowledge_bases(brief, errors)
@@ -588,38 +593,112 @@ def handoff(brief: Dict[str, Any]) -> Dict[str, Any]:
     return {"connect": connect, "schedules": []}
 
 
-def summary(brief: Dict[str, Any]) -> List[str]:
-    """Plain-English lines for exactly what the plan applies. The skill shows
-    these VERBATIM, so what the person approves is what runs."""
-    lines = ["Name: {} ({})".format(brief["displayName"], brief["slug"]),
-             "Model: {}".format(brief["model"])]
-    ci = brief.get("channelInstanceId")
-    lines.append("Reached through: Soleon chat" + (" and the channel {}".format(ci) if ci else ""))
+#: A Bedrock model id carries its own name; the region prefix, the mode suffix,
+#: the release date and the `-v1`/`:0` revision are plumbing. There is NO MCP
+#: tool that serves the platform's model catalogue (which is where the SPA's
+#: `displayName` comes from), so the readable name is DERIVED from the id — and
+#: the exact id is always printed beside it, because the id is what deploys.
+_MODEL_REGIONS = ("us.", "eu.", "apac.", "global.")
+
+
+def model_label(model_id: str) -> str:
+    """`us.anthropic.claude-sonnet-5` → `Claude Sonnet 5`. Empty when it can't
+    be read as a model id, in which case the caller shows the id alone."""
+    body = str(model_id or "").strip().split("::", 1)[0]  # drop ::reasoning
+    for prefix in _MODEL_REGIONS:
+        if body.startswith(prefix):
+            body = body[len(prefix):]
+            break
+    body = body.partition(".")[2] or body       # drop the vendor ("anthropic.")
+    body = body.split(":", 1)[0]                # drop a ":0" revision
+    words = [w for w in re.split(r"[-_]", body) if w]
+    while words and (re.fullmatch(r"\d{6,}", words[-1]) or re.fullmatch(r"v\d+", words[-1])):
+        words.pop()                             # a release date, or "-v1"
+    out: List[str] = []
+    for word in words:
+        # `claude-haiku-4-5` is Haiku 4.5, not "Haiku 4 5" — consecutive numbers
+        # are one version number that the id spells with hyphens.
+        if out and re.fullmatch(r"\d+", word) and re.fullmatch(r"[\d.]+", out[-1]):
+            out[-1] = "{}.{}".format(out[-1], word)
+        else:
+            out.append(word if re.fullmatch(r"[\d.]+", word) else word[:1].upper() + word[1:])
+    return " ".join(out)
+
+
+def model_choice(brief: Dict[str, Any]) -> str:
+    """The model fact: the readable name, the exact id, and WHY this one."""
+    model = str(brief.get("model") or "")
+    label = model_label(model)
+    value = "{} (`{}`)".format(label, model) if label else "`{}`".format(model)
+    reason = str(brief.get("modelReason") or "").strip()
+    return "{} — {}".format(value, reason) if reason else value
+
+
+def channel_choice(brief: Dict[str, Any]) -> str:
+    """Where people reach it. Soleon chat is always one of them — an agent is
+    reachable in Soleon whether or not a channel is bound."""
+    instance = str(brief.get("channelInstanceId") or "").strip()
+    if not instance:
+        return "Soleon chat only — nothing else is connected to it"
+    kind = str(brief.get("channelType") or "").strip()
+    name = str(brief.get("channelName") or "").strip()
+    # An id is not a name (and `list_channel_instances` is platform-admin only,
+    # so the name is whatever the person called it). Show the name when there is
+    # one, and the id after it — the id is what binds.
+    named = " ".join(w for w in (kind.title() if kind else "", name and "“{}”".format(name)) if w)
+    return "Soleon chat, and {} (`{}`)".format(named or "the channel you named", instance)
+
+
+def summary(brief: Dict[str, Any]) -> List[Dict[str, str]]:
+    """What the plan applies, as LABELLED FACTS — `{label, value}`, in a fixed
+    order, one fact per entry. The skill renders them verbatim, so what the
+    person approves is what runs.
+
+    Labelled rather than prose because prose is what they have to read; a label
+    is what they SCAN. The first version was a run of full sentences and the
+    person could not pick the model, the channels or the approval rule out of it
+    without reading all of it (USER 2026-09-23: "a long blob of text that is
+    hard to process"). Same facts, addressable.
+    """
+    facts: List[Dict[str, str]] = []
+
+    def fact(label: str, value: str) -> None:
+        facts.append({"label": label, "value": value})
+
+    fact("Name", "{} ({})".format(brief["displayName"], brief["slug"]))
+    fact("Model", model_choice(brief))
+    fact("Channels", channel_choice(brief))
+
     integrations = _integrations(brief)
     if not integrations and not brief.get("knowledgeBases"):
-        lines.append("Integrations: none — it cannot read or change anything in your accounts")
+        fact("Your accounts", "none connected — it cannot read or change anything in them")
     for e in integrations:
         name = display_of(e)
         if e["access"] == "read":
-            lines.append("{}: can read, cannot change anything".format(name))
+            fact(name, "can read, cannot change anything")
         elif e.get("writeApproval", True):
-            lines.append("{}: can read, and can make changes — every change asks you first".format(name))
+            fact(name, "can read, and can make changes — every change asks you first")
         else:
-            lines.append("{}: can read and make changes WITHOUT asking you (you said: \"{}\")".format(
-                name, e["writeApprovalReason"].strip()))
+            fact(name, "can read and make changes WITHOUT asking you (you said: \"{}\")".format(
+                e["writeApprovalReason"].strip()))
     for kb in brief.get("knowledgeBases") or []:
-        lines.append("Knowledge base {}: can search it, cannot change it".format(kb))
+        fact("Knowledge base", "{} — can search it, cannot change it".format(kb))
     for s in brief.get("skills") or []:
-        lines.append("Skill: {}".format(s["name"]))
+        fact("Skill", s["name"])
     for e in brief.get("evals") or []:
-        lines.append("Tested against: {}".format(e["name"]))
+        fact("Tested against", e["name"])
     for s in brief.get("schedules") or []:
         who = _recipient_names(s)
-        lines.append("Runs on its own \"{}\" — {} {} [{}], for {}".format(
+        fact("Runs on its own", "\"{}\" — {} {} [{}], for {}".format(
             s["name"], _cron_in_words(s["cron"]), s.get("timezone") or DEFAULT_TIMEZONE, s["cron"],
             ", ".join(who) if who else "the people you named"))
-    lines.append(BASELINE_NO_WEB_LINE if brief.get("webAccess") is False else BASELINE_LINE)
-    return lines
+
+    # Web is its OWN fact, not a clause inside the baseline: it is the one
+    # baseline capability the brief can switch off, so it is a decision the
+    # person is approving rather than a constant.
+    fact("Web", WEB_ON_VALUE if brief.get("webAccess") is not False else WEB_OFF_VALUE)
+    fact("Also built in", BASELINE_VALUE)
+    return facts
 
 
 #: The ref that owns web_search / web_fetch / browser_* (AHP-940's owner table).
@@ -639,18 +718,17 @@ WEB_REF = "sys_web_prompt"
 #: it could browse the web, and the fix after it still missed the document
 #: tools — which are not tool REFS, so a config readback never shows them.
 #: Step 7 lists what the runtime actually registers.
-BASELINE_LINE = ("Like every new Soleon agent it can also, without asking: search, read and browse the web; "
-                 "make Excel and PowerPoint files and hand them to you; and keep notes in its own workspace. "
-                 "None of that uses your accounts — the full list is shown after it is created")
+#: Web is stated as its own fact because it is the one baseline capability the
+#: brief switches off. With `webAccess: false` the "can browse" claim would be
+#: FALSE, and an "answers only from our pricing KB" agent that can still search
+#: the web quietly answers from whatever it finds online — so the summary states
+#: it as a fact about the agent's TOOLS, not as a request in its instructions.
+WEB_ON_VALUE = "on — it can search, read and browse the web, without asking"
+WEB_OFF_VALUE = "OFF — it cannot search, read or browse the web at all"
 
-#: With `webAccess: false` the baseline claim above would be FALSE, and an
-#: "answers only from our pricing KB" agent that can still search the web
-#: quietly answers from whatever it finds online. So the summary says the web
-#: is off, as a fact about the agent's tools, not a request in its instructions.
-BASELINE_NO_WEB_LINE = ("Web: switched off — it cannot search, read or browse the web. Like every new Soleon "
-                        "agent it can still, without asking: make Excel and PowerPoint files and hand them to "
-                        "you, and keep notes in its own workspace. None of that uses your accounts — the full "
-                        "list is shown after it is created")
+BASELINE_VALUE = ("makes Excel and PowerPoint files and hands them to you, and keeps notes in its own "
+                  "workspace — without asking, and without using any of your accounts. The full list is "
+                  "shown after it is created")
 
 
 # ---------------------------------------------------------------------------
