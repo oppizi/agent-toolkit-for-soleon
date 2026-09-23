@@ -554,3 +554,52 @@ def test_skill_forbids_the_questionnaire():
     assert "never a\nquestionnaire" in SKILL or "never a questionnaire" in SKILL
     for plumbing in ("model id", "slug", "tool id", "cron syntax"):
         assert plumbing in SKILL
+
+
+# ---------------------------------------------------------------------------
+# the link — where the person goes to see what was just made
+# ---------------------------------------------------------------------------
+
+def test_the_plan_carries_a_link_to_the_new_agent_on_the_agents_page():
+    """Everything the person still has to do — connect an account, watch a run,
+    change anything — happens on the Agents page, so finishing without the URL
+    made them go and find it."""
+    links = ca.plan(_brief(), "https://mcp-dev.oppizi.com/mcp")["links"]
+    assert links["agent"] == "https://soleon-dev.oppizi.com/agents/investor-inbox/edit?env=dev"
+    assert links["agents"] == "https://soleon-dev.oppizi.com/agents?env=dev"
+
+
+def test_the_link_follows_the_server_the_toolkit_is_talking_to():
+    """The SPA host and the MCP host are the same env under two names. A toolkit
+    pointed at prod handing out a dev link would send the person to another
+    deployment entirely."""
+    prod = ca.soleon_links("https://mcp.oppizi.com/mcp", "investor-inbox")
+    assert prod["agent"].startswith("https://soleon.oppizi.com/agents/investor-inbox/edit")
+    branch = ca.soleon_links("https://mcp-ahp-889.oppizi.com/mcp", "x")
+    assert branch["agents"].startswith("https://soleon-ahp-889.oppizi.com/agents")
+    # The base domain is a parameter of the platform's own rule (client installs
+    # carry their own), so it is derived too rather than pinned to oppizi.com.
+    other = ca.soleon_links("https://mcp-dev.acme.example/mcp", "x")
+    assert other["agent"].startswith("https://soleon-dev.acme.example/agents/x/edit")
+
+
+@pytest.mark.parametrize("url", [
+    None, "", "not a url",
+    "https://abc123.execute-api.us-east-1.amazonaws.com/prod/mcp",  # the raw API-GW URL
+    "http://localhost:8080/mcp",
+])
+def test_a_host_outside_the_rule_gets_no_link_rather_than_a_guess(url):
+    """A wrong link reads as authoritative: it 404s, or it opens someone else's
+    env. Saying "open it from your Agents page" is the honest answer."""
+    assert ca.soleon_links(url, "investor-inbox") == {}
+
+
+def test_the_plan_without_a_server_url_simply_has_no_links():
+    assert ca.plan(_brief())["links"] == {}
+
+
+def test_the_skill_gives_the_link_and_never_invents_one():
+    flat = " ".join(SKILL.split())
+    assert "--server-url \"$SOLEON_MCP_URL\"" in flat
+    assert "links.agent" in flat
+    assert "give NO URL rather than a guessed one" in flat

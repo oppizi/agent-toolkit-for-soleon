@@ -32,7 +32,11 @@ block, (3) the single next action. Never a raw traceback alone.
 Resolve `$ASSETS` = this skill's `assets/` directory and `$PLUGIN` = the
 plugin root (two levels above `skills/create-agent/`). `$WORK` =
 `.soleon/new-agents/<slug>/` (project-relative; create it once the slug is
-settled — before that, use `.soleon/new-agents/_draft/`). Every MCP tool below
+settled — before that, use `.soleon/new-agents/_draft/`). `$SOLEON_MCP_URL` =
+the URL the plugin's `.mcp.json` server points at: the plugin user config
+`server_url` when set, else `https://mcp-dev.oppizi.com/mcp` — the SAME server
+the tools below are connected to, and what Step 5 derives the Soleon link from.
+Every MCP tool below
 is on the `soleon-agent-toolkit` server, and every call uses `app_env: "dev"`:
 new agents start on dev, and reach staging/prod later by promotion.
 
@@ -352,13 +356,14 @@ Once the slug is settled, move the work files into `.soleon/new-agents/<slug>/`.
 ## Step 5 — Show what you will build (gate 1)
 
 ```
-python3 $ASSETS/create_agent.py plan --brief $WORK/brief.json --agents $WORK/list_agents.json
+python3 $ASSETS/create_agent.py plan --brief $WORK/brief.json --agents $WORK/list_agents.json \
+  --server-url "$SOLEON_MCP_URL"
 ```
 
 - **Exit 1** → `errors` are yours, not the person's: fix the brief and re-run.
   Only an error that needs a decision from them (such as a slug they chose
   that is taken) becomes a question.
-- **Exit 0** → `{calls, deploy, handoff, summary, warnings}`. Save it as
+- **Exit 0** → `{calls, deploy, handoff, summary, links, warnings}`. Save it as
   `$WORK/plan.json`.
 
 Present, in this order:
@@ -446,7 +451,8 @@ as given. Never add, drop or rename fields.
   ask: **"Deploy it to dev?"**
   - **A clear yes** → run `plan.json`'s `deploy` call. Report the result.
   - **Anything else** → stop. The draft stays, and they can review it and
-    deploy from Soleon whenever they like.
+    deploy from Soleon whenever they like — give them `links.agent`, which is
+    the page they would do that on.
 
 ---
 
@@ -459,8 +465,16 @@ as given. Never add, drop or rename fields.
 2. **Anything that failed** in Step 6, by name. A schedule that could not be
    created is one of these — say which one and why, rather than telling them
    to add it themselves as if that were the plan.
-3. Offer: **"Want to try it here? I can pull it into this project with
+3. **Where it lives** — give `links.agent` from `plan.json` as a plain URL on
+   its own line, labelled with the agent's display name: it opens the new
+   agent on Soleon's Agents page, which is where they connect the accounts in
+   (1), watch it run, and edit anything from here on. Every handoff above
+   happens there, so the person should never have to go and find it. When
+   `links` is empty the toolkit is pointed at a host this skill has no rule
+   for — say "open it from your Soleon Agents page" and give NO URL rather
+   than a guessed one.
+4. Offer: **"Want to try it here? I can pull it into this project with
    `/pull-agent <slug>` so you can talk to it straight away."**
 
-End with a short summary: what was created, whether it's deployed, and the
-one next thing they need to do.
+End with a short summary: what was created, whether it's deployed, the link,
+and the one next thing they need to do.

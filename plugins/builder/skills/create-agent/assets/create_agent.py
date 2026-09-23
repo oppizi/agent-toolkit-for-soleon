@@ -16,7 +16,8 @@ to ask about first.
     validate     --brief brief.json [--agents list_agents.json]
                  → {valid, errors, warnings}; exit 1 when invalid
     plan         --brief brief.json [--agents list_agents.json]
-                 → {calls, deploy, handoff, summary}; exit 1 when invalid
+                 [--server-url https://mcp-dev.oppizi.com/mcp]
+                 → {calls, deploy, handoff, summary, links}; exit 1 when invalid
 
 `list_agents.json` is the raw answer of the MCP tool `list_agents(app_env="dev")`.
 
@@ -31,6 +32,7 @@ import re
 import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
+from urllib.parse import urlsplit
 
 APP_ENV = "dev"
 FRAMEWORK = "maverick"
@@ -418,7 +420,37 @@ def display_of(entry: Dict[str, Any]) -> str:
     return KNOWN_INTEGRATIONS.get(entry["id"], entry["id"])
 
 
-def plan(brief: Dict[str, Any]) -> Dict[str, Any]:
+#: The Soleon SPA and the MCP server are two vanity hostnames over the SAME
+#: deployment, and each is a pure function of the env name: `mcp[-{env}].{base}`
+#: and `soleon[-{env}].{base}` (the platform's `stacks/_mcp_naming.py` and
+#: `stacks/ui_stack.py`, which mirror each other deliberately — prod drops the
+#: suffix, every other env carries it). So the page the person opens is DERIVED
+#: from the server this toolkit is connected to, never assumed.
+_MCP_HOST_RE = re.compile(r"^mcp(?:-(?P<env>[a-z0-9-]+))?\.(?P<base>[a-z0-9-]+(?:\.[a-z0-9-]+)+)$")
+
+
+def soleon_links(server_url: Optional[str], slug: str) -> Dict[str, str]:
+    """Where to see the agent afterwards: `{agent, agents}`, or `{}` when the
+    server's hostname is not one this rule covers.
+
+    Nothing is guessed. A toolkit pointed at prod must not hand out a dev link,
+    and a host that doesn't match (a tunnel, a localhost dev server, an
+    execute-api URL) gets NO link rather than a plausible one — a wrong link
+    reads as authoritative and either 404s or opens somebody else's env.
+    """
+    match = _MCP_HOST_RE.match((urlsplit(server_url or "").hostname or "").lower())
+    if not match:
+        return {}
+    env, base = match.group("env"), match.group("base")
+    spa = "soleon.{}".format(base) if env is None else "soleon-{}.{}".format(env, base)
+    # `?env=` is the SPA's app-env selector and the shareable form it stamps on
+    # every route (`ui/src/state/EnvContext.tsx`). APP_ENV is the partition every
+    # call in the plan writes to, so the link opens the agent that was just made.
+    return {"agent": "https://{}/agents/{}/edit?env={}".format(spa, slug, APP_ENV),
+            "agents": "https://{}/agents?env={}".format(spa, APP_ENV)}
+
+
+def plan(brief: Dict[str, Any], server_url: Optional[str] = None) -> Dict[str, Any]:
     slug = brief["slug"]
     base = {"slug": slug, "app_env": APP_ENV}
     calls: List[Dict[str, Any]] = []
@@ -491,6 +523,7 @@ def plan(brief: Dict[str, Any]) -> Dict[str, Any]:
         "deploy": {"step": "deploy", "tool": "deploy_agent_draft", "arguments": dict(base)},
         "handoff": handoff(brief),
         "summary": summary(brief),
+        "links": soleon_links(server_url, slug),
     }
 
 
@@ -641,6 +674,10 @@ def main(argv: Optional[List[str]] = None) -> int:
         c = sub.add_parser(name)
         c.add_argument("--brief", required=True)
         c.add_argument("--agents")
+        if name == "plan":
+            # Optional: without it the plan simply carries no links. The skill
+            # passes the URL of the server it is talking to.
+            c.add_argument("--server-url")
     args = p.parse_args(argv)
 
     contract = load_contract(_plugin_root(args.plugin_root))
@@ -662,7 +699,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     if args.cmd == "validate" or errors:
         _emit({"valid": not errors, "errors": errors, "warnings": warnings})
         return 0 if not errors else 1
-    out = plan(brief)
+    out = plan(brief, getattr(args, "server_url", None))
     out["warnings"] = warnings
     _emit(out)
     return 0
