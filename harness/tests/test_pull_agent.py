@@ -265,6 +265,7 @@ def test_materialize_refuses_a_pending_tools_envelope(tmp_path):
     ("us.anthropic.claude-opus-4-6-v1", "opus", False),
     ("us.anthropic.claude-sonnet-4-5-20250929-v1:0", "sonnet", False),
     ("global.anthropic.claude-haiku-4-5-20251001-v1:0", "haiku", False),
+    ("us.anthropic.claude-fable-5-1", "fable", False),
     ("moonshot.kimi-k2-thinking", None, True),
     ("us.amazon.nova-pro-v1:0", None, True),
     ("", None, True),
@@ -277,13 +278,46 @@ def test_default_model_mapping(platform_model, suggested, warns):
         assert "no local equivalent" in warning
 
 
+def test_a_model_that_maps_is_an_answer_not_a_question():
+    """USER 2026-09-23: the skill asked "runs on us.anthropic.claude-sonnet-5 —
+    run it locally on sonnet?", a question with one possible answer. `ask` is
+    decided here so the skill cannot ask it again."""
+    decision = pull_agent.model_decision("us.anthropic.claude-sonnet-5")
+    assert decision["suggested"] == "sonnet" and decision["ask"] is False
+    assert decision["warning"] is None
+
+
+@pytest.mark.parametrize("platform_model", ["moonshot.kimi-k2-thinking", "us.amazon.nova-pro-v1:0", ""])
+def test_only_a_model_with_no_local_alias_is_asked_about(platform_model):
+    decision = pull_agent.model_decision(platform_model)
+    assert decision["ask"] is True and decision["suggested"] is None
+    assert decision["warning"]
+
+
+def test_fable_runs_locally_and_is_never_called_non_anthropic():
+    """Claude Fable is a Claude model and a Claude Code alias. Before it was in
+    LOCAL_MODELS it fell through to the "not an Anthropic model" branch — a
+    false claim, and a question the person could not usefully answer."""
+    assert "fable" in pull_agent.LOCAL_MODELS
+    assert pull_agent.model_decision("us.anthropic.claude-fable-5-1")["ask"] is False
+
+
+def test_an_unmapped_claude_family_asks_without_calling_it_non_anthropic():
+    """A future Claude family: still a question, but the warning must not tell
+    the person their Anthropic model is not an Anthropic model."""
+    decision = pull_agent.model_decision("us.anthropic.claude-newthing-9")
+    assert decision["ask"] is True
+    assert "not an Anthropic model" not in decision["warning"]
+    assert "does not map yet" in decision["warning"]
+
+
 def test_default_model_subcommand_reads_the_prompt_model(tmp_path):
     agent_dir = make_pulled_dir(tmp_path)
     proc = _run("default-model", "--dir", str(agent_dir), "--plugin-root", str(PLUGIN), cwd=tmp_path)
     assert proc.returncode == 0, proc.stderr
     out = json.loads(proc.stdout)
-    assert out == {"platformModel": DOCUMENT["model"], "suggested": "sonnet", "warning": None,
-                   "choices": ["opus", "sonnet", "haiku"]}
+    assert out == {"platformModel": DOCUMENT["model"], "suggested": "sonnet", "ask": False,
+                   "warning": None, "choices": ["opus", "sonnet", "haiku", "fable"]}
 
 
 def test_adopt_etag_takes_the_conflicting_drafts_etag(pulled):
@@ -439,3 +473,13 @@ def test_the_toolkit_rule_is_derived_from_the_running_plugin(tmp_path):
 
     # a plugin we cannot read must not crash the pull — it is reported instead
     assert pull_agent.plugin_mcp_allow_rules(tmp_path / "missing") == []
+
+
+def test_the_skill_asks_only_when_ask_is_true():
+    skill = (PLUGIN / "skills" / "pull-agent" / "SKILL.md").read_text(encoding="utf-8")
+    flat = " ".join(skill.split())
+    assert "`ask` decides, and you never ask when it is false" in flat
+    assert "**`ask: false`** → use `suggested`. Don't stop and don't confirm" in flat
+    # the old wording asked whenever a suggestion existed
+    assert "Run it locally on **<suggested>**?" not in flat
+    assert "Only `opus`, `sonnet`, `haiku` are valid answers." not in flat

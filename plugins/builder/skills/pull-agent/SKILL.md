@@ -100,17 +100,23 @@ Then download within 15 minutes:
   to snapshot (the emulation can still run without it — offer to continue
   with an empty `workspace/` only if the user says so).
 
-### Step 5 — Choose the local model (ONE question, spec D6/D16)
+### Step 5 — The local model (a question ONLY when there is a choice)
 Run `python3 $ASSETS/pull_agent.py default-model --dir $DIR` →
-`{platformModel, suggested, warning, choices}`.
-- `suggested` set → ask ONE plain-text question: "This agent runs on
-  `<platformModel>` on Soleon. Run it locally on **<suggested>**? (opus /
-  sonnet / haiku)". Accept the default on a bare yes.
-- `suggested` null → the agent's model has NO local equivalent (Kimi, Nova,
-  GLM, …). Say so with the `warning`, and ask which Claude model to use —
-  no default; do not pick silently. The local run reasons on a different
-  model family; say the behaviour will differ.
-Only `opus`, `sonnet`, `haiku` are valid answers.
+`{platformModel, suggested, ask, warning, choices}`. **`ask` decides, and you
+never ask when it is false** — "this agent runs on
+`us.anthropic.claude-sonnet-5`, run it locally on sonnet?" is a question with
+one possible answer, and asking it hands the person a decision you have
+already made (USER 2026-09-23).
+- **`ask: false`** → use `suggested`. Don't stop and don't confirm; say it in
+  passing in Step 6's report ("running locally on sonnet — the local build of
+  the model Soleon runs it on") and mention once that they can say "use opus"
+  to change it.
+- **`ask: true`** → there is no local alias for this model (Kimi, Nova, GLM, or
+  a Claude family this toolkit does not map yet). Say so with the `warning`,
+  and ask which to use — no default, and never pick silently. When it is not a
+  Claude model at all, say the local run reasons on a different model family,
+  so its behaviour will differ.
+Only the aliases in `choices` are valid answers.
 
 ### Step 6 — Materialize
 ```

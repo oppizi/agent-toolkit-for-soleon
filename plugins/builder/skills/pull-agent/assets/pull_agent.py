@@ -55,21 +55,50 @@ def _import_document_module(plugin_root: Path):
 # Model mapping (spec D6 / D16)
 # ---------------------------------------------------------------------------
 
-LOCAL_MODELS = ("opus", "sonnet", "haiku")
+#: The Claude Code model aliases a local subagent's frontmatter can name.
+#: `fable` belongs here — Claude Fable is a Claude model and runs locally, and
+#: without it `us.anthropic.claude-fable-5-1` fell through to the "not an
+#: Anthropic model" branch below: a false claim AND a question nobody needed.
+LOCAL_MODELS = ("opus", "sonnet", "haiku", "fable")
 
 
 def suggest_local_model(platform_model: str) -> Tuple[Optional[str], Optional[str]]:
-    """(suggested alias | None, warning | None) for a Bedrock model id."""
+    """(suggested alias | None, warning | None) for a Bedrock model id.
+
+    A suggestion is an ANSWER, not a proposal: `us.anthropic.claude-sonnet-5`
+    runs locally on `sonnet`, and there is nothing for the person to decide.
+    The caller asks only when this returns None — see `model_decision`.
+    """
     pm = (platform_model or "").lower()
     for alias in LOCAL_MODELS:
         if alias in pm:
             return alias, None
     if not pm:
         return None, "the agent declares no model — pick the Claude model to run locally"
+    if "anthropic" in pm:
+        # A Claude family this toolkit has no alias for yet. Saying "not an
+        # Anthropic model" here would be plainly false to anyone reading the id.
+        return None, (
+            "no local alias for {!r} — it is a Claude model this toolkit does not map yet, so "
+            "pick the closest of {}".format(platform_model, ", ".join(LOCAL_MODELS))
+        )
     return None, (
         "no local equivalent: the agent runs on {!r}, which is not an Anthropic model; the "
         "local emulation will reason on a Claude model you choose (spec D16)".format(platform_model)
     )
+
+
+def model_decision(platform_model: str) -> Dict[str, Any]:
+    """Whether the local model is a QUESTION or already settled.
+
+    `ask` is computed here rather than left to the skill's judgement, because a
+    skill reading `suggested` and asking anyway is exactly what happened: an
+    agent on `us.anthropic.claude-sonnet-5` was asked "run it locally on
+    sonnet?" — a question with one possible answer (USER 2026-09-23).
+    """
+    suggested, warning = suggest_local_model(platform_model)
+    return {"platformModel": platform_model or None, "suggested": suggested,
+            "ask": suggested is None, "warning": warning, "choices": list(LOCAL_MODELS)}
 
 
 #: The loop's effort ladder (containers/shared/effort.py STOPS) → Claude Code effort.
@@ -941,9 +970,7 @@ def default_model(args: argparse.Namespace) -> int:
         cfg = _load_optional(doc, agent_dir / doc.PULL_DIR / "config.json")
         if isinstance(cfg, dict) and isinstance(cfg.get("config"), dict):
             platform_model = str(((cfg["config"].get("agents") or {}).get("defaults") or {}).get("model") or cfg["config"].get("model") or "")
-    suggested, warning = suggest_local_model(platform_model)
-    print(json.dumps({"platformModel": platform_model or None, "suggested": suggested, "warning": warning,
-                      "choices": list(LOCAL_MODELS)}))
+    print(json.dumps(model_decision(platform_model)))
     return 0
 
 
