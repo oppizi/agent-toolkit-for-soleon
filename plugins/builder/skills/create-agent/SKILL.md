@@ -359,12 +359,20 @@ Write `$WORK/brief.json`:
   it reachable somewhere besides Soleon chat. `channelName` is what they call
   that workspace and `channelType` is `slack` or `talkjs`; both exist so the
   summary can say *Slack "Oppizi"* instead of `ci_9f3…`, which tells them
-  nothing about what they just wired the agent into. **This plugin cannot look
-  a channel up** — `list_channel_instances` is platform-admin only and is not
-  in the builder plugin's OAuth consent, so asking for the id is not laziness:
-  it is the only way. Ask for it from Soleon → Channels (it starts `ci_`) and
-  for what to call it, in ONE question. If they'd rather not, build for Soleon
-  chat and say a channel can be added there any time.
+  nothing about what they just wired the agent into. **Look it up — don't ask
+  for an id.** `list_channel_instances()` returns every instance with its
+  `name`, `type` and `ci_…` id:
+  - **one match** for what they said ("Slack") → take it, and NAME it in the
+    summary rather than confirming an id with them;
+  - **several** → ask which, by name, listing only the names;
+  - **none of that type** → say it plainly ("there's no Slack connected to
+    this Soleon yet"), build for Soleon chat, and say it can be added later in
+    Soleon → Channels.
+
+  That tool is **platform-admin only**, so a member gets a refusal, not a list
+  — exactly like `list_knowledge_bases`. Then, and only then, ask them for the
+  id from Soleon → Channels (it starts `ci_`) and what to call it, in ONE
+  question; if they'd rather not, build for Soleon chat.
 - **`slug`** — `python3 $ASSETS/create_agent.py suggest-slug --name "<displayName>"
   --agents $WORK/list_agents.json` returns a free one.
 

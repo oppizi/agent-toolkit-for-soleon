@@ -682,6 +682,16 @@ def test_web_is_its_own_fact_because_it_is_the_one_baseline_you_can_switch_off()
     assert _facts(_brief(webAccess=False))["Web"].startswith("OFF")
 
 
+def test_the_skill_looks_a_channel_up_before_asking_for_an_id():
+    """`channel.read` joined the builder bundle 2026-09-23, so the skill can name
+    the workspace itself. Asking for a `ci_…` id is the FALLBACK for a member the
+    admin-only tool refuses, never the opening move."""
+    flat = " ".join(SKILL.split())
+    assert "list_channel_instances()" in flat
+    assert "Look it up — don't ask for an id." in flat
+    assert "**platform-admin only**, so a member gets a refusal" in flat
+
+
 def test_the_skill_renders_every_fact_on_its_own_line():
     flat = " ".join(SKILL.split())
     assert "**<label>:** <value>" in flat
