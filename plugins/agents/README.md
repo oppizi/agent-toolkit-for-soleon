@@ -21,7 +21,7 @@ python3 harness/sync_bundles.py --remove builder agents my-agent
 
 **Keep entries flat.** `agents/` is scanned *recursively*, and a subdirectory
 becomes part of the agent's scoped id: `agents/review/security.md` in
-`soleon-builder` registers as `soleon-builder:review:security`. Flat files keep
+`builder` registers as `builder:review:security`. Flat files keep
 the id `soleon-<bundle>:<name>`.
 
 **Never set the `agents` key in `plugin.json`.** Unlike `skills`, which is

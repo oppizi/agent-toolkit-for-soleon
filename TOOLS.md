@@ -1,6 +1,6 @@
 # Soleon Agent Toolkit — Tool Reference
 
-The `soleon-agent-toolkit` MCP server exposes the Soleon platform's admin capabilities
+The `soleon` MCP server exposes the Soleon platform's admin capabilities
 as governed MCP tools. Tools are implemented server-side (agent-infra `lambda/mcp_server/`)
 and discovered live by any connected MCP client — installing this plugin gives you every
 tool the server publishes, automatically.

@@ -1,11 +1,11 @@
-# soleon-admin
+# admin
 
-The full Soleon surface for platform administrators. Everything `soleon-builder`
+The full Soleon surface for platform administrators. Everything `builder`
 covers, plus the five families whose tools are platform-admin-only: channel instance
 reads, custom-MCP instance reads, on-demand eval runs, and the discovery workspace.
 
 Install this if you are a Soleon platform admin. If you build agents but do not
-administer the platform, `soleon-builder` is the better fit — it consents to less.
+administer the platform, `builder` is the better fit — it consents to less.
 
 ## Scopes this bundle requests
 
@@ -22,7 +22,7 @@ soleon-mcp/wiki.read       soleon-mcp/wiki.write      soleon-mcp/discovery.read
 soleon-mcp/discovery.write
 ```
 
-The five beyond `soleon-builder` — `channel.read`, `mcp.read`, `eval.run`,
+The five beyond `builder` — `channel.read`, `mcp.read`, `eval.run`,
 `discovery.read`, `discovery.write` — cover only tools Soleon already restricts to
 platform admins. That is exactly why they are here and not in a lower bundle.
 
@@ -32,13 +32,13 @@ One: **`/write-evals`** — designing evals whose score reflects the behaviour u
 test rather than resemblance to a reference answer. Read it before writing an eval,
 and whenever a suite passes but you don't trust it.
 
-It is the same skill `soleon-builder` ships, byte for byte: both bundles are
+It is the same skill `builder` ships, byte for byte: both bundles are
 composed from one shared source, so the two copies can never drift apart.
 
 ## What this plugin does NOT do
 
 It ships **no commands**, and none of the agent build loop. `/deploy-agent` — local
-identity file → validated `POST /agents` → deploy — lives in `soleon-builder` only.
+identity file → validated `POST /agents` → deploy — lives in `builder` only.
 Beyond `/write-evals`, this bundle is a connection and a scope pin.
 
 Most importantly, it does **not** grant you admin. A bundle widens what you
@@ -51,7 +51,7 @@ the token, not a role.
 
 ```
 /plugin marketplace add oppizi/agent-toolkit-for-soleon
-/plugin install soleon-admin@agent-toolkit-for-soleon
+/plugin install admin@agent-toolkit-for-soleon
 ```
 
 Then sign in — the first request to the server triggers the OAuth flow in your
@@ -66,8 +66,8 @@ breaks OAuth discovery.
 
 `soleon-deploy-agent` has been replaced by three role bundles and there is **no
 alias**. Uninstall it and install the bundle matching what you do. Note that the
-`deploy-agent` skill now lives in **`soleon-builder`**, not here — if that skill is
-what you came for, install `soleon-builder` (or both). `/write-evals` is available
+`deploy-agent` skill now lives in **`builder`**, not here — if that skill is
+what you came for, install `builder` (or both). `/write-evals` is available
 in both.
 
 Its **Soleon access token** setting is obsolete. Authentication is now the OAuth

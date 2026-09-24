@@ -1,6 +1,6 @@
-# soleon-builder
+# builder
 
-The Soleon agent build loop: everything `soleon-observer` can read, plus the
+The Soleon agent build loop: everything `observer` can read, plus the
 scopes to create, update, deploy, promote and delete agents, bind channels, and
 author custom MCP servers and knowledge bases. It carries the `deploy-agent`
 skill.
@@ -10,7 +10,7 @@ skill.
 
 ## Scopes this bundle requests
 
-Sixteen — the eight `soleon-observer` reads, plus:
+Sixteen — the eight `observer` reads, plus:
 
 ```
 soleon-mcp/agent.write   soleon-mcp/agent.deploy  soleon-mcp/agent.delete
@@ -24,7 +24,7 @@ against your real permissions, so you see and reach only the tools you are alrea
 entitled to.
 
 The admin-only families (`channel.read`, `mcp.read`, `eval.run`, `discovery.*`) are
-deliberately absent; they live in `soleon-admin`.
+deliberately absent; they live in `admin`.
 
 ## What the deploy-agent skill does
 
@@ -48,7 +48,7 @@ your machine without touching the network, so the prototype never pays the
 token cost of loading a complex remote server's full tool catalog just to
 interview you. Only after you review the assets and explicitly confirm does the
 skill deploy them, by calling the `private_deploy_agent` tool on the bundled
-`soleon-agent-toolkit` MCP server (a stateless HTTP server you sign in to over
+`soleon` MCP server (a stateless HTTP server you sign in to over
 OAuth — see *Authentication* below). Nothing is sent until you say so.
 
 **What this plugin does NOT do:** it does not deploy anything *without your
@@ -84,7 +84,7 @@ this one:
 
 ```
 /plugin uninstall soleon-deploy-agent@agent-toolkit-for-soleon
-/plugin install soleon-builder@agent-toolkit-for-soleon
+/plugin install builder@agent-toolkit-for-soleon
 ```
 
 The `deploy-agent` skill, the contract, and the bundled engine are unchanged. Your
@@ -92,7 +92,7 @@ old **Soleon access token** setting is obsolete — authentication is now the OA
 flow above, so that long-lived JWT is no longer read from your keychain and can be
 deleted.
 
-If you only ever *read* from Soleon, consider `soleon-observer` instead — it
+If you only ever *read* from Soleon, consider `observer` instead — it
 consents to no writes at all.
 
 ## Install
@@ -101,14 +101,14 @@ From the GitHub marketplace:
 
 ```
 /plugin marketplace add oppizi/agent-toolkit-for-soleon
-/plugin install soleon-builder@agent-toolkit-for-soleon
+/plugin install builder@agent-toolkit-for-soleon
 ```
 
 Or from a local checkout of [oppizi/agent-toolkit-for-soleon](https://github.com/oppizi/agent-toolkit-for-soleon):
 
 ```
 /plugin marketplace add ./agent-toolkit-for-soleon
-/plugin install soleon-builder@agent-toolkit-for-soleon
+/plugin install builder@agent-toolkit-for-soleon
 ```
 
 (The only contents that matter at runtime are this directory's
@@ -140,7 +140,7 @@ bundled skill → validate → write three files beside the spec:
 
 Then it shows you exactly what will be deployed and, **only on your explicit
 confirmation**, deploys the validated `request_body.json` by calling
-`private_deploy_agent` on the `soleon-agent-toolkit` MCP server. Decline and the
+`private_deploy_agent` on the `soleon` MCP server. Decline and the
 JSON files simply stay on disk — nothing is sent.
 
 Direct converter invocation (no LLM, spec already in hand):
@@ -164,7 +164,7 @@ matters more than it sounds — populating `expectedOutput` silently makes half 
 score measure *resemblance to your reference answer* rather than correctness, which
 is the usual reason a suite goes green while testing very little.
 
-`/write-evals` also ships in `soleon-admin`, byte for byte: both bundles are
+`/write-evals` also ships in `admin`, byte for byte: both bundles are
 composed from one shared source, so the two copies cannot drift apart.
 
 ## Supported platforms (bundled engine)

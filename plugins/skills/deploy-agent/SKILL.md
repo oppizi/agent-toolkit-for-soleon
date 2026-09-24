@@ -221,10 +221,10 @@ Everything above ran offline by design: elicitation and conversion are
 stateless and local, so the skill never pays the token cost of loading the
 remote server's full tool catalog and schemas just to interview the user. Step
 7 is where that locally-validated payload meets the live platform, via the
-Soleon MCP tool `private_deploy_agent` on the `soleon-agent-toolkit` server.
+Soleon MCP tool `private_deploy_agent` on the `soleon` server.
 
 1. **Precondition — server reachable + authenticated.** The
-   `soleon-agent-toolkit` MCP server must be connected, and the plugin's
+   `soleon` MCP server must be connected, and the plugin's
    `soleon_token` user config supplies its bearer JWT. If the tool is
    unavailable, or a call returns 401/403, STOP with the error-presentation
    rule; the fix is "set or refresh your Soleon access token in the plugin's

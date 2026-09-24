@@ -1,6 +1,6 @@
 ---
 name: bundle-plugin
-description: Compose a Soleon plugin bundle from the shared capability catalogue — show what a bundle currently subscribes to, propose skills/agents/hooks to add or remove, and apply the change through harness/sync_bundles.py. Use when adding a capability to soleon-observer/builder/admin, sharing one between bundles, or investigating why a bundle is out of sync with the catalogue.
+description: Compose a Soleon plugin bundle from the shared capability catalogue — show what a bundle currently subscribes to, propose skills/agents/hooks to add or remove, and apply the change through harness/sync_bundles.py. Use when adding a capability to observer/builder/admin, sharing one between bundles, or investigating why a bundle is out of sync with the catalogue.
 ---
 
 # /bundle-plugin — compose a bundle from the catalogue

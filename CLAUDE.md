@@ -4,12 +4,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-A Claude Code **plugin marketplace** (`agent-toolkit-for-soleon`) that connects Claude Code to the Soleon/agent-infra platform. It publishes **three role bundles** from one repo — `soleon-observer`, `soleon-builder`, `soleon-admin` — that differ **only** in the OAuth scopes they pin in `.mcp.json`. All three point at the same stateless HTTP MCP server (`soleon-agent-toolkit`, OAuth sign-in, ~85 tools discovered live — see `TOOLS.md`). Scope is a *ceiling on consent*, never a role: the server still authorizes every request against real platform permissions.
+A Claude Code **plugin marketplace** (`agent-toolkit-for-soleon`) that connects Claude Code to the Soleon/agent-infra platform. It publishes **three role bundles** from one repo — `observer`, `builder`, `admin` — that differ **only** in the OAuth scopes they pin in `.mcp.json`. All three point at the same stateless HTTP MCP server (`soleon`, OAuth sign-in, ~85 tools discovered live — see `TOOLS.md`). Scope is a *ceiling on consent*, never a role: the server still authorizes every request against real platform permissions.
 
 Capabilities come from a **catalogue** under `plugins/` (see *Catalogue and composition* below). Two skills exist today:
 
 - **`deploy-agent`** — converts an existing local agent identity file (`.claude/agents/<name>.md`) into a validated, deploy-ready `POST /agents` request and then deploys it on explicit confirmation. Pipeline: identity markdown → distill (soul + a proposed `config`) into an [Allium](https://github.com/juxt/allium-tools) spec → elicit only genuine gaps + confirm the proposed config in plain language → bundle any operator-named `skills` → validate against a frozen contract → emit three JSON files → review + confirm → deploy via MCP. **Steps 0–6 run fully offline** (JSON built and checked on the machine, no network); **a confirmed Step 7 is the only live action** — it calls `private_deploy_agent` on the MCP server. The offline-first split is deliberate: it proves the elicitation experience end-to-end without paying the token cost of the remote catalog, and keeps the interview cheap and reproducible.
-- **`write-evals`** — the other half of the build loop: designing evals whose score reflects the behaviour under test. Prose-only (no assets), but load-bearing: it documents how the platform's LLM judge actually computes a score (`lambda/eval_runner/judge.py` in agent-infra), including that populating `expectedOutput` silently makes half the score measure resemblance to a reference answer rather than correctness. Shipped by **both** `soleon-builder` and `soleon-admin`.
+- **`write-evals`** — the other half of the build loop: designing evals whose score reflects the behaviour under test. Prose-only (no assets), but load-bearing: it documents how the platform's LLM judge actually computes a score (`lambda/eval_runner/judge.py` in agent-infra), including that populating `expectedOutput` silently makes half the score measure resemblance to a reference answer rather than correctness. Shipped by **both** `builder` and `admin`.
 
 `deploy-agent` is builder-only (it needs `contract.json` and the vendored engine, which are bundle-owned).
 
@@ -173,7 +173,7 @@ The **soul-fidelity judge** (`harness/soul_fidelity.md`) is an LLM rubric, not c
 
 ## Scope boundaries (design decisions, not bugs)
 
-- Live deployment happens only at `deploy-agent` Step 7, behind explicit user confirmation, via the `soleon-agent-toolkit` MCP server (stateless HTTP, OAuth). Everything before it is offline. The deterministic converter still stops at validated JSON — the deploy call is the LLM head's job, not the converter's.
+- Live deployment happens only at `deploy-agent` Step 7, behind explicit user confirmation, via the `soleon` MCP server (stateless HTTP, OAuth). Everything before it is offline. The deterministic converter still stops at validated JSON — the deploy call is the LLM head's job, not the converter's.
 - One bundled engine platform: `darwin-arm64`. Other platforms fall back to a version-pinned `cargo install` of `allium-cli@v3.2.4`.
 - Visibility is `private` only.
 - Soul (system prompt) and skill content travel **byte-exact** — no summarization.

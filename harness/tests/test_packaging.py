@@ -2,7 +2,7 @@
 behaviorally.
 
 The ship boundary is now THREE boundaries: the repo publishes one plugin per role
-bundle (`soleon-observer` / `soleon-builder` / `soleon-admin`). The telemetry ban
+bundle (`observer` / `builder` / `admin`). The telemetry ban
 and the manifest/discovery surface apply to all three; the Python-specific checks
 apply to the **deploy-agent** catalogue entry, the only capability carrying
 executable assets, and to **builder**, the only bundle with the engine and the
@@ -141,7 +141,7 @@ def test_plugin_manifest_and_discovery_surface(plugin):
     discovery story has to be shippable for all three, not just the one with skills."""
     manifest = json.loads((plugin / ".claude-plugin/plugin.json").read_text())
     assert manifest["name"] and manifest["description"] and manifest["version"]
-    assert manifest["name"] == f"soleon-{plugin.name}", (
+    assert manifest["name"] == plugin.name, (
         f"{plugin.name}'s manifest name {manifest['name']!r} must match its directory"
     )
     readme = (plugin / "README.md").read_text(encoding="utf-8")
@@ -164,7 +164,7 @@ def test_root_marketplace_lists_every_bundle():
     """
     market = json.loads((BET_ROOT / ".claude-plugin/marketplace.json").read_text())
     entries = {e["name"]: e for e in market["plugins"]}
-    assert set(entries) == {f"soleon-{n}" for n in BUNDLE_NAMES}, (
+    assert set(entries) == set(BUNDLE_NAMES), (
         f"root marketplace lists {sorted(entries)} but the repo ships {BUNDLE_NAMES}"
     )
     for name, entry in entries.items():
