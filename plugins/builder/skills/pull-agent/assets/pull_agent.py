@@ -260,7 +260,7 @@ def routing_section(display_name: str, slug: str, tools: List[Dict[str, Any]], a
     # available locally" while the shim was serving it). Anything the platform
     # DOES tag workspace (the collapsed system_filesystem pair) joins them.
     workspace = sorted(set(SHIM_WORKSPACE_TOOLS) | {t["name"] for t in tools if t.get("kind") == "workspace"})
-    gated = sorted(t["name"] for t in tools if t.get("approval"))
+    gated = sorted(t["name"] for t in tools if t.get("approval") and t.get("kind") != "pair_member")
     # The assembled prompt names tools as the MODEL sees them — LiteLLM's
     # Bedrock sanitization turns every character outside [A-Za-z0-9_] into "_"
     # (`mcp_clay_find-and-enrich-company` → `mcp_clay_find_and_enrich_company`)
@@ -313,6 +313,19 @@ def routing_section(display_name: str, slug: str, tools: List[Dict[str, Any]], a
         lines.append(
             "- **Not available locally** (registered on the platform but not routable from here): {}".format(
                 ", ".join("`{}`".format(n) for n in missing)))
+    local_workers = [t for t in tools if t.get("subagentPair") and isinstance(t.get("localWorker"), dict)]
+    if local_workers:
+        lines.append(
+            "- **Integration helpers run HERE**: {} — call each exactly as on the platform (one `prompt` "
+            "saying what to find or do). The call starts that integration's helper on this machine; it "
+            "works through the integration's own tools on Soleon and hands you its answer. Give it one "
+            "clear task per call rather than many small ones.".format(
+                ", ".join("`{}`".format(t["name"]) for t in local_workers)))
+    platform_workers = [t for t in tools if t.get("subagentPair") and t.get("localWorkerError")]
+    if platform_workers:
+        lines.append(
+            "- **Integration helpers that still run on Soleon** (the platform could not describe them for "
+            "local use): {}".format(", ".join("`{}`".format(t["name"]) for t in platform_workers)))
     if helpers or workflows:
         lines.append("")
         lines.append(
@@ -801,7 +814,7 @@ def materialize(args: argparse.Namespace) -> int:
     doc.save_pull(agent_dir, pull)
 
     external = sorted(t["name"] for t in tools if t.get("kind", "external") == "external")
-    gated = sorted(t["name"] for t in tools if t.get("approval"))
+    gated = sorted(t["name"] for t in tools if t.get("approval") and t.get("kind") != "pair_member")
     summary = {
         "slug": slug, "displayName": display_name, "source": pull["source"], "draftEtag": pull["draftEtag"],
         "model": args.model, "platformModel": platform_model or None, "effort": effort,
@@ -809,6 +822,12 @@ def materialize(args: argparse.Namespace) -> int:
         "workflows": [str(p) for p in workflow_paths],
         "skills": skill_ids, "evals": eval_files, "workspaceFiles": ws_files,
         "externalTools": external, "approvalGated": gated,
+        # Subagent-mode wrappers whose helper now reasons on this machine, and
+        # any the platform could not describe (they keep running on Soleon).
+        "localHelpers": sorted(t["name"] for t in tools
+                               if t.get("subagentPair") and isinstance(t.get("localWorker"), dict)),
+        "platformHelpers": {t["name"]: t["localWorkerError"] for t in tools
+                            if t.get("subagentPair") and t.get("localWorkerError")},
         "workspaceTools": sorted(t["name"] for t in tools if t.get("kind") == "workspace"),
         "pathRewrites": ["{} -> {}".format(a, b) for a, b in applied],
         "notEmulated": not_emulated(config, document),

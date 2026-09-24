@@ -31,6 +31,8 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shutil
+import subprocess
 import sys
 from typing import Any, Dict, List, Optional
 
@@ -168,12 +170,19 @@ def identity_mismatch_hint(schema: Any, args: Dict[str, Any]) -> Optional[str]:
     return None
 
 
-def published_tools(tools: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+def published_tools(tools: List[Dict[str, Any]], include_members: bool = False) -> List[Dict[str, Any]]:
     """Every `kind == external` tool, own name + own schema; approval-gated ones
-    gain the optional `approved` boolean and the approval note."""
+    gain the optional `approved` boolean and the approval note.
+
+    `include_members`: also publish `kind == pair_member` tools — an
+    integration's individual tools behind a subagent-mode wrapper. Only a local
+    WORKER's server does (selected by `--only`); the agent itself never sees
+    them, exactly as on the platform, where the agent holds the wrapper and only
+    its worker holds the integration's tools."""
     out: List[Dict[str, Any]] = []
     for t in tools:
-        if t.get("kind", "external") != "external":
+        kind = t.get("kind", "external")
+        if kind != "external" and not (include_members and kind == "pair_member"):
             continue
         schema = t.get("inputSchema")
         if not isinstance(schema, dict):
@@ -191,8 +200,18 @@ def published_tools(tools: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
                 "description": "Set true ONLY after the person explicitly approved this call.",
             }
             description = (description + " " if description else "") + APPROVAL_NOTE
-        out.append({"name": t["name"], "description": description, "inputSchema": schema})
+        out.append({"name": published_name(t), "description": description, "inputSchema": schema})
     return out
+
+
+def published_name(entry: Dict[str, Any]) -> str:
+    """The MCP name a tool is published under. A worker's tool arrives from
+    the platform qualified by its wrapper (`mcp_gmail_read::search_emails`) —
+    unambiguous across integrations, but `:` is not legal in an MCP tool name —
+    so it is published as the name the platform worker's model calls it by."""
+    if entry.get("kind") == "pair_member" and entry.get("displayName"):
+        return str(entry["displayName"])
+    return str(entry["name"])
 
 
 # ---------------------------------------------------------------------------
@@ -339,30 +358,179 @@ class TurnTracker:
             _log("could not persist the turn id: {}".format(exc))
 
 
+def local_worker_of(entry: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """The `localWorker` block of a subagent-mode wrapper, or None.
+
+    None for everything else AND for a wrapper from a platform too old to
+    describe its worker — that wrapper keeps running on Soleon as before,
+    which is the only honest thing to do with it."""
+    if not entry.get("subagentPair"):
+        return None
+    worker = entry.get("localWorker")
+    if not isinstance(worker, dict) or not worker.get("members") or not str(worker.get("prompt") or "").strip():
+        return None
+    return worker
+
+
+def claude_binary() -> Optional[str]:
+    """The Claude Code binary to run a worker with.
+
+    `CLAUDE_CODE_EXECPATH` first: Claude Code sets it for every process it
+    starts (this server included) to the exact binary running the session, so
+    the worker runs on the same build and the same login. The VS Code extension
+    ships that binary inside the extension and never puts it on PATH, so PATH
+    is only the fallback for a terminal install."""
+    path = os.environ.get("CLAUDE_CODE_EXECPATH")
+    if path and os.path.isfile(path) and os.access(path, os.X_OK):
+        return path
+    return shutil.which("claude")
+
+
+#: A worker runs until IT finishes — the platform's 240 s cap is exactly the
+#: limit this exists to leave behind. The ceiling below only stops a wedged
+#: process from holding the agent forever, and it fails loud when it fires.
+LOCAL_WORKER_TIMEOUT_S = 1800
+
+
+class LocalWorkerRunner:
+    """Runs a subagent-mode wrapper's worker LOCALLY: a headless Claude Code
+    session whose system prompt is the platform worker's own, whose ONLY tools
+    are the integration's individual tools (served by this same script with
+    `--only`, so every call still runs on Soleon under the person's
+    connection), and whose answer is returned as the wrapper's result.
+
+    Isolation is deliberate and each flag is load-bearing:
+      * `--setting-sources ""` — no user/project/local settings, so none of the
+        plugin's hooks fire inside the worker (it would otherwise record its
+        own "turns" and sync nothing into the draft);
+      * `--tools ""` — no built-ins: no Bash, Read, WebSearch;
+      * `--strict-mcp-config` + one server — none of the parent's MCP servers;
+      * `--permission-mode dontAsk` + `--allowedTools mcp__soleon-agent-tools`
+        — its own tools run, anything else is refused without a prompt nobody
+        would see;
+      * `--no-session-persistence` — no transcript left behind per call.
+    """
+
+    def __init__(self, *, slug: str, tools_path: str, server_url: str, model: str,
+                 app_env: str = "dev", credentials: Optional[str] = None, binary: Optional[str] = None,
+                 runner=None, timeout_s: float = LOCAL_WORKER_TIMEOUT_S):
+        self.slug = slug
+        self.tools_path = os.path.abspath(tools_path)
+        self.server_url = server_url
+        self.model = model
+        self.app_env = app_env
+        self.credentials = credentials
+        self.binary = binary
+        self.timeout_s = timeout_s
+        self._run = runner or subprocess.run
+
+    def command(self, entry: Dict[str, Any], task: str, *, approved: bool) -> List[str]:
+        worker = local_worker_of(entry) or {}
+        server_args = [os.path.abspath(__file__), "--slug", self.slug, "--tools", self.tools_path,
+                       "--server-url", self.server_url, "--app-env", self.app_env,
+                       "--only", ",".join(worker["members"])]
+        if self.credentials:
+            server_args += ["--credentials", self.credentials]
+        if approved:
+            server_args.append("--pre-approved")
+        mcp = {"mcpServers": {"soleon-agent-tools": {
+            "type": "stdio", "command": sys.executable, "args": server_args}}}
+        cmd = [self.binary or "", "-p", task,
+               "--model", self.model,
+               "--system-prompt", str(worker["prompt"]),
+               "--setting-sources", "",
+               "--tools", "",
+               "--strict-mcp-config", "--mcp-config", json.dumps(mcp),
+               "--allowedTools", "mcp__soleon-agent-tools",
+               "--permission-mode", "dontAsk",
+               "--no-session-persistence",
+               "--output-format", "json"]
+        cap = worker.get("maxIterations")
+        if isinstance(cap, int) and cap > 0:
+            cmd += ["--max-turns", str(cap)]
+        return cmd
+
+    def run(self, entry: Dict[str, Any], task: str, *, approved: bool) -> Dict[str, Any]:
+        name = entry.get("name")
+        if not task.strip():
+            return _text_result("{} needs a `prompt`: say what to look up or do.".format(name), True)
+        if not self.binary:
+            self.binary = claude_binary()
+        if not self.binary:
+            return _text_result(
+                "{} runs its helper locally with Claude Code, and no Claude Code binary was found "
+                "(CLAUDE_CODE_EXECPATH is unset and `claude` is not on PATH). Run this agent from "
+                "Claude Code, or install the CLI.".format(name), True)
+        _log("{} → running its helper locally ({} tool(s))".format(name, len((local_worker_of(entry) or {}).get("members") or [])))
+        try:
+            proc = self._run(self.command(entry, task, approved=approved), capture_output=True, text=True,
+                             timeout=self.timeout_s, stdin=subprocess.DEVNULL)
+        except subprocess.TimeoutExpired:
+            return _text_result("{}'s local helper was still running after {} s and was stopped.".format(
+                name, int(self.timeout_s)), True)
+        return self._render(name, proc)
+
+    @staticmethod
+    def _render(name: Any, proc: Any) -> Dict[str, Any]:
+        out = (proc.stdout or "").strip()
+        try:
+            data = json.loads(out.splitlines()[-1]) if out else None
+        except (json.JSONDecodeError, IndexError):
+            data = None
+        if not isinstance(data, dict):
+            err = (proc.stderr or out or "no output").strip()[-800:]
+            return _text_result("{}'s local helper failed (exit {}): {}".format(name, proc.returncode, err), True)
+        result = str(data.get("result") or "").strip()
+        if data.get("is_error") or data.get("subtype") not in (None, "success"):
+            why = result or str(data.get("subtype") or "error")
+            return _text_result("{}'s local helper stopped without an answer: {}".format(name, why), True)
+        return _text_result(result or "(the helper finished with an empty answer)")
+
+
 class AgentToolsServer:
     def __init__(self, slug: str, tools: List[Dict[str, Any]], client: SoleonMcpClient,
                  app_env: str = "dev", poll_interval_s: float = POLL_INTERVAL_S,
                  conversation: Optional[ConversationTracker] = None,
-                 turn: Optional[TurnTracker] = None):
+                 turn: Optional[TurnTracker] = None,
+                 local_workers: Optional["LocalWorkerRunner"] = None,
+                 pre_approved: bool = False, include_members: bool = False):
         self.slug = slug
         self.app_env = app_env
         self.tools = tools
-        self.published = published_tools(tools)
+        self.published = published_tools(tools, include_members=include_members)
         self._gated = {t["name"] for t in tools if t.get("approval")}
+        self._by_name = {t["name"]: t for t in tools}
+        #: published MCP name → the name the platform calls it by
+        self._platform_name = {published_name(t): t["name"] for t in tools}
         self.client = client
         self.poll_interval_s = poll_interval_s
         self.conversation = conversation or ConversationTracker(None)
         self.turn = turn or TurnTracker(None)
+        self.local_workers = local_workers
+        #: Set only on a LOCAL WORKER's own server, and only when the person
+        #: approved the wrapper call that started it: the platform's pair
+        #: approval likewise covers the calls its worker makes, and a headless
+        #: worker has nobody to ask.
+        self.pre_approved = pre_approved
 
     def call(self, name: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
         if name not in {t["name"] for t in self.published}:
             return _text_result("Unknown tool {!r} — not one of this agent's external tools.".format(name), True)
         args = dict(arguments or {})
-        approved = bool(args.pop("approved", False))
+        approved = bool(args.pop("approved", False)) or self.pre_approved
+        platform_name = self._platform_name.get(name, name)
+        entry = self._by_name.get(platform_name) or {}
+        if self.local_workers is not None and local_worker_of(entry) is not None:
+            # A subagent-mode wrapper (`mcp_gmail_read`): its worker runs HERE,
+            # as a headless Claude Code session over the integration's own
+            # tools, instead of as an opaque loop on Soleon.
+            if entry.get("approval") and not approved:
+                return self.render(name, {"state": "error", "error": "approval_required"})
+            return self.local_workers.run(entry, str(args.get("prompt") or ""), approved=approved)
         try:
             envelope = self.client.call_tool("call_agent_tool", {
                 "slug": self.slug, "app_env": self.app_env,
-                "name": name, "args": args, "approved": approved,
+                "name": platform_name, "args": args, "approved": approved,
                 "conversation": self.conversation.current(),
                 "turn": self.turn.current(),
             })
@@ -480,6 +648,17 @@ def serve(server: AgentToolsServer, stdin=None, stdout=None) -> None:
             out.flush()
 
 
+def _pulled_model(agent_dir: str) -> str:
+    """The local model the agent was pulled onto — a worker runs on the same
+    one, as the platform's worker runs on the agent's model family."""
+    try:
+        with open(os.path.join(agent_dir, "pull.json"), "r", encoding="utf-8") as fh:
+            model = str((json.load(fh) or {}).get("model") or "")
+    except (OSError, ValueError):
+        model = ""
+    return model or "sonnet"
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--slug", required=True)
@@ -490,6 +669,10 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("--poll-interval", type=float, default=POLL_INTERVAL_S)
     ap.add_argument("--only", default=None,
                     help="comma-separated tool names: publish ONLY these (a configured helper's subset)")
+    ap.add_argument("--pre-approved", action="store_true",
+                    help="a local WORKER's server whose wrapper call the person approved: run gated calls approved")
+    ap.add_argument("--model", default=None,
+                    help="the local model a subagent-mode wrapper's worker runs on (default: pull.json's)")
     args = ap.parse_args(argv)
     tools = load_tools(args.tools)
     if args.only is not None:
@@ -515,8 +698,18 @@ def main(argv: Optional[List[str]] = None) -> int:
     # The turn id lives there too: written by the SubagentStart hook for this
     # run, read by the SubagentStop hook when it records the prompt + answer.
     turn = TurnTracker(os.path.join(agent_dir, TURN_FILE_NAME))
+    workers = None
+    if args.only is None:
+        # Only the AGENT'S server runs wrappers' workers. A worker's own server
+        # (`--only`) holds an integration's individual tools and never a
+        # wrapper, so a worker can never start another worker.
+        model = args.model or _pulled_model(agent_dir)
+        workers = LocalWorkerRunner(slug=args.slug, tools_path=args.tools, server_url=args.server_url,
+                                    model=model, app_env=args.app_env, credentials=args.credentials)
     server = AgentToolsServer(args.slug, tools, client, app_env=args.app_env,
-                              poll_interval_s=args.poll_interval, conversation=tracker, turn=turn)
+                              poll_interval_s=args.poll_interval, conversation=tracker, turn=turn,
+                              local_workers=workers, pre_approved=args.pre_approved,
+                              include_members=args.only is not None)
     _log("serving {} external tool(s) for {} via {}".format(len(server.published), args.slug, client.server_url))
     serve(server)
     return 0

@@ -380,3 +380,198 @@ def test_stdio_end_to_end(soleon, tmp_path):
     assert {t["name"] for t in lines[1]["result"]["tools"]} == {"web_search", "custom_echo-server_read", "custom_echo-server_write"}
     assert json.loads(lines[2]["result"]["content"][0]["text"]) == [{"title": "Paris"}]
     assert GOOD not in err.decode()
+
+
+# ---------------------------------------------------------------------------
+# subagent-mode wrappers run their worker LOCALLY (not as an opaque loop on Soleon)
+# ---------------------------------------------------------------------------
+
+WRAPPER = {
+    "name": "mcp_gmail_read", "kind": "external", "subagentPair": True, "approval": False,
+    "description": "Read Gmail.", "serverId": "gmail",
+    "inputSchema": {"type": "object", "properties": {"prompt": {"type": "string"}}, "required": ["prompt"]},
+    # the platform's shape (containers/shared/local_control.pair_worker_listing):
+    # members qualified by their wrapper, published by their display name
+    "localWorker": {"members": ["mcp_gmail_read::search_emails", "mcp_gmail_read::read_email"],
+                    "prompt": "You read Gmail.", "maxIterations": 12, "role": "read"},
+}
+WRITE_WRAPPER = dict(WRAPPER, name="mcp_gmail_write", approval=True,
+                     localWorker={"members": ["mcp_gmail_write::send_email"], "prompt": "You send Gmail.",
+                                  "maxIterations": 8, "role": "write"})
+MEMBERS = [
+    {"name": "mcp_gmail_read::search_emails", "displayName": "search_emails", "kind": "pair_member",
+     "pair": "mcp_gmail_read", "approval": False,
+     "inputSchema": {"type": "object", "properties": {"query": {"type": "string"}}}},
+    {"name": "mcp_gmail_read::read_email", "displayName": "read_email", "kind": "pair_member",
+     "pair": "mcp_gmail_read", "approval": False,
+     "inputSchema": {"type": "object", "properties": {"id": {"type": "string"}}}},
+    {"name": "mcp_gmail_write::send_email", "displayName": "send_email", "kind": "pair_member",
+     "pair": "mcp_gmail_write", "approval": True,
+     "inputSchema": {"type": "object", "properties": {"to": {"type": "string"}}}},
+]
+
+
+class _Proc:
+    def __init__(self, stdout="", stderr="", returncode=0):
+        self.stdout, self.stderr, self.returncode = stdout, stderr, returncode
+
+
+def _runner(tmp_path, answer=None, calls=None, **kw):
+    calls = calls if calls is not None else []
+
+    def fake_run(cmd, **opts):
+        calls.append(cmd)
+        return answer if answer is not None else _Proc(json.dumps(
+            {"type": "result", "subtype": "success", "is_error": False, "result": "3 unread from investors"}))
+    return shim.LocalWorkerRunner(slug=SLUG, tools_path=str(tmp_path / "tools.json"),
+                                  server_url="https://mcp-dev.oppizi.com/mcp", model="sonnet",
+                                  binary="/opt/claude", runner=fake_run, **kw), calls
+
+
+def _server(tmp_path, runner, tools=None):
+    return shim.AgentToolsServer(SLUG, tools or [WRAPPER, WRITE_WRAPPER] + MEMBERS, client=None,
+                                 local_workers=runner)
+
+
+def test_the_agent_never_sees_an_integrations_individual_tools():
+    """On the platform the AGENT holds the wrapper and only its worker holds
+    Gmail's tools. The local agent's surface must be the same."""
+    names = [t["name"] for t in shim.published_tools([WRAPPER, WRITE_WRAPPER] + MEMBERS)]
+    assert names == ["mcp_gmail_read", "mcp_gmail_write"]
+
+
+def test_a_workers_own_server_publishes_the_integration_tools():
+    names = [t["name"] for t in shim.published_tools(MEMBERS, include_members=True)]
+    assert names == ["search_emails", "read_email", "send_email"]
+
+
+def test_a_wrapper_call_runs_its_worker_locally_and_returns_its_answer(tmp_path):
+    runner, calls = _runner(tmp_path)
+    out = _server(tmp_path, runner).call("mcp_gmail_read", {"prompt": "what came in today?"})
+    assert not out.get("isError")
+    assert out["content"][0]["text"] == "3 unread from investors"
+    assert len(calls) == 1
+
+
+def test_the_worker_is_isolated_and_holds_only_the_integrations_tools(tmp_path):
+    """Every flag is load-bearing: no settings (so no plugin hooks record fake
+    turns), no built-ins, none of the parent's MCP servers, nothing prompted."""
+    runner, _ = _runner(tmp_path)
+    cmd = runner.command(WRAPPER, "what came in today?", approved=False)
+    assert cmd[0] == "/opt/claude" and cmd[1:3] == ["-p", "what came in today?"]
+    flags = dict(zip(cmd, cmd[1:]))
+    assert flags["--system-prompt"] == "You read Gmail."       # the platform worker's own prompt
+    assert flags["--model"] == "sonnet"
+    assert flags["--setting-sources"] == "" and flags["--tools"] == ""
+    assert "--strict-mcp-config" in cmd and "--no-session-persistence" in cmd
+    assert flags["--permission-mode"] == "dontAsk"
+    assert flags["--allowedTools"] == "mcp__soleon-agent-tools"
+    assert flags["--max-turns"] == "12"                          # the platform's iteration cap
+    server = json.loads(flags["--mcp-config"])["mcpServers"]["soleon-agent-tools"]
+    args = server["args"]
+    assert args[args.index("--only") + 1] == "mcp_gmail_read::search_emails,mcp_gmail_read::read_email"
+    assert "--pre-approved" not in args
+
+
+def test_a_worker_can_never_start_another_worker(tmp_path):
+    """Its server is `--only` the integration's tools — never a wrapper — so the
+    CLI builds it without a runner."""
+    runner, _ = _runner(tmp_path)
+    cmd = runner.command(WRAPPER, "x", approved=False)
+    args = json.loads(dict(zip(cmd, cmd[1:]))["--mcp-config"])["mcpServers"]["soleon-agent-tools"]["args"]
+    only = args[args.index("--only") + 1].split(",")
+    assert "mcp_gmail_read" not in only and "mcp_gmail_write" not in only
+
+
+def test_an_unapproved_write_wrapper_asks_first_and_starts_nothing(tmp_path):
+    runner, calls = _runner(tmp_path)
+    out = _server(tmp_path, runner).call("mcp_gmail_write", {"prompt": "reply to Sam"})
+    assert out["isError"] and "approval_required" in out["content"][0]["text"]
+    assert calls == []
+
+
+def test_an_approved_write_wrapper_carries_the_approval_into_its_worker(tmp_path):
+    """The platform's pair approval covers the calls its worker makes; a
+    headless worker has nobody to ask, so the approval travels with it."""
+    runner, calls = _runner(tmp_path)
+    _server(tmp_path, runner).call("mcp_gmail_write", {"prompt": "reply to Sam", "approved": True})
+    args = json.loads(dict(zip(calls[0], calls[0][1:]))["--mcp-config"])["mcpServers"]["soleon-agent-tools"]["args"]
+    assert "--pre-approved" in args
+
+
+class _CapturingClient:
+    def __init__(self):
+        self.calls = []
+
+    @staticmethod
+    def _sleep(_seconds):  # await_control's poll wait; a done envelope never waits
+        raise AssertionError("a terminal envelope must not be polled")
+
+    def call_tool(self, name, args):
+        self.calls.append((name, args))
+        return {"state": "done", "result": {"result": "sent"}}
+
+
+@pytest.mark.parametrize("pre_approved", [True, False])
+def test_a_pre_approved_worker_server_sends_its_gated_calls_approved(pre_approved):
+    client = _CapturingClient()
+    server = shim.AgentToolsServer(SLUG, MEMBERS, client=client, pre_approved=pre_approved,
+                                   include_members=True)
+    server.call("send_email", {"to": "sam@example.com"})
+    name, args = client.calls[0]
+    # published as `send_email`, sent to the platform under its qualified name
+    assert name == "call_agent_tool" and args["name"] == "mcp_gmail_write::send_email"
+    assert args["approved"] is pre_approved
+
+
+def test_a_wrapper_without_a_worker_description_still_runs_on_soleon():
+    """An older platform sends no `localWorker`; that wrapper keeps its old
+    behaviour rather than being run half-described."""
+    bare = {k: v for k, v in WRAPPER.items() if k != "localWorker"}
+    assert shim.local_worker_of(bare) is None
+    assert shim.local_worker_of(WRAPPER)["members"] == ["mcp_gmail_read::search_emails",
+                                                          "mcp_gmail_read::read_email"]
+
+
+def test_no_claude_binary_is_a_loud_actionable_error(tmp_path, monkeypatch):
+    monkeypatch.delenv("CLAUDE_CODE_EXECPATH", raising=False)
+    monkeypatch.setattr(shim.shutil, "which", lambda _name: None)
+    runner, calls = _runner(tmp_path)
+    runner.binary = None
+    out = runner.run(WRAPPER, "x", approved=False)
+    assert out["isError"] and "no Claude Code binary was found" in out["content"][0]["text"]
+    assert calls == []
+
+
+def test_the_binary_is_the_one_running_this_session(tmp_path, monkeypatch):
+    exe = tmp_path / "claude"
+    exe.write_text("#!/bin/sh\n")
+    exe.chmod(0o755)
+    monkeypatch.setenv("CLAUDE_CODE_EXECPATH", str(exe))
+    assert shim.claude_binary() == str(exe)
+
+
+def test_a_worker_that_stops_without_an_answer_says_so(tmp_path):
+    runner, _ = _runner(tmp_path, answer=_Proc(json.dumps(
+        {"type": "result", "subtype": "error_max_turns", "is_error": True, "result": ""})))
+    out = runner.run(WRAPPER, "x", approved=False)
+    assert out["isError"] and "error_max_turns" in out["content"][0]["text"]
+
+
+def test_a_worker_that_crashes_reports_its_stderr(tmp_path):
+    runner, _ = _runner(tmp_path, answer=_Proc("", "Error: not logged in", 1))
+    out = runner.run(WRAPPER, "x", approved=False)
+    assert out["isError"] and "not logged in" in out["content"][0]["text"] and "exit 1" in out["content"][0]["text"]
+
+
+def test_a_wrapper_call_needs_a_prompt(tmp_path):
+    runner, calls = _runner(tmp_path)
+    out = runner.run(WRAPPER, "  ", approved=False)
+    assert out["isError"] and calls == []
+
+
+def test_a_workers_tool_is_published_by_the_name_its_model_calls_it():
+    """`:` is not legal in an MCP tool name; the platform qualifies a worker's
+    tool by its wrapper so two integrations sharing `search` stay distinct."""
+    assert shim.published_name(MEMBERS[0]) == "search_emails"
+    assert shim.published_name(WRAPPER) == "mcp_gmail_read"

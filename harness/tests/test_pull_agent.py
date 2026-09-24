@@ -483,3 +483,54 @@ def test_the_skill_asks_only_when_ask_is_true():
     # the old wording asked whenever a suggestion existed
     assert "Run it locally on **<suggested>**?" not in flat
     assert "Only `opus`, `sonnet`, `haiku` are valid answers." not in flat
+
+
+# ---------------------------------------------------------------------------
+# subagent-mode wrappers: their helper reasons HERE (session 6c79781e, 2026-09-23)
+# ---------------------------------------------------------------------------
+
+def _pull_with_local_worker(tmp_path, *, error=False):
+    from _local_emulation_fixtures import TOOLS as BASE_TOOLS, tools_envelope as base_env
+    wrapper = {"name": "mcp_gmail_read", "description": "Read Gmail.", "kind": "external",
+               "subagentPair": True, "approval": False, "serverId": "gmail",
+               "inputSchema": {"type": "object", "properties": {"prompt": {"type": "string"}}}}
+    extra = [wrapper]
+    if error:
+        wrapper["localWorkerError"] = "ValueError: boom"
+    else:
+        wrapper["localWorker"] = {"members": ["mcp_gmail_read::search_emails"], "prompt": "You read Gmail.",
+                                  "maxIterations": 12, "role": "read"}
+        extra.append({"name": "mcp_gmail_read::search_emails", "displayName": "search_emails",
+                      "kind": "pair_member", "pair": "mcp_gmail_read", "approval": True,
+                      "inputSchema": {"type": "object", "properties": {}}})
+    agent_dir = make_pulled_dir(tmp_path)
+    env = base_env()
+    env["result"]["tools"] = list(BASE_TOOLS) + extra
+    (agent_dir / "tools.json").write_text(json.dumps(env), encoding="utf-8")
+    proc = _run("materialize", "--slug", SLUG, "--dir", str(agent_dir), "--server-url", SERVER_URL,
+                "--model", "sonnet", "--plugin-root", str(PLUGIN), cwd=tmp_path)
+    assert proc.returncode == 0, proc.stderr
+    body = (tmp_path / ".claude" / "agents" / "{}.md".format(SLUG)).read_text(encoding="utf-8")
+    return json.loads(proc.stdout), body
+
+
+def test_a_wrapper_with_a_local_worker_is_reported_and_explained(tmp_path):
+    summary, body = _pull_with_local_worker(tmp_path)
+    assert summary["localHelpers"] == ["mcp_gmail_read"] and summary["platformHelpers"] == {}
+    assert "Integration helpers run HERE" in body and "`mcp_gmail_read`" in body
+
+
+def test_the_agent_is_never_handed_its_workers_tools(tmp_path):
+    """On the platform the agent holds the wrapper; only its worker holds Gmail's
+    tools. A gated WORKER tool must not appear in the agent's approval rule."""
+    summary, body = _pull_with_local_worker(tmp_path)
+    assert "mcp_gmail_read" in summary["externalTools"]
+    assert not any("::" in n for n in summary["externalTools"] + summary["approvalGated"])
+    assert "search_emails" not in body.split("## Local Tool Routing")[1].split("Approval rule")[1].split("\n")[0]
+
+
+def test_a_wrapper_the_platform_could_not_describe_says_it_stays_on_soleon(tmp_path):
+    summary, body = _pull_with_local_worker(tmp_path, error=True)
+    assert summary["localHelpers"] == []
+    assert summary["platformHelpers"] == {"mcp_gmail_read": "ValueError: boom"}
+    assert "still run on Soleon" in body

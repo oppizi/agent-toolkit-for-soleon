@@ -163,6 +163,13 @@ From the script's JSON summary tell the user, in plain words:
 3. Tool routing: how many external tools run via Soleon, which are
    approval-gated (the agent will ask before calling them), the workspace
    tools served locally, and any prompt tool the local copy cannot reach.
+   **Integration helpers** (`localHelpers`): an integration the agent uses in
+   subagent mode (`mcp_gmail_read`) is one tool that hands a task to a helper.
+   That helper now reasons HERE — a headless Claude Code run on the same local
+   model, holding only that integration's own tools, each still executed on
+   Soleon under the person's connection — so it is not bound by the platform
+   helper's 240 s limit and its steps show up locally. Name each one. Any in
+   `platformHelpers` still run on Soleon; say so and quote the reason.
 4. **Not emulated — platform-only, read-only in `config.json`** (D13):
    channels, budgets, schedules, guardrails, online-eval sampling — with the
    values from `notEmulated`.
