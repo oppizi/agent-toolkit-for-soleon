@@ -107,7 +107,7 @@ else is experiment telemetry.
 
 - Claude Code (the plugin's skill is executed by it)
 - Python 3.9+ (standard library only — no pip installs)
-- macOS on Apple Silicon for the bundled engine (`soleon-builder` only); other
+- macOS on Apple Silicon for the bundled engine (`builder` only); other
   platforms need one `cargo install` (see
   [Supported platforms](plugins/builder/README.md#supported-platforms-bundled-engine))
 
@@ -118,14 +118,14 @@ admin — and differ only in the OAuth scopes they request:
 
 | Plugin | Scopes | For |
 |---|---|---|
-| `soleon-observer` | 8, all reads | Reading agents, traces, failures, usage, evals, ideas, wiki. No write consent at all. |
-| `soleon-builder` | 16 | The agent build loop: drafts, deploys, promotions, channel binds, custom MCPs, knowledge bases. Ships the `deploy-agent` skill. |
-| `soleon-admin` | 21 (all) | Platform admins — adds channel/custom-MCP instance reads, eval runs, and discovery. |
+| `observer` | 8, all reads | Reading agents, traces, failures, usage, evals, ideas, wiki. No write consent at all. |
+| `builder` | 16 | The agent build loop: drafts, deploys, promotions, channel binds, custom MCPs, knowledge bases. Ships the `deploy-agent` skill. |
+| `admin` | 21 (all) | Platform admins — adds channel/custom-MCP instance reads, eval runs, and discovery. |
 
 **Pick the narrowest one that covers your work.** A broader bundle grants no extra
 access: scope is a ceiling on what the token may consent to, never a role. Soleon
 authorizes every request against your real permissions, so installing
-`soleon-admin` does not make you an admin — it only widens what an access token
+`admin` does not make you an admin — it only widens what an access token
 could, in principle, be used for.
 
 ### Install
@@ -134,7 +134,7 @@ From the GitHub marketplace (recommended):
 
 ```
 /plugin marketplace add oppizi/agent-toolkit-for-soleon
-/plugin install soleon-observer@agent-toolkit-for-soleon
+/plugin install observer@agent-toolkit-for-soleon
 ```
 
 Or from a local clone:
@@ -142,10 +142,10 @@ Or from a local clone:
 ```
 git clone https://github.com/oppizi/agent-toolkit-for-soleon.git
 /plugin marketplace add ./agent-toolkit-for-soleon
-/plugin install soleon-observer@agent-toolkit-for-soleon
+/plugin install observer@agent-toolkit-for-soleon
 ```
 
-Substitute `soleon-builder` or `soleon-admin` as needed. Sign-in is OAuth — the
+Substitute `builder` or `admin` as needed. Sign-in is OAuth — the
 first request opens the flow in your browser (or run `claude mcp login`). There is
 no token to paste.
 
@@ -153,8 +153,15 @@ Each plugin takes an optional **Soleon MCP server URL**, defaulting to the dev
 system (`https://mcp-dev.oppizi.com/mcp`). Use the stage-less custom-domain form;
 a URL carrying an API-Gateway stage path breaks OAuth discovery.
 
+> **Upgrading from `soleon-observer` / `soleon-builder` / `soleon-admin`?** The
+> plugins are now named `observer` / `builder` / `admin`, and their MCP server is
+> `soleon` (was `soleon-agent-toolkit`), so `/mcp` lists `plugin:<role>:soleon`
+> and tools are named `mcp__plugin_<role>_soleon__<tool>`. There is no alias —
+> uninstall the old plugin, install the new one, sign in again, and update any
+> permission rules that named the old `mcp__plugin_soleon-…` tools.
+
 > **Upgrading from `soleon-deploy-agent`?** It has been renamed to
-> `soleon-builder`, with no alias — uninstall the old plugin and install the
+> `builder`, with no alias — uninstall the old plugin and install the
 > bundle that matches your work. Its **Soleon access token** setting is obsolete
 > now that sign-in is OAuth; you can delete it from your keychain.
 
