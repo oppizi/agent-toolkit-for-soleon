@@ -3,20 +3,26 @@
 The Soleon agent build loop: everything `soleon-observer` can read, plus the
 scopes to create, update, deploy, promote and delete agents, bind channels, and
 author custom MCP servers and knowledge bases. It carries the `deploy-agent`
-skill.
+skill (local identity → Soleon) and, since 0.4.0, its reverse arrow: the
+`pull-agent` and `run-local-eval` skills (Soleon agent → local Claude Code
+subagent, edited as files whose every save lands on your draft).
 
 > **Renamed from `soleon-deploy-agent`.** See *Upgrading* below — there is no
 > alias, and your old access-token setting is obsolete.
 
 ## Scopes this bundle requests
 
-Sixteen — the eight `soleon-observer` reads, plus:
+Seventeen — the eight `soleon-observer` reads, plus:
 
 ```
 soleon-mcp/agent.write   soleon-mcp/agent.deploy  soleon-mcp/agent.delete
-soleon-mcp/channel.write soleon-mcp/mcp.write     soleon-mcp/kb.write
-soleon-mcp/business.write soleon-mcp/wiki.write
+soleon-mcp/agent.invoke  soleon-mcp/channel.write soleon-mcp/mcp.write
+soleon-mcp/kb.write      soleon-mcp/business.write soleon-mcp/wiki.write
 ```
+
+`agent.invoke` is the local-emulation scope: running one of an agent's tools on
+the platform with YOUR credentials (`call_agent_tool`), listing them, fetching the
+assembled prompt and your workspace snapshot.
 
 Installing a broader bundle grants **no** additional access. Scope is a ceiling on
 what the token may consent to, never a role — Soleon authorizes every request
@@ -56,6 +62,141 @@ explicit confirmation*, and it does not create agents during distillation or
 elicitation — those phases are offline and produce only local JSON.
 `config.schedules` and `config.tools` are deferred (no honest identity signal /
 a dependency the plugin avoids); visibility is `private` only in this slice.
+
+## Create a new agent from an idea
+
+```
+/create-agent
+```
+
+Describe the agent you want in your own words. The skill works out what your
+description already answers and asks only about what's missing and matters:
+usually one to three questions, drawn from what you said, never a fixed form.
+It never asks for plumbing (model ids, slugs, tool ids, cron syntax). It
+proposes those itself and names them as assumptions you can correct.
+
+It then shows you exactly what it will build — what the agent can read, what
+it can change, and what asks you first — and creates nothing until you say
+so. On your yes it creates the agent on dev, attaches its integrations and
+knowledge bases, writes its instructions and evals, and validates the draft.
+It deploys only on a second yes, then offers `/pull-agent` so you can talk to
+it straight away.
+
+Approval is set by what an action does, not by tool name. Every change an
+attached integration can make asks first, unless you explicitly say
+otherwise, and your words are recorded in the brief. A rule that only the
+agent's instructions carry is named as such, because instructions are
+followed most of the time, not always. The model it proposes is the one your
+existing agents run on, read live, never a pinned id.
+
+It answers platform questions from Soleon's own System Reference rather than
+guessing — `search_system_reference` / `get_system_reference_topic`, the same
+reviewed documentation the admin UI shows — and cites the topic when it passes
+a fact on. That reference is built from source, not read live, so where it
+disagrees with something observed on the platform, the live observation wins.
+
+Scheduled automations are built with the agent, not handed back. A schedule
+runs once for each named person, so it resolves the recipients first with
+`resolve_people` — you, by default, without being asked; a colleague from the
+email address you give — and creates the automation as part of the same
+deploy. `resolve_people` is a point lookup, not a directory: it cannot search
+by name, so an address nobody owns is reported rather than guessed at.
+
+**What it does NOT do:** list the integration catalogue (there is no tool for
+it), so it maps your words to the standard integrations it knows, and asks for
+the name of anything else as it appears on the Tools page. To convert an
+*existing* `.claude/agents/` file, use `deploy-agent` instead.
+
+## Pull a Soleon agent into Claude Code
+
+```
+/pull-agent <slug>
+```
+
+**What it does.** Reads your dev draft of the agent (else the deployed dev
+config — what the platform's edit page opens), the tools its session actually
+registers, the system prompt the platform assembles for you, and a zip of your
+workspace, then asks ONE question (which Claude model to run locally — default
+the closest match to the agent's Bedrock model; Kimi/Nova/GLM agents get a
+warning and no default) and writes:
+
+```
+~/.claude/agents/<slug>.md               the subagent (USER scope): platform prompt + Local Tool Routing
+~/.claude/agents/<slug>--<subagentId>.md one per enabled configured helper (D15)
+.soleon/agents/<slug>/
+  SOUL.md  config.json  skills/<id>/SKILL.md (+ skill.json, package files)
+  evals/<evalId>.json  workspace/ (read-only snapshot)  workflows/<id>/SKILL.md
+  tools.json  prompt.json  pull.json  .pull/ (raw responses)
+```
+
+Talk to it with the Agent tool (`subagent_type: "<slug>"`). It reasons on the
+local model; **every external tool runs on Soleon** through the bundled
+`bin/soleon_agent_tools_mcp.py` stdio shim (each tool under its platform name
+and schema, executed via `call_agent_tool` with your credentials, the agent's
+tool policy and its approval gates — the subagent asks you first, then sends
+`approved: true`; the platform refuses without it). Workspace tools run locally
+via `bin/soleon_workspace_mcp.py` against the snapshot. Tool calls wait for the
+platform to finish — no client-side timeout, as on the platform.
+
+**Traces.** Each run of the subagent is one turn on the platform trace
+(Monitoring → Traces, Activity "Draft Agents"; the pull report links the
+view): the tool server sends every platform call with the run's
+`conversation` + `turn` ids, and the plugin's SubagentStart/SubagentStop
+hooks (`hooks/hooks.json` → `bin/soleon_turn_hooks.py`) mint the turn id and,
+when the agent finishes, record the prompt, the answer and the locally-run
+tool calls from the subagent's transcript (`record_agent_turn`). A record
+that cannot be sent is reported as a system message, never a blocked session.
+
+**The edit loop.** Edit `SOUL.md`, `config.json`, `skills/**` or
+`evals/*.json` and the plugin's PostToolUse hook (`hooks/hooks.json` →
+`bin/soleon_draft_sync.py`) pushes the change to your Soleon draft on every
+save (`patch_agent_draft`, guarded by the pulled `draftEtag`) and re-syncs the
+platform's test sandbox. A concurrent edit elsewhere is a conflict: the hook
+stops the session (exit 2) and asks — reload theirs (`/pull-agent <slug>`) or
+overwrite with yours (`pull_agent.py adopt-etag`, then save again). Nothing
+goes live; deploy with `deploy_agent_draft`. `config.json` is the nested
+config.json a deploy of your draft would ship; the hook maps it back onto the
+editor's flat fields with the platform's own table (`bin/soleon_agent_document.py`).
+
+**The other direction is automatic too.** Before every prompt, the plugin's
+UserPromptSubmit hook (`hooks/hooks.json` → `bin/soleon_pull_refresh.py`)
+asks the platform for each pulled agent's draft version (one
+`get_agent_draft` read); when it differs from what the last pull or save
+recorded — an edit in the Soleon editor, a save from another session — the
+local copy is re-pulled and re-materialized on the spot, so the subagent that
+answers that prompt reasons with the current SOUL, config, skills, evals and
+system prompt. `workspace/` is never touched (it is session data you may have
+edited), a pending save conflict is never overwritten (resolve it first), and
+the hook never blocks the prompt: a failed refresh is reported and the local
+copy stays as it was. You are told when a refresh happened.
+
+```
+/run-local-eval <slug> [evalId]
+```
+
+runs each `evals/*.json` against the local subagent, fetches the platform's judge
+prompt live (`get_eval_judge_prompt` — never vendored), runs it on the same local
+model and writes `evals/results/<ts>-<evalId>.json` with `score` / `subScores` /
+`reasoning`. Scores only — the platform never adjudicates pass/fail, and neither
+does this.
+
+**What is NOT emulated** (platform-only, listed read-only in `config.json` and
+in the pull summary): channels, budgets, schedules, guardrails, online-eval
+sampling. The workspace snapshot never pushes back. Helper subagents and
+workflows follow the platform's steps (manager: assign → review → next decision
+until finish, bounded by the configured rounds; peer: bounded rounds)
+approximately, not identically.
+
+**Credentials — Linux vs macOS.** The shim and the hook run outside Claude
+Code's MCP connection, so they reuse the OAuth token Claude Code already holds
+for `soleon-agent-toolkit`. On Linux it is in `~/.claude/.credentials.json`
+(mode 0600, `mcpOAuth` map keyed by server); both read the entry whose
+`serverUrl` matches the plugin's server URL and refresh it through the server's
+`refresh_token` grant on a 401 (the file is rewritten with its mode kept). On
+macOS Claude Code stores it in the Keychain; reading it from the hook (e.g.
+`security find-generic-password`) is **untested** — until it is, export
+`SOLEON_MCP_TOKEN` in the environment Claude Code runs in. Tokens are never
+logged or printed.
 
 ## Authentication
 
@@ -112,7 +253,7 @@ Or from a local checkout of [oppizi/agent-toolkit-for-soleon](https://github.com
 ```
 
 (The only contents that matter at runtime are this directory's
-`contract.json`, `bin/`, and `skills/`.)
+`contract.json`, `bin/`, `hooks/`, and `skills/`.)
 
 ## Use
 

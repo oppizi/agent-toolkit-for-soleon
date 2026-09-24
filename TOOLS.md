@@ -9,7 +9,7 @@ tool the server publishes, automatically.
 server. Access follows platform roles (platform admins see everything; members see the
 agents they hold a role on).
 
-## Current tools (85)
+## Current tools (91)
 
 ### Agents
 
@@ -28,6 +28,13 @@ agents they hold a role on).
 | `update_agent_profile` | Update presentation metadata — avatar icon/color, description, visibility — with no deploy (dev tier, If-Match CAS). |
 | `delete_agent` | Delete an agent (cascades to promoted tiers; removes Slack app, secrets, config, registry rows). Idempotent. |
 | `list_agent_collaborators` | The Cognito role grants on an agent: sub, email, role, grantedBy, grantedAt. |
+| `list_agent_tools` | List the tools this agent's session actually registers — name, description, input schema, whether a human must approve it before it runs, and whether it acts on the agent workspace (`kind: workspace`) or an external system (`kind: external`). Runs on your dev draft test-chat session; answers `pending + call_id` while the container is cold-starting. The result also carries `tracesUrl`: the Soleon Traces view pre-filtered to "Draft Agents" (where every local run is filed — the tab's default "Live Agents" filter hides them). |
+| `call_agent_tool` | Run ONE of the agent's registered tools on the platform with your own credentials and the agent's tool policy — exactly as a model-initiated call in the Test Chat would. Approval-gated tools refuse until `approved=true`; blocks until the tool finishes or answers `pending + call_id`. `conversation` picks the platform session (one Traces entry per local conversation); `turn` groups every call of ONE prompt under the same trace turn, which `record_agent_turn` then finishes. |
+| `get_agent_tool_result` | Poll a pending local-control op (from `list_agent_tools` / `call_agent_tool` / `get_agent_system_prompt` / `record_agent_turn`) by `call_id` until its state is `done` or `error`. Only your own calls are visible. |
+| `record_agent_turn` | Finish ONE local turn on the platform trace so it reads like a conversation: the prompt the local agent received, its final answer, its status and timing, the tool calls it ran locally (as steps) and every tool name it used — under the `conversation` and `turn` ids its `call_agent_tool` calls were sent with (their steps are already there). The plugin's SubagentStop hook sends it; idempotent on `turn`. |
+| `get_agent_system_prompt` | The system prompt the platform assembles for YOU on this agent — soul, user metadata, invocation context, memory, skills and the closing platform contract — built by the agent's own runtime from your draft (else the deployed dev config). |
+| `get_eval_judge_prompt` | Render the platform's LLM-judge prompt for one standard eval and a transcript you produced locally; answers the prompt, the judge model the platform would use, the JSON contract keys (`score`, `subScores`, `reasoning`) and the tool-match verdicts. The platform grades, it never adjudicates pass/fail. |
+| `get_agent_workspace_archive` | A 15-minute presigned download of YOUR workspace for this agent — the memory and files your own conversations with it built — as a zip, for a read-only local snapshot. No upload counterpart. |
 
 ### Channels
 
@@ -140,6 +147,17 @@ agents they hold a role on).
 | `manage_stakeholder` | Bind (`add`, idempotent) or unbind (`remove`) a stakeholder on an agent — the person themself is untouched. |
 | `list_discovery_materials` | Materials (links, notes, files, photos) for one request or an agent's generic pool — metadata only, no file bytes. |
 | `get_material_download_link` | Mint a short-lived (15-minute) presigned download URL for one stored material file. |
+
+### Local agent emulation (AHP-889)
+
+The six `list_agent_tools` / `call_agent_tool` / `get_agent_tool_result` /
+`get_agent_system_prompt` / `get_eval_judge_prompt` / `get_agent_workspace_archive`
+tools above exist so a Claude Code session can RUN a Soleon agent locally: the
+reasoning happens on your machine, every tool executes on the platform. They ride
+the new `soleon-mcp/agent.invoke` consent scope (builder + admin bundles) except
+the judge prompt (`eval.read`); all of them run the caller's chat-plane invoke
+gate, so an agent you cannot chat with answers not-found. The `soleon-builder`
+plugin's `/pull-agent` skill drives them — you rarely call them by hand.
 
 ## Known gaps / wishlist
 

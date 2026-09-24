@@ -1,0 +1,50 @@
+{
+  "description": "Soleon local agent emulation — (1) every save under .soleon/agents/<slug>/ (SOUL.md, config.json, skills/, evals/) is pushed to the platform draft instantly via patch_agent_draft; a conflict stops the session and asks (exit 2); files anywhere else are ignored. (2) Each run of a pulled agent's subagent is recorded on the platform trace as ONE turn — the prompt, every tool call, the answer — via record_agent_turn (SubagentStart mints the turn id, SubagentStop reports the transcript); other subagents are untouched. (3) Before every prompt, each pulled agent in the project is checked against the platform (one get_agent_draft read); when the draft changed elsewhere (the Soleon editor, another session) the local copy is re-pulled and re-materialized so the run uses the current agent — workspace/ untouched, a pending save conflict wins, never blocks the prompt.",
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/bin/soleon_pull_refresh.py\"",
+            "timeout": 300
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/bin/soleon_draft_sync.py\"",
+            "timeout": 180
+          }
+        ]
+      }
+    ],
+    "SubagentStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/bin/soleon_turn_hooks.py\" start",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/bin/soleon_turn_hooks.py\" stop",
+            "timeout": 120
+          }
+        ]
+      }
+    ]
+  }
+}
