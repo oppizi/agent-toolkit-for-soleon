@@ -26,10 +26,20 @@ The five beyond `soleon-builder` — `channel.read`, `mcp.read`, `eval.run`,
 `discovery.read`, `discovery.write` — cover only tools Soleon already restricts to
 platform admins. That is exactly why they are here and not in a lower bundle.
 
+## Skills
+
+One: **`/write-evals`** — designing evals whose score reflects the behaviour under
+test rather than resemblance to a reference answer. Read it before writing an eval,
+and whenever a suite passes but you don't trust it.
+
+It is the same skill `soleon-builder` ships, byte for byte: both bundles are
+composed from one shared source, so the two copies can never drift apart.
+
 ## What this plugin does NOT do
 
-It ships **no skills and no commands** — it is a connection and a scope pin. The
-agent build loop lives in `soleon-builder`.
+It ships **no commands**, and none of the agent build loop. `/deploy-agent` — local
+identity file → validated `POST /agents` → deploy — lives in `soleon-builder` only.
+Beyond `/write-evals`, this bundle is a connection and a scope pin.
 
 Most importantly, it does **not** grant you admin. A bundle widens what you
 *consent* to, never what you are *permitted* to do. Soleon authorizes every request
@@ -57,7 +67,8 @@ breaks OAuth discovery.
 `soleon-deploy-agent` has been replaced by three role bundles and there is **no
 alias**. Uninstall it and install the bundle matching what you do. Note that the
 `deploy-agent` skill now lives in **`soleon-builder`**, not here — if that skill is
-what you came for, install `soleon-builder` (or both).
+what you came for, install `soleon-builder` (or both). `/write-evals` is available
+in both.
 
 Its **Soleon access token** setting is obsolete. Authentication is now the OAuth
 flow, so the long-lived JWT that used to sit in your keychain is gone; you can
