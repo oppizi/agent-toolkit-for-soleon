@@ -534,3 +534,28 @@ def test_a_wrapper_the_platform_could_not_describe_says_it_stays_on_soleon(tmp_p
     assert summary["localHelpers"] == []
     assert summary["platformHelpers"] == {"mcp_gmail_read": "ValueError: boom"}
     assert "still run on Soleon" in body
+
+
+def test_a_switched_off_budget_pulls_with_its_off_switch():
+    """2026-09-23: the draft held `dailyTokenBudgetEnabled: false`, the pull
+    dropped the flag, and a bare 500,000 in config.json reads as ON — so a
+    diagnosis blamed a budget that was Unlimited. Both directions carry it."""
+    sys.path.insert(0, str(PLUGIN / "bin"))
+    import soleon_agent_document as doc
+    flat = {"tokenBudget": 500000, "tokenBudgetEnabled": True,
+            "dailyTokenBudget": 500000, "dailyTokenBudgetEnabled": False,
+            "dailyTotalTokenBudget": 500000, "dailyTotalTokenBudgetEnabled": False}
+    loop = doc.flat_document_to_config(flat, {})["loop"]
+    assert loop["dailyTokenBudgetEnabled"] is False and loop["dailyTotalTokenBudgetEnabled"] is False
+    assert loop["tokenBudgetEnabled"] is True
+    # a non-boolean flag is dropped, never coerced
+    assert "dailyTokenBudgetEnabled" not in doc.flat_document_to_config(
+        {"dailyTokenBudgetEnabled": "no"}, {}).get("loop", {})
+
+
+def test_a_local_edit_to_a_budget_switch_syncs_to_the_draft():
+    sys.path.insert(0, str(PLUGIN / "bin"))
+    import soleon_agent_document as doc
+    changes = doc.config_to_flat_changes({"loop": {"dailyTokenBudget": 200000,
+                                                    "dailyTokenBudgetEnabled": True}})
+    assert changes["dailyTokenBudgetEnabled"] is True and changes["dailyTokenBudget"] == 200000

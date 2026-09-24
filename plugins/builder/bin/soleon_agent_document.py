@@ -45,6 +45,15 @@ _LOOP_FIELDS: Tuple[Tuple[str, str], ...] = (
     ("tokenBudget", "tokenBudget"),
     ("dailyTokenBudget", "dailyTokenBudget"),
     ("dailyTotalTokenBudget", "dailyTotalTokenBudget"),
+    # Each budget's on/off switch (the Loop tab's Unlimited toggle). Without
+    # these a switched-OFF budget pulled as a bare number, and the platform
+    # reads a number with no flag as ON (budget_contract.budget_setting): the
+    # local config.json of daily-inbox-summary showed daily budgets of 500,000
+    # that were in fact Unlimited, and a diagnosis blamed them (2026-09-23).
+    # Same names on both sides (ui_admin_agents lifts flat → loop verbatim).
+    ("tokenBudgetEnabled", "tokenBudgetEnabled"),
+    ("dailyTokenBudgetEnabled", "dailyTokenBudgetEnabled"),
+    ("dailyTotalTokenBudgetEnabled", "dailyTotalTokenBudgetEnabled"),
 )
 _DEFAULTS_FIELDS = ("model", "computeMode", "access", "accessUsers")
 _PROMPT_CACHE_TTLS = ("5m", "1h")
@@ -127,6 +136,8 @@ def flat_document_to_config(flat: Dict[str, Any], deployed_config: Optional[Dict
         if flat_key == "turnSummary" and not isinstance(v, bool):
             continue
         if flat_key.endswith("Budget") and (isinstance(v, bool) or not isinstance(v, (int, float))):
+            continue
+        if flat_key.endswith("BudgetEnabled") and not isinstance(v, bool):
             continue
         loop[cfg_key] = v
     if loop:
