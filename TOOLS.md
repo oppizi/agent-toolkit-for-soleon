@@ -9,7 +9,7 @@ tool the server publishes, automatically.
 server. Access follows platform roles (platform admins see everything; members see the
 agents they hold a role on).
 
-## Current tools (85)
+## Current tools (77)
 
 ### Agents
 
@@ -111,19 +111,6 @@ agents they hold a role on).
 | `move_idea_to_preparation` | Promote an idea into the build pipeline: mints an in-build agent shell seeded with the brief + scores. Admin-only. |
 | `get_pipeline` | The agent build-pipeline board: every not-yet-launched agent grouped by the 6 build stages. |
 | `set_pipeline_stage` | Set an agent's build-pipeline stage (one of the 6 stages, or terminal `Launched`). Admin-only. |
-
-### Business Center — Agent management & Wiki
-
-| Tool | What it does |
-|---|---|
-| `list_agent_thread` | An agent's discussion-thread comments (oldest-first) — the thread that takes over when an idea's forum locks. |
-| `add_agent_thread_comment` | Append a comment to an agent's discussion thread (flat — no reply nesting). |
-| `get_overview_visibility` | The manager-curated Business Center Overview visibility overrides (agent slug → shown \| hidden). |
-| `set_overview_visibility` | Set one agent's Overview visibility override (all other overrides survive). |
-| `get_wiki` | An agent's wiki: the ordered section layout, every page's metadata, and the nested page tree (no bodies). |
-| `get_wiki_page` | One wiki page in full: bodyMarkdown plus title, placement, and provenance. |
-| `put_wiki_page` | Create (title + section_id) or edit (page_id) a wiki page; the body is a full replacement. |
-| `delete_wiki_page` | Delete a wiki page and all its descendant sub-pages (soft-delete; re-create with `put_wiki_page` if needed). |
 
 ### Business Center — Discovery
 

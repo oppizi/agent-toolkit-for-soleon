@@ -118,9 +118,9 @@ admin — and differ only in the OAuth scopes they request:
 
 | Plugin | Scopes | For |
 |---|---|---|
-| `soleon-observer` | 8, all reads | Reading agents, traces, failures, usage, evals, ideas, wiki. No write consent at all. |
-| `soleon-builder` | 16 | The agent build loop: drafts, deploys, promotions, channel binds, custom MCPs, knowledge bases. Ships the `deploy-agent` skill. |
-| `soleon-admin` | 21 (all) | Platform admins — adds channel/custom-MCP instance reads, eval runs, and discovery. |
+| `soleon-observer` | 7, all reads | Reading agents, traces, failures, usage, evals, ideas. No write consent at all. |
+| `soleon-builder` | 14 | The agent build loop: drafts, deploys, promotions, channel binds, custom MCPs, knowledge bases. Ships the `deploy-agent` skill. |
+| `soleon-admin` | 19 (all) | Platform admins — adds channel/custom-MCP instance reads, eval runs, and discovery. |
 
 **Pick the narrowest one that covers your work.** A broader bundle grants no extra
 access: scope is a ceiling on what the token may consent to, never a role. Soleon

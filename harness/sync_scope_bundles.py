@@ -68,6 +68,42 @@ def _assigned_value(tree: ast.Module, name: str) -> ast.expr:
     )
 
 
+def _retired_inert_scopes(tree: ast.Module) -> frozenset[str]:
+    """The platform's ``RETIRED_INERT_SCOPES`` — taxonomy entries in no bundle.
+
+    A retired scope stays in the platform taxonomy only so already-published
+    clients that still pin it keep a valid authorization request (Cognito rejects
+    the whole request over one disallowed scope). It grants nothing and belongs to
+    no bundle, so no pin may carry it.
+
+    Optional: a platform tree from before the declaration existed retires nothing.
+    Declared as ``frozenset({...})`` — a call, which ``literal_eval`` refuses — so
+    the single set-literal argument is unwrapped first.
+    """
+    try:
+        node = _assigned_value(tree, "RETIRED_INERT_SCOPES")
+    except ExtractionError as exc:
+        if "not found" in str(exc):
+            return frozenset()
+        raise
+    if (
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id in ("frozenset", "set")
+        and not node.keywords
+    ):
+        if not node.args:
+            return frozenset()
+        if len(node.args) == 1:
+            node = node.args[0]
+    try:
+        return frozenset(ast.literal_eval(node))
+    except ValueError as exc:
+        raise ExtractionError(
+            f"RETIRED_INERT_SCOPES is not a literal set of scope names: {exc}"
+        ) from exc
+
+
 def expected_pins(source_text: str) -> dict[str, str]:
     """Derive ``{bundle: "space separated fully-qualified scopes"}`` from platform source.
 
@@ -83,8 +119,22 @@ def expected_pins(source_text: str) -> dict[str, str]:
     taxonomy = ast.literal_eval(_assigned_value(tree, "MCP_SCOPE_TAXONOMY"))
     bundle_order = tuple(ast.literal_eval(_assigned_value(tree, "BUNDLE_ORDER")))
     min_bundle = ast.literal_eval(_assigned_value(tree, "SCOPE_MIN_BUNDLE"))
+    retired = _retired_inert_scopes(tree)
 
-    unassigned = [name for name in taxonomy if name not in min_bundle]
+    stray = sorted(retired - set(taxonomy))
+    if stray:
+        raise ExtractionError(
+            f"RETIRED_INERT_SCOPES names scopes not in MCP_SCOPE_TAXONOMY: {stray}"
+        )
+    contradictory = sorted(retired & set(min_bundle))
+    if contradictory:
+        raise ExtractionError(
+            f"scopes both retired and assigned a bundle: {contradictory} — a retired "
+            "scope belongs to no bundle"
+        )
+
+    active = [name for name in taxonomy if name not in retired]
+    unassigned = [name for name in active if name not in min_bundle]
     if unassigned:
         raise ExtractionError(
             f"scope families with no bundle assignment: {unassigned} — assign them "
@@ -99,7 +149,7 @@ def expected_pins(source_text: str) -> dict[str, str]:
         included = set(bundle_order[: index + 1])
         pins[bundle] = " ".join(
             f"{identifier}/{name}"
-            for name in taxonomy
+            for name in active
             if min_bundle[name] in included
         )
     return pins

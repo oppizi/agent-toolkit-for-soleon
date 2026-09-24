@@ -200,6 +200,47 @@ def test_expected_pins_rejects_an_unknown_bundle_name():
         expected_pins(broken)
 
 
+def _with_retired_scope(retired_decl: str, assign_it: bool = False) -> str:
+    """The fixture plus a retired-inert ``old.read`` family, platform-shaped."""
+    source = _FIXTURE_SOURCE.replace(
+        '    "secret.read": "read secret",\n}',
+        '    "secret.read": "read secret",\n    "old.read": "Nothing — retired",\n}',
+    )
+    if assign_it:
+        source = source.replace('    "secret.read": "boss",\n}',
+                                '    "secret.read": "boss",\n    "old.read": "watcher",\n}')
+    return source + f"\nRETIRED_INERT_SCOPES: frozenset[str] = {retired_decl}\n"
+
+
+def test_expected_pins_leaves_retired_inert_scopes_out_of_every_pin():
+    """The platform keeps a retired family in its taxonomy (so pinned clients stay
+    valid) but in no bundle. It must neither fail extraction as 'unassigned' nor
+    reach any pin."""
+    pins = expected_pins(_with_retired_scope('frozenset({"old.read"})'))
+    assert pins == expected_pins(_FIXTURE_SOURCE)
+    assert all("old.read" not in scopes for scopes in pins.values())
+
+
+def test_expected_pins_without_the_retirement_declaration_retires_nothing():
+    """Older platform trees predate RETIRED_INERT_SCOPES; an unassigned family there
+    is still the loud error it always was."""
+    source = _with_retired_scope("frozenset()").replace(
+        "RETIRED_INERT_SCOPES: frozenset[str] = frozenset()\n", ""
+    )
+    with pytest.raises(ExtractionError, match="no bundle assignment"):
+        expected_pins(source)
+
+
+def test_expected_pins_rejects_a_scope_both_retired_and_assigned():
+    with pytest.raises(ExtractionError, match="both retired and assigned"):
+        expected_pins(_with_retired_scope('frozenset({"old.read"})', assign_it=True))
+
+
+def test_expected_pins_rejects_retiring_a_scope_outside_the_taxonomy():
+    with pytest.raises(ExtractionError, match="not in MCP_SCOPE_TAXONOMY"):
+        expected_pins(_with_retired_scope('frozenset({"old.read", "ghost.read"})'))
+
+
 def test_expected_pins_fails_loud_on_missing_declarations():
     with pytest.raises(ExtractionError, match="SCOPE_MIN_BUNDLE not found"):
         expected_pins('MCP_RESOURCE_SERVER_IDENTIFIER = "x"\n'

@@ -10,12 +10,12 @@ skill.
 
 ## Scopes this bundle requests
 
-Sixteen — the eight `soleon-observer` reads, plus:
+Fourteen — the seven `soleon-observer` reads, plus:
 
 ```
 soleon-mcp/agent.write   soleon-mcp/agent.deploy  soleon-mcp/agent.delete
 soleon-mcp/channel.write soleon-mcp/mcp.write     soleon-mcp/kb.write
-soleon-mcp/business.write soleon-mcp/wiki.write
+soleon-mcp/business.write
 ```
 
 Installing a broader bundle grants **no** additional access. Scope is a ceiling on
