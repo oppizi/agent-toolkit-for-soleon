@@ -116,16 +116,16 @@ agents they hold a role on).
 
 | Tool | What it does |
 |---|---|
-| `list_discovery_requests` | Discovery requests (owner-side interview/context collection): person, agent, modality, status, injected context. |
+| `list_discovery_requests` | Discovery requests (owner-side interview/context collection): person, agent, modality, status, injected context. Filter by `subject_ref` (`idea:{idea_id}`, or `agent:{slug}` to read an agent's existing requests) or `person_ref`. |
 | `get_discovery_request` | One request's full tree in one call: META, collected materials, gaps, interview summary, form. |
-| `create_discovery_request` | Ask a person for knowledge an agent needs — modality conversation (AI interview) or form; optional owner steering. |
+| `create_discovery_request` | Ask a person for knowledge a ticket needs (`subject_ref` `idea:{idea_id}`; agent subjects are retired) — modality conversation (AI interview) or form; optional owner steering. |
 | `update_discovery_request` | Edit a request's status, interview-chat binding, or injected context/gaps (identity fields are immutable). |
 | `manage_discovery_gap` | Manage a request's knowledge gaps: add / update / delete / expand / analyze (async AI gap analysis). |
 | `list_discovery_people` | The env-neutral Discovery people directory, with Cognito candidate matching and email duplicate-check. |
 | `manage_discovery_person` | Create / update / delete a directory person (an existing email reuses that person; delete removes the discovery profile only). |
-| `list_stakeholders` | An agent's discovery stakeholders — directory people bound to the agent as knowledge sources. |
-| `manage_stakeholder` | Bind (`add`, idempotent) or unbind (`remove`) a stakeholder on an agent — the person themself is untouched. |
-| `list_discovery_materials` | Materials (links, notes, files, photos) for one request or an agent's generic pool — metadata only, no file bytes. |
+| `list_stakeholders` | A subject's discovery stakeholders — directory people bound to it as knowledge sources. Per-subject: `subject_ref` is `idea:{idea_id}`, or `agent:{slug}` to read an agent's existing stakeholders. |
+| `manage_stakeholder` | Bind (`add`, idempotent) or unbind (`remove`) a stakeholder on a ticket (`subject_ref` `idea:{idea_id}`; agent subjects are refused) — the person themself is untouched. |
+| `list_discovery_materials` | Materials (links, notes, files, photos) for one request or a subject's generic pool (`subject_ref` `idea:{idea_id}`, or `agent:{slug}` to read an agent's existing pool) — metadata only, no file bytes. |
 | `get_material_download_link` | Mint a short-lived (15-minute) presigned download URL for one stored material file. |
 
 ## Known gaps / wishlist
