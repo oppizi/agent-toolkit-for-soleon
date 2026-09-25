@@ -171,8 +171,12 @@ From the script's JSON summary tell the user, in plain words:
    helper's 240 s limit and its steps show up locally. Name each one. Any in
    `platformHelpers` still run on Soleon; say so and quote the reason.
 4. **Not emulated — platform-only, read-only in `config.json`** (D13):
-   channels, budgets, schedules, guardrails, online-eval sampling — with the
-   values from `notEmulated`.
+   channels, the daily token budgets, schedules, guardrails, online-eval
+   sampling — with the values from `notEmulated`. The **Per Message Token
+   Budget IS enforced** (`messageBudget`, 0 = off): the agent and every helper
+   it starts share it, and at 85% of it — Soleon's wind-down point — further
+   tool calls are refused and the agent answers from what it has. Say so, with
+   the number.
 5. **The edit loop**: editing `SOUL.md`, `config.json`, `skills/**`, or
    `evals/*.json` pushes to their Soleon draft on every save (the plugin's
    hook); a conflict with an edit made elsewhere stops and asks. Platform

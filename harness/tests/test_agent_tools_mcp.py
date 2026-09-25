@@ -418,6 +418,9 @@ class _Proc:
 
 def _runner(tmp_path, answer=None, calls=None, **kw):
     calls = calls if calls is not None else []
+    # These tests are about the worker's isolation and approvals; the message
+    # budget's streaming run has its own tests (test_message_budget.py).
+    (tmp_path / "config.json").write_text(json.dumps({"loop": {"tokenBudgetEnabled": False}}))
 
     def fake_run(cmd, **opts):
         calls.append(cmd)

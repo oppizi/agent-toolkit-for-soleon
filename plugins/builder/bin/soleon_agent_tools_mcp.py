@@ -34,10 +34,12 @@ import os
 import shutil
 import subprocess
 import sys
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+import soleon_message_budget as message_budget  # noqa: E402
 from soleon_mcp_client import (  # noqa: E402
     AuthError,
     MissingTokenError,
@@ -317,11 +319,15 @@ class TurnTracker:
     still find it. `None` path = no persistence: one id per process.
     """
 
-    def __init__(self, path: Optional[str], now=None, process_started_at: Optional[float] = None):
+    def __init__(self, path: Optional[str], now=None, process_started_at: Optional[float] = None,
+                 fixed: Optional[str] = None):
         self.path = path
         self._now = now or __import__("time").time
         self._started = process_started_at if process_started_at is not None else self._now()
-        self._id: Optional[str] = None
+        #: A local worker's server is TOLD its turn (`--turn`): it starts
+        #: minutes into the agent's run, when the hook file already reads as
+        #: stale, and minting its own id would split the message in two.
+        self._id: Optional[str] = fixed or None
 
     def _load(self) -> Optional[Dict[str, Any]]:
         if not self.path or not os.path.isfile(self.path):
@@ -392,6 +398,11 @@ def claude_binary() -> Optional[str]:
 LOCAL_WORKER_TIMEOUT_S = 1800
 
 
+class _Finished:
+    def __init__(self, stdout: str, stderr: str, returncode: int):
+        self.stdout, self.stderr, self.returncode = stdout, stderr, returncode
+
+
 class LocalWorkerRunner:
     """Runs a subagent-mode wrapper's worker LOCALLY: a headless Claude Code
     session whose system prompt is the platform worker's own, whose ONLY tools
@@ -408,12 +419,20 @@ class LocalWorkerRunner:
       * `--permission-mode dontAsk` + `--allowedTools mcp__soleon-agent-tools`
         — its own tools run, anything else is refused without a prompt nobody
         would see;
-      * `--no-session-persistence` — no transcript left behind per call.
+      * `--no-session-persistence` — no transcript left behind per call;
+      * `--turn` on its tools server — its platform calls land in the agent's
+        turn, not one the worker would mint for itself.
+
+    The Per Message Token Budget covers the worker too (`soleon_message_budget`):
+    with a budget on it runs `--output-format stream-json`, this runner books
+    each of its model calls in the message's ledger as it arrives, and
+    `--settings` gives it ONLY the budget's PreToolUse hook, which refuses its
+    tool calls once the message is spent.
     """
 
     def __init__(self, *, slug: str, tools_path: str, server_url: str, model: str,
                  app_env: str = "dev", credentials: Optional[str] = None, binary: Optional[str] = None,
-                 runner=None, timeout_s: float = LOCAL_WORKER_TIMEOUT_S):
+                 runner=None, popen=None, timeout_s: float = LOCAL_WORKER_TIMEOUT_S):
         self.slug = slug
         self.tools_path = os.path.abspath(tools_path)
         self.server_url = server_url
@@ -423,12 +442,19 @@ class LocalWorkerRunner:
         self.binary = binary
         self.timeout_s = timeout_s
         self._run = runner or subprocess.run
+        self._popen = popen or subprocess.Popen
+        self.agent_dir = os.path.dirname(self.tools_path)
 
-    def command(self, entry: Dict[str, Any], task: str, *, approved: bool) -> List[str]:
+    def command(self, entry: Dict[str, Any], task: str, *, approved: bool, turn: Optional[str] = None,
+                budget_run: Optional[str] = None) -> List[str]:
+        """`budget_run` = this run's id in the message's ledger, when the
+        message budget is on."""
         worker = local_worker_of(entry) or {}
         server_args = [os.path.abspath(__file__), "--slug", self.slug, "--tools", self.tools_path,
                        "--server-url", self.server_url, "--app-env", self.app_env,
                        "--only", ",".join(worker["members"])]
+        if turn:
+            server_args += ["--turn", turn]
         if self.credentials:
             server_args += ["--credentials", self.credentials]
         if approved:
@@ -443,14 +469,19 @@ class LocalWorkerRunner:
                "--strict-mcp-config", "--mcp-config", json.dumps(mcp),
                "--allowedTools", "mcp__soleon-agent-tools",
                "--permission-mode", "dontAsk",
-               "--no-session-persistence",
-               "--output-format", "json"]
+               "--no-session-persistence"]
+        if budget_run and turn:
+            cmd += ["--output-format", "stream-json", "--verbose", "--settings",
+                    json.dumps(message_budget.helper_hook_settings(self.agent_dir, turn, budget_run))]
+        else:
+            cmd += ["--output-format", "json"]
         cap = worker.get("maxIterations")
         if isinstance(cap, int) and cap > 0:
             cmd += ["--max-turns", str(cap)]
         return cmd
 
-    def run(self, entry: Dict[str, Any], task: str, *, approved: bool) -> Dict[str, Any]:
+    def run(self, entry: Dict[str, Any], task: str, *, approved: bool,
+            turn: Optional[str] = None) -> Dict[str, Any]:
         name = entry.get("name")
         if not task.strip():
             return _text_result("{} needs a `prompt`: say what to look up or do.".format(name), True)
@@ -462,21 +493,87 @@ class LocalWorkerRunner:
                 "(CLAUDE_CODE_EXECPATH is unset and `claude` is not on PATH). Run this agent from "
                 "Claude Code, or install the CLI.".format(name), True)
         _log("{} → running its helper locally ({} tool(s))".format(name, len((local_worker_of(entry) or {}).get("members") or [])))
-        try:
-            proc = self._run(self.command(entry, task, approved=approved), capture_output=True, text=True,
-                             timeout=self.timeout_s, stdin=subprocess.DEVNULL)
-        except subprocess.TimeoutExpired:
+        budget_run = None
+        if turn and message_budget.budget_of(Path(self.agent_dir)) > 0:
+            budget_run = __import__("uuid").uuid4().hex[:12]
+        cmd = self.command(entry, task, approved=approved, turn=turn, budget_run=budget_run)
+        if budget_run:
+            proc = self._stream(cmd, turn, budget_run)
+        else:
+            try:
+                proc = self._run(cmd, capture_output=True, text=True, timeout=self.timeout_s,
+                                 stdin=subprocess.DEVNULL)
+            except subprocess.TimeoutExpired:
+                proc = None
+        if proc is None:
             return _text_result("{}'s local helper was still running after {} s and was stopped.".format(
                 name, int(self.timeout_s)), True)
         return self._render(name, proc)
 
+    def _stream(self, cmd: List[str], turn: str, run_id: str) -> Any:
+        """Run a budgeted helper, booking each model call in the message's
+        ledger as it streams in. Returns a finished-process-like object whose
+        stdout is the final `result` event (what `_render` reads), or None on
+        timeout. The finished run's `modelUsage` replaces the running sum — the
+        stream's per-call output counts are the first chunk's, not the final."""
+        import threading
+        ledger = message_budget.Ledger(Path(self.agent_dir))
+        calls: Dict[str, int] = {}
+        result: Dict[str, Any] = {}
+        tail: List[str] = []
+        err: List[str] = []
+        proc = self._popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                           stdin=subprocess.DEVNULL)
+
+        def read_out():
+            for line in proc.stdout:
+                try:
+                    event = json.loads(line)
+                except ValueError:
+                    tail.append(line)
+                    continue
+                if isinstance(event, dict) and event.get("type") == "result":
+                    result.update(event)
+                    continue
+                booked = message_budget.stream_call_tokens(event)
+                if booked:
+                    calls[booked[0]] = booked[1]
+                    ledger.note_helper(turn, run_id, sum(calls.values()))
+
+        def read_err():
+            err.append(proc.stderr.read())
+
+        readers = [threading.Thread(target=read_out, daemon=True), threading.Thread(target=read_err, daemon=True)]
+        for t in readers:
+            t.start()
+        try:
+            returncode = proc.wait(timeout=self.timeout_s)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait()
+            returncode = None
+        for t in readers:
+            t.join(timeout=5)
+        ledger.note_helper(turn, run_id,
+                           message_budget.result_tokens(result) if result.get("modelUsage") else sum(calls.values()))
+        if returncode is None:
+            return None
+        stdout = json.dumps(result) if result else "".join(tail)
+        return _Finished(stdout=stdout, stderr="".join(err), returncode=returncode)
+
     @staticmethod
-    def _render(name: Any, proc: Any) -> Dict[str, Any]:
+    def _parse(proc: Any) -> Optional[Dict[str, Any]]:
         out = (proc.stdout or "").strip()
         try:
             data = json.loads(out.splitlines()[-1]) if out else None
         except (json.JSONDecodeError, IndexError):
             data = None
+        return data if isinstance(data, dict) else None
+
+    @staticmethod
+    def _render(name: Any, proc: Any) -> Dict[str, Any]:
+        out = (proc.stdout or "").strip()
+        data = LocalWorkerRunner._parse(proc)
         if not isinstance(data, dict):
             err = (proc.stderr or out or "no output").strip()[-800:]
             return _text_result("{}'s local helper failed (exit {}): {}".format(name, proc.returncode, err), True)
@@ -526,7 +623,8 @@ class AgentToolsServer:
             # tools, instead of as an opaque loop on Soleon.
             if entry.get("approval") and not approved:
                 return self.render(name, {"state": "error", "error": "approval_required"})
-            return self.local_workers.run(entry, str(args.get("prompt") or ""), approved=approved)
+            return self.local_workers.run(entry, str(args.get("prompt") or ""), approved=approved,
+                                          turn=self.turn.current())
         try:
             envelope = self.client.call_tool("call_agent_tool", {
                 "slug": self.slug, "app_env": self.app_env,
@@ -671,6 +769,8 @@ def main(argv: Optional[List[str]] = None) -> int:
                     help="comma-separated tool names: publish ONLY these (a configured helper's subset)")
     ap.add_argument("--pre-approved", action="store_true",
                     help="a local WORKER's server whose wrapper call the person approved: run gated calls approved")
+    ap.add_argument("--turn", default=None,
+                    help="a local WORKER's server: the agent turn its calls belong to")
     ap.add_argument("--model", default=None,
                     help="the local model a subagent-mode wrapper's worker runs on (default: pull.json's)")
     args = ap.parse_args(argv)
@@ -697,7 +797,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     tracker = ConversationTracker(os.path.join(agent_dir, ".local-conversation.json"))
     # The turn id lives there too: written by the SubagentStart hook for this
     # run, read by the SubagentStop hook when it records the prompt + answer.
-    turn = TurnTracker(os.path.join(agent_dir, TURN_FILE_NAME))
+    turn = TurnTracker(None, fixed=args.turn) if args.turn else TurnTracker(os.path.join(agent_dir, TURN_FILE_NAME))
     workers = None
     if args.only is None:
         # Only the AGENT'S server runs wrappers' workers. A worker's own server

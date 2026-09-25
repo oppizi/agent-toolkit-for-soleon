@@ -39,6 +39,8 @@ STDLIB_OK = {
     "urllib", "http", "zipfile", "hashlib", "time", "threading", "io", "socket",
     "select", "stat", "tempfile", "uuid", "base64", "mimetypes", "fnmatch",
     "dataclasses", "functools", "textwrap", "difflib",
+    # the local message budget (bin/soleon_message_budget.py)
+    "contextlib", "fcntl", "shlex",
 }
 # The plugin's OWN modules that its scripts import from a sibling path (they ship
 # together, so they are not third-party): the deploy-agent engine seam plus every

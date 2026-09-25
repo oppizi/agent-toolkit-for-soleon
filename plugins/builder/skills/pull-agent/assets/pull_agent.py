@@ -830,6 +830,9 @@ def materialize(args: argparse.Namespace) -> int:
                             if t.get("subagentPair") and t.get("localWorkerError")},
         "workspaceTools": sorted(t["name"] for t in tools if t.get("kind") == "workspace"),
         "pathRewrites": ["{} -> {}".format(a, b) for a, b in applied],
+        # Enforced here, as on Soleon (bin/soleon_message_budget.py): the
+        # agent and its local helpers share it; 0 = switched off.
+        "messageBudget": message_budget_of(config),
         "notEmulated": not_emulated(config, document),
         # The Soleon view where this agent's LOCAL runs show up. They run on
         # the draft session, so the Traces tab files them under "Draft
@@ -953,13 +956,26 @@ def ensure_permission_allow(project_root: Path, plugin_root: Optional[Path] = No
             "pluginServerRulesUnresolved": unresolved}
 
 
+def message_budget_of(config: Dict[str, Any]) -> int:
+    """The Per Message Token Budget a local run enforces (0 = off) — the same
+    resolution the budget hook applies (`budget_contract.budget_setting`)."""
+    loop = config.get("loop") if isinstance(config.get("loop"), dict) else {}
+    if loop.get("tokenBudgetEnabled") is False:
+        return 0
+    raw = loop.get("tokenBudget")
+    return int(raw) if isinstance(raw, (int, float)) and not isinstance(raw, bool) and raw > 0 else 500_000
+
+
 def not_emulated(config: Dict[str, Any], document: Dict[str, Any]) -> Dict[str, Any]:
     """The read-only, platform-only settings (spec D13), with their values."""
     loop = config.get("loop") if isinstance(config.get("loop"), dict) else {}
     evals = config.get("evals") if isinstance(config.get("evals"), dict) else {}
     return {
         "channels": document.get("channels") if document.get("channels") is not None else "(bound on the platform)",
-        "budgets": {k: loop.get(k) for k in ("tokenBudget", "dailyTokenBudget", "dailyTotalTokenBudget") if k in loop},
+        # The Per Message Token Budget IS enforced locally ("messageBudget");
+        # the daily allowances need Soleon's per-day ledger and are not.
+        "budgets": {k: loop.get(k) for k in ("dailyTokenBudget", "dailyTokenBudgetEnabled",
+                                             "dailyTotalTokenBudget", "dailyTotalTokenBudgetEnabled") if k in loop},
         "schedules": len(config.get("schedules") or []) if isinstance(config.get("schedules"), list) else 0,
         "guardrails": bool(isinstance(config.get("guardrails"), dict) and config["guardrails"]),
         "onlineEvalSampling": {k: evals.get(k) for k in ("scoring", "budget") if k in evals},

@@ -218,7 +218,8 @@ def test_not_emulated_summary_lists_the_platform_only_settings(pulled):
     ne = summary["notEmulated"]
     assert set(ne) == {"channels", "budgets", "schedules", "guardrails", "onlineEvalSampling"}
     assert ne["schedules"] == 1
-    assert ne["budgets"] == {"tokenBudget": 500000, "dailyTokenBudget": 2000000}
+    assert ne["budgets"] == {"dailyTokenBudget": 2000000}          # daily allowances are Soleon-only
+    assert summary["messageBudget"] == 500000                       # the per-message one is enforced here
     assert ne["guardrails"] is False
     assert ne["onlineEvalSampling"]["scoring"] == {"frequency": "every_10"}
 

@@ -1,5 +1,5 @@
 {
-  "description": "Soleon local agent emulation — (1) every save under .soleon/agents/<slug>/ (SOUL.md, config.json, skills/, evals/) is pushed to the platform draft instantly via patch_agent_draft; a conflict stops the session and asks (exit 2); files anywhere else are ignored. (2) Each run of a pulled agent's subagent is recorded on the platform trace as ONE turn — the prompt, every tool call, the answer — via record_agent_turn (SubagentStart mints the turn id, SubagentStop reports the transcript); other subagents are untouched. (3) Before every prompt, each pulled agent in the project is checked against the platform (one get_agent_draft read); when the draft changed elsewhere (the Soleon editor, another session) the local copy is re-pulled and re-materialized so the run uses the current agent — workspace/ untouched, a pending save conflict wins, never blocks the prompt.",
+  "description": "Soleon local agent emulation — (1) every save under .soleon/agents/<slug>/ (SOUL.md, config.json, skills/, evals/) is pushed to the platform draft instantly via patch_agent_draft; a conflict stops the session and asks (exit 2); files anywhere else are ignored. (2) Each run of a pulled agent's subagent is recorded on the platform trace as ONE turn — the prompt, every tool call, the answer — via record_agent_turn (SubagentStart mints the turn id, SubagentStop reports the transcript); other subagents are untouched. (3) Before every prompt, each pulled agent in the project is checked against the platform (one get_agent_draft read); when the draft changed elsewhere (the Soleon editor, another session) the local copy is re-pulled and re-materialized so the run uses the current agent — workspace/ untouched, a pending save conflict wins, never blocks the prompt. (4) Before every tool call inside a pulled agent's run, the message's token spend so far — the agent's own model calls plus every local helper's — is checked against the agent's Per Message Token Budget; at Soleon's wind-down point (85%) the call is refused and the agent answers from what it has, as it would on Soleon.",
   "hooks": {
     "UserPromptSubmit": [
       {
@@ -8,6 +8,17 @@
             "type": "command",
             "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/bin/soleon_pull_refresh.py\"",
             "timeout": 300
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/bin/soleon_message_budget.py\" agent-pretool",
+            "timeout": 10
           }
         ]
       }
