@@ -13,7 +13,7 @@ refused with the reason, and the model answers — a final answer needs no tool,
 so it is never blocked, exactly like Soleon's tool-free wind-down exemption.
 
 Where the numbers come from (each verified against Claude Code 2.1.x):
-  * the agent — its own transcript, `<session transcript minus .jsonl>/
+  * the agent and each configured subagent run for it — its own transcript, `<session transcript minus .jsonl>/
     subagents/agent-<agent_id>.jsonl`; a model call's `usage` is written before
     its tool call's PreToolUse fires, once per content block, so calls are
     de-duplicated by message id;
@@ -26,8 +26,8 @@ Where the numbers come from (each verified against Claude Code 2.1.x):
   * a helper once it finished — `modelUsage` of its result (the `usage` block
     covers only its LAST model call).
 
-The ledger (`<agent dir>/.local-budget.json`) holds one message's state:
-`{turn, agentTranscript, helpers: {run: tokens}}`.
+The ledger (`<agent dir>/.local-budget.json`) holds one message's state — see
+`Ledger` for what a message covers.
 
 Not mirrored: Soleon can lower the wind-down point for a simple request (its
 per-turn "soft budget" comes from a complexity estimate this run cannot
@@ -36,7 +36,7 @@ Soleon turn gets — so a local run never refuses what Soleon would allow.
 
 Hooks:
     python3 soleon_message_budget.py agent-pretool          # plugin PreToolUse
-    python3 soleon_message_budget.py helper-pretool --agent-dir D --turn T --run R
+    python3 soleon_message_budget.py helper-pretool --agent-dir D --message M --run R
 """
 from __future__ import annotations
 
@@ -164,62 +164,94 @@ def stream_call_tokens(event: Any) -> Optional[Tuple[str, int]]:
 # the ledger
 # ---------------------------------------------------------------------------
 
-class Ledger:
-    """One message's spend, shared by the agent's hook, the runner and each
-    helper's hook — separate processes, so every change is read-modify-write
-    under an exclusive lock."""
+#: A helper started this soon after a pulled agent's tool call belongs to that
+#: call's message: the wrapper call's own PreToolUse touches the ledger
+#: milliseconds before the call reaches the tools server that starts it.
+JOIN_WINDOW_S = 30.0
 
-    def __init__(self, agent_dir: Path):
+
+class Ledger:
+    """One message's spend, shared by the agents' hooks, the runner and each
+    helper's hook — separate processes, so every change is read-modify-write
+    under an exclusive lock.
+
+    A MESSAGE is everything between two prompts of the person: the pulled
+    agent's run(s), every configured subagent the conversation runs for it
+    (`<slug>--<id>`, workflows' members included), and every integration
+    helper any of them starts. Claude Code stamps one `prompt_id` on every
+    tool call of a prompt, subagents' included, so that id is the key.
+
+    State: `{message, runs: {agent_id: transcript}, helpers: {run: tokens},
+    touchedAt}`."""
+
+    def __init__(self, agent_dir: Path, now=None):
         self.path = Path(agent_dir) / LEDGER_NAME
+        self._now = now or __import__("time").time
+
+    def _load(self) -> Dict[str, Any]:
+        try:
+            state = json.loads(self.path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            state = {}
+        return state if isinstance(state, dict) else {}
 
     @contextlib.contextmanager
-    def _locked(self, turn: str):
+    def _locked(self, message: str, touch: bool = False):
         with open(str(self.path) + ".lock", "a+") as lock:
             try:
                 import fcntl
                 fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
             except ImportError:  # Windows: best effort, same-process safety only
                 pass
-            try:
-                state = json.loads(self.path.read_text(encoding="utf-8"))
-            except (OSError, ValueError):
-                state = {}
-            if not isinstance(state, dict) or state.get("turn") != turn:
-                state = {"turn": turn, "agentTranscript": None, "helpers": {}}
+            state = self._load()
+            if state.get("message") != message:
+                state = {"message": message, "runs": {}, "helpers": {}, "touchedAt": None}
+            if touch:
+                state["touchedAt"] = self._now()
             yield state
             tmp = str(self.path) + ".tmp"
             with open(tmp, "w", encoding="utf-8") as fh:
                 json.dump(state, fh)
             os.replace(tmp, self.path)
 
-    def note_agent(self, turn: str, transcript: Optional[str]) -> Dict[str, Any]:
-        with self._locked(turn) as state:
+    def note_run(self, message: str, agent_id: str, transcript: Optional[str]) -> Dict[str, Any]:
+        with self._locked(message, touch=True) as state:
             if transcript:
-                state["agentTranscript"] = transcript
+                state["runs"][agent_id] = transcript
             return dict(state)
 
-    def note_helper(self, turn: str, run: str, tokens: int) -> Dict[str, Any]:
-        with self._locked(turn) as state:
+    def note_helper(self, message: str, run: str, tokens: int) -> Dict[str, Any]:
+        with self._locked(message) as state:
             state["helpers"][run] = max(int(tokens), 0)
             return dict(state)
 
-    def read(self, turn: str) -> Dict[str, Any]:
-        with self._locked(turn) as state:
+    def read(self, message: str) -> Dict[str, Any]:
+        with self._locked(message) as state:
             return dict(state)
 
+    def message_for_helper(self, fallback: str) -> str:
+        """The message a helper starting NOW belongs to: the one a pulled
+        agent's tool call just touched, else `fallback` (hooks not installed —
+        the helper then only answers to its own spend)."""
+        state = self._load()
+        touched = state.get("touchedAt")
+        if isinstance(state.get("message"), str) and isinstance(touched, (int, float)) \
+                and self._now() - touched <= JOIN_WINDOW_S:
+            return state["message"]
+        return fallback
 
-def spent(state: Dict[str, Any], agent_tokens: Optional[int] = None) -> int:
-    agent = transcript_tokens(state.get("agentTranscript")) if agent_tokens is None else agent_tokens
-    return agent + sum(int(v) for v in (state.get("helpers") or {}).values())
+
+def spent(state: Dict[str, Any]) -> int:
+    runs = sum(transcript_tokens(p) for p in (state.get("runs") or {}).values())
+    return runs + sum(int(v) for v in (state.get("helpers") or {}).values())
 
 
-def refusal(used: int, budget: int, *, helper: bool) -> str:
-    who = "this helper" if helper else "the agent"
+def refusal(used: int, budget: int, *, who: str) -> str:
     return (
         "per-message token budget exhausted: used={used} budget={budget} — this message has used "
-        "{used:,} of its {budget:,}-token Per Message Token Budget (the agent and every helper share it), "
-        "and Soleon stops tool use at {pct}% of it. Do not call any more tools: {who} must answer now "
-        "from what it has already gathered, and say plainly what it could not get to."
+        "{used:,} of its {budget:,}-token Per Message Token Budget (the agent, its subagents and every "
+        "helper share it), and Soleon stops tool use at {pct}% of it. Do not call any more tools: {who} "
+        "must answer now from what it has already gathered, and say plainly what it could not get to."
     ).format(used=used, budget=budget, pct=int(WIND_DOWN_FRACTION * 100), who=who)
 
 
@@ -236,61 +268,72 @@ def _deny(reason: str) -> None:
 # hooks
 # ---------------------------------------------------------------------------
 
-def _pulled_agent_dir(hook: Dict[str, Any]) -> Optional[Path]:
+def _pulled_agent_of(hook: Dict[str, Any]) -> Optional[Tuple[Path, bool]]:
+    """(the pulled agent's dir, whether this run is one of its configured
+    subagents) — `<slug>` is the agent itself, `<slug>--<id>` a configured
+    subagent (pull_agent.py names them so); None for anything else."""
     agent_type = hook.get("agent_type")
     if not isinstance(agent_type, str) or not agent_type or "/" in agent_type or agent_type.startswith("."):
         return None
-    candidate = Path(hook.get("cwd") or os.getcwd()) / ".soleon" / "agents" / agent_type
-    return candidate if (candidate / "pull.json").is_file() else None
+    slug, sep, _ = agent_type.partition("--")
+    candidate = Path(hook.get("cwd") or os.getcwd()) / ".soleon" / "agents" / slug
+    if not slug or not (candidate / "pull.json").is_file():
+        return None
+    return candidate, bool(sep)
 
 
-def _turn_of(agent_dir: Path, agent_id: str) -> str:
-    """This run's turn id — the SubagentStart hook's, when the file is this
-    run's; else a key of the run itself (its helpers then cannot be joined,
-    and only the agent's own spend counts)."""
+def _message_of(hook: Dict[str, Any], agent_dir: Path, agent_id: str) -> str:
+    """The person's prompt this run serves. Claude Code stamps `prompt_id`
+    on every tool call; without it (an older build), the agent run's own turn
+    — its configured subagents then cannot be joined."""
+    prompt_id = hook.get("prompt_id")
+    if isinstance(prompt_id, str) and prompt_id:
+        return "prompt:" + prompt_id
     try:
         data = json.loads((agent_dir / TURN_FILE_NAME).read_text(encoding="utf-8"))
     except (OSError, ValueError):
         data = None
     if isinstance(data, dict) and data.get("agentId") == agent_id and isinstance(data.get("turn"), str):
-        return data["turn"]
+        return "turn:" + data["turn"]
     return "agent:" + agent_id
 
 
 def agent_pretool(hook: Dict[str, Any]) -> int:
-    """PreToolUse for the whole session: acts only inside a pulled agent's
-    subagent run (every other agent, and the main conversation, pass)."""
+    """PreToolUse for the whole session: acts only inside a run of a pulled
+    agent or one of its configured subagents (every other agent, and the main
+    conversation, pass)."""
     agent_id = hook.get("agent_id")
-    agent_dir = _pulled_agent_dir(hook) if agent_id else None
-    if agent_dir is None:
+    found = _pulled_agent_of(hook) if agent_id else None
+    if found is None:
         return 0
+    agent_dir, is_subagent = found
     budget = budget_of(agent_dir)
     if budget <= 0:
         return 0
     transcript = subagent_transcript(hook.get("transcript_path"), str(agent_id))
-    state = Ledger(agent_dir).note_agent(_turn_of(agent_dir, str(agent_id)), transcript)
+    state = Ledger(agent_dir).note_run(_message_of(hook, agent_dir, str(agent_id)), str(agent_id), transcript)
     used = spent(state)
     if used >= wind_down_at(budget):
-        _deny(refusal(used, budget, helper=False))
+        _deny(refusal(used, budget, who="this subagent" if is_subagent else "the agent"))
     return 0
 
 
-def helper_pretool(hook: Dict[str, Any], agent_dir: Path, turn: str, run: str) -> int:
+def helper_pretool(hook: Dict[str, Any], agent_dir: Path, message: str, run: str) -> int:
     """PreToolUse inside a helper the runner started: the message's ledger —
     which the runner keeps current with this helper's calls — decides."""
     budget = budget_of(agent_dir)
     if budget <= 0:
         return 0
-    used = spent(Ledger(agent_dir).read(turn))
+    used = spent(Ledger(agent_dir).read(message))
     if used >= wind_down_at(budget):
-        _deny(refusal(used, budget, helper=True))
+        _deny(refusal(used, budget, who="this helper"))
     return 0
 
 
-def helper_hook_settings(agent_dir: str, turn: str, run: str) -> Dict[str, Any]:
+def helper_hook_settings(agent_dir: str, message: str, run: str) -> Dict[str, Any]:
     """`--settings` for a helper run: this module as its PreToolUse hook."""
     cmd = " ".join(_quote(p) for p in [sys.executable, os.path.abspath(__file__), "helper-pretool",
-                                          "--agent-dir", agent_dir, "--turn", turn, "--run", run])
+                                          "--agent-dir", agent_dir, "--message", message, "--run", run])
     return {"hooks": {"PreToolUse": [{"hooks": [{"type": "command", "command": cmd, "timeout": 10}]}]}}
 
 
@@ -312,17 +355,17 @@ def main(argv: Optional[Iterable[str]] = None, stream=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("mode", choices=("agent-pretool", "helper-pretool"))
     ap.add_argument("--agent-dir")
-    ap.add_argument("--turn")
+    ap.add_argument("--message")
     ap.add_argument("--run")
     args = ap.parse_args(list(sys.argv[1:] if argv is None else argv))
     hook = _read_hook(stream)
     try:
         if args.mode == "agent-pretool":
             return agent_pretool(hook)
-        if not (args.agent_dir and args.turn and args.run):
-            sys.stderr.write("helper-pretool needs --agent-dir, --turn and --run\n")
+        if not (args.agent_dir and args.message and args.run):
+            sys.stderr.write("helper-pretool needs --agent-dir, --message and --run\n")
             return 0
-        return helper_pretool(hook, Path(args.agent_dir), args.turn, args.run)
+        return helper_pretool(hook, Path(args.agent_dir), args.message, args.run)
     except OSError as exc:
         # A ledger the hook cannot read or write must not wedge the run; say
         # so where the person sees it instead of refusing every tool.

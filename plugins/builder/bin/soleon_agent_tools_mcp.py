@@ -35,7 +35,7 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -446,9 +446,9 @@ class LocalWorkerRunner:
         self.agent_dir = os.path.dirname(self.tools_path)
 
     def command(self, entry: Dict[str, Any], task: str, *, approved: bool, turn: Optional[str] = None,
-                budget_run: Optional[str] = None) -> List[str]:
-        """`budget_run` = this run's id in the message's ledger, when the
-        message budget is on."""
+                budget_run: Optional[Tuple[str, str]] = None) -> List[str]:
+        """`budget_run` = (message, this run's id) in the message's ledger,
+        when the message budget is on."""
         worker = local_worker_of(entry) or {}
         server_args = [os.path.abspath(__file__), "--slug", self.slug, "--tools", self.tools_path,
                        "--server-url", self.server_url, "--app-env", self.app_env,
@@ -470,9 +470,9 @@ class LocalWorkerRunner:
                "--allowedTools", "mcp__soleon-agent-tools",
                "--permission-mode", "dontAsk",
                "--no-session-persistence"]
-        if budget_run and turn:
+        if budget_run:
             cmd += ["--output-format", "stream-json", "--verbose", "--settings",
-                    json.dumps(message_budget.helper_hook_settings(self.agent_dir, turn, budget_run))]
+                    json.dumps(message_budget.helper_hook_settings(self.agent_dir, *budget_run))]
         else:
             cmd += ["--output-format", "json"]
         cap = worker.get("maxIterations")
@@ -494,11 +494,17 @@ class LocalWorkerRunner:
                 "Claude Code, or install the CLI.".format(name), True)
         _log("{} → running its helper locally ({} tool(s))".format(name, len((local_worker_of(entry) or {}).get("members") or [])))
         budget_run = None
-        if turn and message_budget.budget_of(Path(self.agent_dir)) > 0:
-            budget_run = __import__("uuid").uuid4().hex[:12]
+        if message_budget.budget_of(Path(self.agent_dir)) > 0:
+            # The helper joins the message of the tool call that started it
+            # (the agent's, or a configured subagent's — both touch the ledger
+            # in their PreToolUse just before this call arrives).
+            run_id = __import__("uuid").uuid4().hex[:12]
+            message = message_budget.Ledger(Path(self.agent_dir)).message_for_helper(
+                "turn:{}".format(turn) if turn else "helper:" + run_id)
+            budget_run = (message, run_id)
         cmd = self.command(entry, task, approved=approved, turn=turn, budget_run=budget_run)
         if budget_run:
-            proc = self._stream(cmd, turn, budget_run)
+            proc = self._stream(cmd, *budget_run)
         else:
             try:
                 proc = self._run(cmd, capture_output=True, text=True, timeout=self.timeout_s,
@@ -510,7 +516,7 @@ class LocalWorkerRunner:
                 name, int(self.timeout_s)), True)
         return self._render(name, proc)
 
-    def _stream(self, cmd: List[str], turn: str, run_id: str) -> Any:
+    def _stream(self, cmd: List[str], message: str, run_id: str) -> Any:
         """Run a budgeted helper, booking each model call in the message's
         ledger as it streams in. Returns a finished-process-like object whose
         stdout is the final `result` event (what `_render` reads), or None on
@@ -538,7 +544,7 @@ class LocalWorkerRunner:
                 booked = message_budget.stream_call_tokens(event)
                 if booked:
                     calls[booked[0]] = booked[1]
-                    ledger.note_helper(turn, run_id, sum(calls.values()))
+                    ledger.note_helper(message, run_id, sum(calls.values()))
 
         def read_err():
             err.append(proc.stderr.read())
@@ -554,7 +560,7 @@ class LocalWorkerRunner:
             returncode = None
         for t in readers:
             t.join(timeout=5)
-        ledger.note_helper(turn, run_id,
+        ledger.note_helper(message, run_id,
                            message_budget.result_tokens(result) if result.get("modelUsage") else sum(calls.values()))
         if returncode is None:
             return None

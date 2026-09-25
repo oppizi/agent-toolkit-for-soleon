@@ -183,9 +183,11 @@ does this.
 **What is NOT emulated** (platform-only, listed read-only in `config.json` and
 in the pull summary): channels, the daily token budgets, schedules, guardrails,
 online-eval sampling. The **Per Message Token Budget is enforced** the way Soleon
-enforces it (`bin/soleon_message_budget.py`, a PreToolUse hook): the agent's own
-model calls and every local helper's share one allowance per message, and at 85%
-of it further tool calls are refused so the agent answers from what it has. The workspace snapshot never pushes back. Helper subagents and
+enforces it (`bin/soleon_message_budget.py`, a PreToolUse hook): everything
+done for one prompt of yours — the agent's own model calls, every configured
+subagent run for it (`<slug>--<id>`, workflow members included) and every local
+integration helper — shares one allowance, and at 85% of it further tool calls
+are refused so each answers from what it has. The next prompt starts afresh. The workspace snapshot never pushes back. Helper subagents and
 workflows follow the platform's steps (manager: assign → review → next decision
 until finish, bounded by the configured rounds; peer: bounded rounds)
 approximately, not identically.

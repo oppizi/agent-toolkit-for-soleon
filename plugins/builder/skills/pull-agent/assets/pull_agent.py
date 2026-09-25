@@ -343,9 +343,9 @@ def routing_section(display_name: str, slug: str, tools: List[Dict[str, Any]], a
         "- **Not emulated locally** (platform-only, shown read-only in `config.json`): channels, the daily "
         "token budgets, schedules, guardrails, online eval sampling.")
     lines.append(
-        "- **The Per Message Token Budget IS enforced**: you and every integration helper share it. Once a "
-        "message reaches 85% of it, further tool calls are refused with the reason — then answer from what "
-        "you already have and say what you could not get to.")
+        "- **The Per Message Token Budget IS enforced**: you, your configured subagents and every integration "
+        "helper share it for each message. Once a message reaches 85% of it, further tool calls are refused "
+        "with the reason — then answer from what you already have and say what you could not get to.")
     return "\n".join(lines) + "\n"
 
 

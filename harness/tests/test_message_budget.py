@@ -86,11 +86,15 @@ def _pulled(tmp_path, budget=100000, enabled=None):
     return agent_dir
 
 
-def _hook(tmp_path, agent_id="a1", agent_type=SLUG, tool="mcp__soleon-agent-tools__mcp_gmail_read"):
+MSG = "prompt:p1"
+
+
+def _hook(tmp_path, agent_id="a1", agent_type=SLUG, tool="mcp__soleon-agent-tools__mcp_gmail_read",
+          prompt_id="p1"):
     session = tmp_path / "sessions" / "s1.jsonl"
     return {"session_id": "s1", "transcript_path": str(session), "cwd": str(tmp_path),
             "agent_id": agent_id, "agent_type": agent_type, "hook_event_name": "PreToolUse",
-            "tool_name": tool}
+            "tool_name": tool, "prompt_id": prompt_id}
 
 
 def _agent_spend(tmp_path, tokens_per_call, calls=1, agent_id="a1"):
@@ -132,7 +136,7 @@ def test_helpers_spend_counts_against_the_agents_message(tmp_path, capsys):
     _agent_spend(tmp_path, 40000)
     ledger = mb.Ledger(agent_dir)
     for run in range(10):
-        ledger.note_helper("t1", "r%d" % run, 50000)
+        ledger.note_helper(MSG, "r%d" % run, 50000)
     rc, out = _run_agent_hook(_hook(tmp_path), capsys)
     assert json.loads(out)["hookSpecificOutput"]["permissionDecision"] == "deny"
     assert "used=540000 budget=500000" in out
@@ -140,7 +144,7 @@ def test_helpers_spend_counts_against_the_agents_message(tmp_path, capsys):
 
 def test_a_new_message_starts_from_zero(tmp_path, capsys):
     agent_dir = _pulled(tmp_path, budget=100000)
-    mb.Ledger(agent_dir).note_helper("an-earlier-turn", "r1", 99999)
+    mb.Ledger(agent_dir).note_helper("prompt:an-earlier-prompt", "r1", 99999)
     _agent_spend(tmp_path, 1000)
     _, out = _run_agent_hook(_hook(tmp_path), capsys)
     assert out == ""
@@ -175,10 +179,10 @@ def test_a_running_helper_is_stopped_once_the_message_is_spent(tmp_path, capsys)
     agent_dir = _pulled(tmp_path, budget=100000)
     _agent_spend(tmp_path, 20000)
     ledger = mb.Ledger(agent_dir)
-    ledger.note_agent("t1", mb.subagent_transcript(str(tmp_path / "sessions" / "s1.jsonl"), "a1"))
-    ledger.note_helper("t1", "r1", 70000)
+    ledger.note_run(MSG, "a1", mb.subagent_transcript(str(tmp_path / "sessions" / "s1.jsonl"), "a1"))
+    ledger.note_helper(MSG, "r1", 70000)
     hook = {"tool_name": "mcp__soleon-agent-tools__search_emails"}
-    rc = mb.main(["helper-pretool", "--agent-dir", str(agent_dir), "--turn", "t1", "--run", "r1"],
+    rc = mb.main(["helper-pretool", "--agent-dir", str(agent_dir), "--message", MSG, "--run", "r1"],
                  stream=io.StringIO(json.dumps(hook)))
     decision = json.loads(capsys.readouterr().out)["hookSpecificOutput"]
     assert rc == 0 and decision["permissionDecision"] == "deny"
@@ -262,7 +266,7 @@ def test_a_helper_runs_under_the_budget_hook_in_the_agents_turn(tmp_path):
     assert flags["--output-format"] == "stream-json" and "--verbose" in cmd
     assert "--no-session-persistence" in cmd                       # nothing left behind
     hook_cmd = json.loads(flags["--settings"])["hooks"]["PreToolUse"][0]["hooks"][0]["command"]
-    assert "helper-pretool" in hook_cmd and "--turn t1" in hook_cmd
+    assert "helper-pretool" in hook_cmd and "--message turn:t1" in hook_cmd   # no agent call touched the ledger
     assert flags["--setting-sources"] == ""                        # still no plugin hooks inside it
     args = json.loads(flags["--mcp-config"])["mcpServers"]["soleon-agent-tools"]["args"]
     assert args[args.index("--turn") + 1] == "t1"                  # its platform calls join the agent's turn
@@ -275,9 +279,9 @@ def test_a_helpers_calls_are_booked_as_they_stream_and_settled_from_its_total(tm
     seen = []
     orig = mb.Ledger.note_helper
 
-    def spy(self, turn, run, tokens):
+    def spy(self, message, run, tokens):
         seen.append(tokens)
-        return orig(self, turn, run, tokens)
+        return orig(self, message, run, tokens)
     mb.Ledger.note_helper = spy
     try:
         runner, _ = _runner(agent_dir)
@@ -314,7 +318,65 @@ def test_the_tools_server_hands_its_turn_to_the_helper(tmp_path):
                                    turn=shim.TurnTracker(None, fixed="t9"))
     server.call("mcp_gmail_read", {"prompt": "x"})
     flags = dict(zip(calls[0][0], calls[0][0][1:]))
-    assert "--turn t9" in json.loads(flags["--settings"])["hooks"]["PreToolUse"][0]["hooks"][0]["command"]
+    args = json.loads(flags["--mcp-config"])["mcpServers"]["soleon-agent-tools"]["args"]
+    assert args[args.index("--turn") + 1] == "t9"
+
+
+def test_a_helper_joins_the_message_of_the_call_that_started_it(tmp_path, capsys):
+    """The wrapper call's own PreToolUse (the agent's, or a configured
+    subagent's) touches the ledger just before the call reaches the runner."""
+    agent_dir = _pulled(tmp_path)
+    _agent_spend(tmp_path, 1000)
+    _run_agent_hook(_hook(tmp_path), capsys)                          # touches MSG
+    runner, calls = _runner(agent_dir)
+    runner.run(WRAPPER, "x", approved=False, turn="t1")
+    hook_cmd = json.loads(dict(zip(calls[0][0], calls[0][0][1:]))["--settings"])["hooks"]["PreToolUse"][0]["hooks"][0]["command"]
+    assert "--message prompt:p1" in hook_cmd
+    assert json.loads((agent_dir / mb.LEDGER_NAME).read_text())["helpers"]
+
+
+def test_a_stale_message_is_not_joined(tmp_path):
+    agent_dir = _pulled(tmp_path)
+    clock = [1000.0]
+    mb.Ledger(agent_dir, now=lambda: clock[0]).note_run("prompt:old", "a1", None)
+    clock[0] += mb.JOIN_WINDOW_S + 1
+    assert mb.Ledger(agent_dir, now=lambda: clock[0]).message_for_helper("turn:t2") == "turn:t2"
+
+
+# --- configured subagents -----------------------------------------------------------
+
+def test_a_configured_subagents_spend_counts_against_the_agents_message(tmp_path, capsys):
+    """Locally a configured subagent (`<slug>--<id>`) runs outside the agent's
+    own run — the conversation runs it for the agent — but on Soleon its
+    tokens are the agent's message's. Same prompt, same message."""
+    _pulled(tmp_path, budget=100000)
+    _agent_spend(tmp_path, 50000, agent_id="a1")
+    _run_agent_hook(_hook(tmp_path), capsys)
+    _agent_spend(tmp_path, 40000, agent_id="s1")
+    rc, out = _run_agent_hook(_hook(tmp_path, agent_id="s1", agent_type=SLUG + "--subagent_res1"), capsys)
+    decision = json.loads(out)["hookSpecificOutput"]
+    assert decision["permissionDecision"] == "deny" and "used=90000" in decision["permissionDecisionReason"]
+    assert "this subagent must answer now" in decision["permissionDecisionReason"]
+    # ...and the agent, run again for the same prompt, is refused too
+    _, out = _run_agent_hook(_hook(tmp_path), capsys)
+    assert "used=90000" in out
+
+
+def test_the_next_prompt_is_a_new_message(tmp_path, capsys):
+    _pulled(tmp_path, budget=100000)
+    _agent_spend(tmp_path, 90000)
+    _, out = _run_agent_hook(_hook(tmp_path), capsys)
+    assert "deny" in out
+    _agent_spend(tmp_path, 1000, agent_id="a2")
+    _, out = _run_agent_hook(_hook(tmp_path, agent_id="a2", prompt_id="p2"), capsys)
+    assert out == ""
+
+
+def test_a_subagent_of_something_that_is_not_pulled_is_untouched(tmp_path, capsys):
+    _pulled(tmp_path, budget=1000)
+    _agent_spend(tmp_path, 10_000_000, agent_id="x")
+    _, out = _run_agent_hook(_hook(tmp_path, agent_id="x", agent_type="other--helper"), capsys)
+    assert out == ""
 
 
 def test_a_worker_server_told_its_turn_never_mints_its_own(tmp_path):
