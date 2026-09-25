@@ -493,16 +493,24 @@ class LocalWorkerRunner:
                 "(CLAUDE_CODE_EXECPATH is unset and `claude` is not on PATH). Run this agent from "
                 "Claude Code, or install the CLI.".format(name), True)
         _log("{} → running its helper locally ({} tool(s))".format(name, len((local_worker_of(entry) or {}).get("members") or [])))
+        return self._execute(name, lambda budget_run: self.command(
+            entry, task, approved=approved, turn=turn, budget_run=budget_run), turn)
+
+    def _budget_message(self, turn: Optional[str], run_id: str) -> str:
+        """The message a helper starting now belongs to: the one a pulled
+        agent's (or configured subagent's) tool call just touched in its
+        PreToolUse — that call is the one starting this helper."""
+        return message_budget.Ledger(Path(self.agent_dir)).message_for_helper(
+            "turn:{}".format(turn) if turn else "helper:" + run_id)
+
+    def _execute(self, name: Any, build, turn: Optional[str]) -> Dict[str, Any]:
+        """Run the headless session `build(budget_run)` describes and render
+        its answer as this tool's result."""
         budget_run = None
         if message_budget.budget_of(Path(self.agent_dir)) > 0:
-            # The helper joins the message of the tool call that started it
-            # (the agent's, or a configured subagent's — both touch the ledger
-            # in their PreToolUse just before this call arrives).
             run_id = __import__("uuid").uuid4().hex[:12]
-            message = message_budget.Ledger(Path(self.agent_dir)).message_for_helper(
-                "turn:{}".format(turn) if turn else "helper:" + run_id)
-            budget_run = (message, run_id)
-        cmd = self.command(entry, task, approved=approved, turn=turn, budget_run=budget_run)
+            budget_run = (self._budget_message(turn, run_id), run_id)
+        cmd = build(budget_run)
         if budget_run:
             proc = self._stream(cmd, *budget_run)
         else:
@@ -590,17 +598,139 @@ class LocalWorkerRunner:
         return _text_result(result or "(the helper finished with an empty answer)")
 
 
+DELEGATES_FILE = "delegates.json"
+
+#: The platform's schema for a configured subagent / workflow tool
+#: (maverick `delegation._ConfiguredTool.parameters`).
+DELEGATE_TASK_SCHEMA = {
+    "type": "object",
+    "properties": {"task": {"type": "string", "description": (
+        "The task, goals, constraints and known facts. Include requests to gather missing inputs; "
+        "do not invent values or require the user to supply information the delegate can retrieve."
+    )}},
+    "required": ["task"],
+}
+
+
+def load_delegates(agent_dir: str) -> Dict[str, Dict[str, Any]]:
+    """`delegates.json` (written by /pull-agent): id → how to run that
+    configured subagent or workflow. Absent (a pull from before it existed)
+    means none — re-pull to get them."""
+    try:
+        with open(os.path.join(agent_dir, DELEGATES_FILE), "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+    except FileNotFoundError:
+        return {}
+    delegates = data.get("delegates") if isinstance(data, dict) else None
+    return {k: v for k, v in (delegates or {}).items()
+            if isinstance(v, dict) and v.get("kind") in ("subagent", "workflow") and str(v.get("system") or "").strip()}
+
+
+class LocalDelegateRunner(LocalWorkerRunner):
+    """Runs a configured subagent or workflow — a TOOL on the platform — as a
+    headless Claude Code session, with the same isolation as an integration
+    helper (see `LocalWorkerRunner`).
+
+      * subagent: its own instructions as the system prompt, the workspace
+        server, and ONLY its own external tools (`--only`);
+      * workflow: the workflow's manager steps as the system prompt and ONLY
+        its members, published as tools by a tools server started with
+        `--only "" --delegates <members>` — so the manager delegates exactly
+        as the platform's manager does, and a member cannot delegate further
+        (the platform's `delegation.maxDepth` 1).
+
+    A nested member joins the SAME message's budget: the manager's server is
+    started with `--budget-message`, because the manager's own tool calls do
+    not touch the ledger the way the agent's hook does."""
+
+    def __init__(self, *, delegates: Dict[str, Dict[str, Any]], budget_message: Optional[str] = None, **kw):
+        super().__init__(**kw)
+        self.delegates = delegates
+        self.budget_message = budget_message
+
+    def _budget_message(self, turn: Optional[str], run_id: str) -> str:
+        return self.budget_message or super()._budget_message(turn, run_id)
+
+    def delegate_command(self, delegate_id: str, task: str, *, turn: Optional[str] = None,
+                         budget_run: Optional[Tuple[str, str]] = None) -> List[str]:
+        spec = self.delegates[delegate_id]
+        here = os.path.dirname(os.path.abspath(__file__))
+        tools_args = [os.path.abspath(__file__), "--slug", self.slug, "--tools", self.tools_path,
+                      "--server-url", self.server_url, "--app-env", self.app_env]
+        if turn:
+            tools_args += ["--turn", turn]
+        if self.credentials:
+            tools_args += ["--credentials", self.credentials]
+        servers: Dict[str, Any] = {}
+        if spec["kind"] == "workflow":
+            tools_args += ["--only", "", "--delegates", ",".join(spec.get("members") or [])]
+            if budget_run:
+                tools_args += ["--budget-message", budget_run[0]]
+            servers["soleon-agent-tools"] = {"type": "stdio", "command": sys.executable, "args": tools_args}
+        else:
+            servers["soleon-workspace"] = {"type": "stdio", "command": sys.executable, "args": [
+                os.path.join(here, "soleon_workspace_mcp.py"), os.path.join(self.agent_dir, "workspace"),
+                "--readable", self.agent_dir]}
+            if spec.get("external"):
+                tools_args += ["--only", ",".join(spec["external"])]
+                servers["soleon-agent-tools"] = {"type": "stdio", "command": sys.executable, "args": tools_args}
+        cmd = [self.binary or "", "-p", task,
+               "--model", str(spec.get("model") or self.model),
+               "--system-prompt", str(spec["system"]),
+               "--setting-sources", "",
+               "--tools", "",
+               "--strict-mcp-config", "--mcp-config", json.dumps({"mcpServers": servers}),
+               "--allowedTools", ",".join("mcp__" + n for n in servers),
+               "--permission-mode", "dontAsk",
+               "--no-session-persistence"]
+        if budget_run:
+            cmd += ["--output-format", "stream-json", "--verbose", "--settings",
+                    json.dumps(message_budget.helper_hook_settings(self.agent_dir, *budget_run))]
+        else:
+            cmd += ["--output-format", "json"]
+        return cmd
+
+    def run_delegate(self, delegate_id: str, task: str, *, turn: Optional[str] = None) -> Dict[str, Any]:
+        spec = self.delegates[delegate_id]
+        label = "{} ({})".format(delegate_id, spec.get("name") or delegate_id)
+        if not task.strip():
+            return _text_result("{} needs a `task`: say what it should do.".format(delegate_id), True)
+        if not self.binary:
+            self.binary = claude_binary()
+        if not self.binary:
+            return _text_result(
+                "{} runs locally with Claude Code, and no Claude Code binary was found "
+                "(CLAUDE_CODE_EXECPATH is unset and `claude` is not on PATH).".format(delegate_id), True)
+        _log("{} → running the {} locally".format(label, spec["kind"]))
+        return self._execute(label, lambda budget_run: self.delegate_command(
+            delegate_id, task, turn=turn, budget_run=budget_run), turn)
+
+
+def published_delegates(delegates: Dict[str, Dict[str, Any]], ids: List[str]) -> List[Dict[str, Any]]:
+    return [{"name": i, "description": str(delegates[i].get("description") or ""),
+             "inputSchema": json.loads(json.dumps(DELEGATE_TASK_SCHEMA))} for i in ids]
+
+
 class AgentToolsServer:
     def __init__(self, slug: str, tools: List[Dict[str, Any]], client: SoleonMcpClient,
                  app_env: str = "dev", poll_interval_s: float = POLL_INTERVAL_S,
                  conversation: Optional[ConversationTracker] = None,
                  turn: Optional[TurnTracker] = None,
                  local_workers: Optional["LocalWorkerRunner"] = None,
-                 pre_approved: bool = False, include_members: bool = False):
+                 pre_approved: bool = False, include_members: bool = False,
+                 delegate_runner: Optional["LocalDelegateRunner"] = None,
+                 delegate_ids: Optional[List[str]] = None):
         self.slug = slug
         self.app_env = app_env
         self.tools = tools
         self.published = published_tools(tools, include_members=include_members)
+        #: Configured subagents / workflows this server offers as tools.
+        self.delegate_runner = delegate_runner
+        self.delegate_ids = [i for i in (delegate_ids or []) if delegate_runner and i in delegate_runner.delegates]
+        taken = {t["name"] for t in self.published}
+        self.delegate_ids = [i for i in self.delegate_ids if i not in taken]
+        if self.delegate_runner is not None:
+            self.published += published_delegates(self.delegate_runner.delegates, self.delegate_ids)
         self._gated = {t["name"] for t in tools if t.get("approval")}
         self._by_name = {t["name"]: t for t in tools}
         #: published MCP name → the name the platform calls it by
@@ -620,6 +750,8 @@ class AgentToolsServer:
         if name not in {t["name"] for t in self.published}:
             return _text_result("Unknown tool {!r} — not one of this agent's external tools.".format(name), True)
         args = dict(arguments or {})
+        if name in self.delegate_ids:
+            return self.delegate_runner.run_delegate(name, str(args.get("task") or ""), turn=self.turn.current())
         approved = bool(args.pop("approved", False)) or self.pre_approved
         platform_name = self._platform_name.get(name, name)
         entry = self._by_name.get(platform_name) or {}
@@ -777,6 +909,11 @@ def main(argv: Optional[List[str]] = None) -> int:
                     help="a local WORKER's server whose wrapper call the person approved: run gated calls approved")
     ap.add_argument("--turn", default=None,
                     help="a local WORKER's server: the agent turn its calls belong to")
+    ap.add_argument("--delegates", default=None,
+                    help="comma-separated configured subagent ids to publish as tools (a workflow manager's "
+                         "members); default: the agent's offered subagents and workflows, none with --only")
+    ap.add_argument("--budget-message", default=None,
+                    help="a workflow manager's server: the message whose budget its members join")
     ap.add_argument("--model", default=None,
                     help="the local model a subagent-mode wrapper's worker runs on (default: pull.json's)")
     args = ap.parse_args(argv)
@@ -812,10 +949,28 @@ def main(argv: Optional[List[str]] = None) -> int:
         model = args.model or _pulled_model(agent_dir)
         workers = LocalWorkerRunner(slug=args.slug, tools_path=args.tools, server_url=args.server_url,
                                     model=model, app_env=args.app_env, credentials=args.credentials)
+    delegates = load_delegates(agent_dir)
+    if args.delegates is not None:
+        delegate_ids = [n.strip() for n in args.delegates.split(",") if n.strip()]
+        unknown = [n for n in delegate_ids if n not in delegates]
+        if unknown:
+            _log("--delegates names ids that are not in {}: {}".format(DELEGATES_FILE, ", ".join(unknown)))
+            return 2
+    elif args.only is None:
+        delegate_ids = [k for k, v in delegates.items() if v.get("offered")]
+    else:
+        delegate_ids = []
+    delegate_runner = None
+    if delegate_ids:
+        delegate_runner = LocalDelegateRunner(
+            delegates=delegates, budget_message=args.budget_message,
+            slug=args.slug, tools_path=args.tools, server_url=args.server_url,
+            model=args.model or _pulled_model(agent_dir), app_env=args.app_env, credentials=args.credentials)
     server = AgentToolsServer(args.slug, tools, client, app_env=args.app_env,
                               poll_interval_s=args.poll_interval, conversation=tracker, turn=turn,
                               local_workers=workers, pre_approved=args.pre_approved,
-                              include_members=args.only is not None)
+                              include_members=args.only is not None,
+                              delegate_runner=delegate_runner, delegate_ids=delegate_ids)
     _log("serving {} external tool(s) for {} via {}".format(len(server.published), args.slug, client.server_url))
     serve(server)
     return 0

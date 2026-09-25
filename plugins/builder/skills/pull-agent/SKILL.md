@@ -145,8 +145,11 @@ still applies — it is the agent asking in conversation, D8. And in the USER
 scope: `~/.claude/agents/<slug>.md`
 — the subagent — plus one
 `~/.claude/agents/<slug>--<subagentId>.md` per enabled configured helper and
-one `workflows/<id>/SKILL.md` per workflow (spec D15: helpers run locally as
-Claude Code subagents; workflows follow the platform's steps — manager:
+one `workflows/<id>/SKILL.md` per workflow, plus `delegates.json` (spec D15:
+the agent holds its configured subagents and workflows as TOOLS, as on the
+platform — `subagent_<id>` / `workflow_<id>` with one `task` — and a call runs
+that subagent, or the workflow's manager over its members, as a headless Claude
+Code run whose own tools still run on Soleon; workflows follow the platform's steps — manager:
 assign → review → next decision until finish, bounded by the configured
 rounds and assignments; peer: bounded message rounds — approximately, not
 identically).
@@ -159,7 +162,9 @@ From the script's JSON summary tell the user, in plain words:
 1. What was pulled: source (draft vs deployed dev config), the `draftEtag`,
    the local model (and the platform model), the effort dial if set.
 2. The files: the subagent path, `$DIR`, skill and eval counts, workspace
-   file count, helper subagents and workflow skills.
+   file count, and the configured subagents and workflows the agent now holds
+   as tools (it calls them itself; each subagent can also be talked to directly
+   as `<slug>--<id>`).
 3. Tool routing: how many external tools run via Soleon, which are
    approval-gated (the agent will ask before calling them), the workspace
    tools served locally, and any prompt tool the local copy cannot reach.

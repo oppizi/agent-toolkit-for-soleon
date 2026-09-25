@@ -126,7 +126,7 @@ warning and no default) and writes:
 .soleon/agents/<slug>/
   SOUL.md  config.json  skills/<id>/SKILL.md (+ skill.json, package files)
   evals/<evalId>.json  workspace/ (read-only snapshot)  workflows/<id>/SKILL.md
-  tools.json  prompt.json  pull.json  .pull/ (raw responses)
+  tools.json  prompt.json  pull.json  delegates.json  .pull/ (raw responses)
 ```
 
 Talk to it with the Agent tool (`subagent_type: "<slug>"`). It reasons on the

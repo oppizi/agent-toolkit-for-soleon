@@ -204,14 +204,35 @@ def test_helper_subagents_and_workflows(pulled):
     assert "**Assign.**" in m and "**Review.**" in m and "**Next decision.**" in m
     assert "at most 2 concrete assignments" in m and "at most 3 assignment rounds" in m
     assert "Every question answered." in m
-    assert f"`{SLUG}--subagent_res1`" in m and f"`{SLUG}--subagent_wri1`" in m
+    # Members are TOOLS the manager calls by id, not Agent-tool subagents.
+    assert "- `subagent_res1` — Researcher" in m and "- `subagent_wri1` — Writer" in m
+    assert "Agent tool" not in m and f"{SLUG}--subagent_res1" not in m
     p = peer.read_text(encoding="utf-8")
     assert "For up to 2 rounds" in p and "Agreement." in p and "reviewed draft" in p
-    # the main prompt points at them
+    # The agent calls them as tools, exactly as on the platform.
     main = (root / ".claude" / "agents" / f"{SLUG}.md").read_text(encoding="utf-8")
-    assert f"`subagent_res1` → local subagent `{SLUG}--subagent_res1`" in main
-    assert "`workflow_mgr1` → workflow skill" in main and "manager mode" in main
+    routing = main.split("## Local Tool Routing", 1)[1]
+    assert "**Configured subagents and workflows are tools**" in routing
+    assert "never do its work yourself" in routing
+    assert "- `subagent_res1` — subagent Researcher" in routing
+    assert "- `workflow_mgr1` — workflow Research team (manager mode; members: `subagent_res1`, `subagent_wri1`)" in routing
+    assert "the driving session runs it" not in routing
+    missing_line = next((l for l in routing.splitlines() if "**Not available locally**" in l), "")
+    assert "subagent_res1" not in missing_line and "workflow_mgr1" not in missing_line
     assert set(summary["helpers"]) == {str(res), str(wri)}
+    # delegates.json: what the agent's tool server runs for each of them
+    d = json.loads((agent_dir / "delegates.json").read_text())["delegates"]
+    assert set(d) == {"subagent_res1", "subagent_wri1", "workflow_mgr1", "workflow_peer1"}  # disabled → absent
+    assert d["subagent_res1"]["kind"] == "subagent" and d["subagent_res1"]["offered"] is True
+    assert d["subagent_res1"]["model"] == "sonnet" and d["subagent_wri1"]["model"] == "opus"
+    assert set(d["subagent_res1"]["external"]) == {"custom_echo-server_read", "web_search"}
+    assert d["subagent_wri1"]["external"] == []
+    assert "Research carefully." in d["subagent_res1"]["system"]
+    assert d["subagent_res1"]["description"].startswith("Researcher. Hand off when: Look things up")
+    assert d["workflow_mgr1"]["kind"] == "workflow" and d["workflow_mgr1"]["members"] == ["subagent_res1", "subagent_wri1"]
+    assert d["workflow_mgr1"]["system"].startswith("# Workflow `workflow_mgr1`")  # frontmatter stripped
+    assert d["workflow_mgr1"]["description"].startswith(
+        "Research team (manager-led; members: Researcher, Writer). Runs when: Big research")
 
 
 def test_not_emulated_summary_lists_the_platform_only_settings(pulled):

@@ -223,9 +223,12 @@ automatic: before every prompt the plugin checks each pulled agent's draft
 version on the platform and, when it changed elsewhere (the Soleon editor,
 another session), re-pulls the local copy — everything but `workspace/` — so
 the run uses the current agent; you are told when that happened. Going live is still
-`deploy_agent_draft`. Configured helper subagents and workflows are pulled too, as
-sibling subagents `<slug>--<id>` and workflow skills that follow the platform's
-steps approximately. `/run-local-eval <slug>` runs the agent's standard evals
+`deploy_agent_draft`. Configured subagents and workflows are pulled too, and the
+local agent holds them as TOOLS exactly as on the platform (`subagent_<id>`,
+`workflow_<id>`, one `task` each): a call runs that subagent — or the workflow's
+manager, which calls its members the same way — as a headless Claude Code run on
+this machine, with every tool inside it still executed on Soleon. Each subagent is
+also a sibling agent `<slug>--<id>` you can talk to directly. `/run-local-eval <slug>` runs the agent's standard evals
 against the local subagent and grades them with the platform's own judge prompt
 (fetched live) — scores only, never a pass/fail verdict.
 

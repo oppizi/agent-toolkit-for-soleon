@@ -578,3 +578,159 @@ def test_a_workers_tool_is_published_by_the_name_its_model_calls_it():
     tool by its wrapper so two integrations sharing `search` stay distinct."""
     assert shim.published_name(MEMBERS[0]) == "search_emails"
     assert shim.published_name(WRAPPER) == "mcp_gmail_read"
+
+
+# ---------------------------------------------------------------------------
+# Configured subagents and workflows are TOOLS locally, as on the platform
+# ---------------------------------------------------------------------------
+
+DELEGATES = {
+    "subagent_research": {"kind": "subagent", "name": "Researcher", "offered": True,
+                          "description": "Researcher. Hand off when: Find sources.",
+                          "system": "Search the web.", "model": "sonnet", "external": ["web_search", "web_fetch"]},
+    "subagent_writer": {"kind": "subagent", "name": "Writer", "offered": False,
+                        "description": "Writer. Hand off when: Write the brief.",
+                        "system": "Write a brief.", "model": "opus", "external": []},
+    "workflow_brief": {"kind": "workflow", "name": "Brief", "offered": True,
+                       "description": "Brief (manager-led; members: Researcher, Writer). Runs when: a brief.",
+                       "system": "# Workflow `workflow_brief`", "model": "sonnet",
+                       "members": ["subagent_research", "subagent_writer"]},
+}
+
+
+def _delegate_runner(tmp_path, calls, **kw):
+    (tmp_path / "config.json").write_text(json.dumps({"loop": {"tokenBudgetEnabled": False}}))
+    (tmp_path / "delegates.json").write_text(json.dumps({"schemaVersion": 1, "delegates": DELEGATES}))
+
+    def fake_run(cmd, **opts):
+        calls.append(cmd)
+        return _Proc(json.dumps({"type": "result", "subtype": "success", "is_error": False,
+                                 "result": "brief with 3 checked sources"}))
+    return shim.LocalDelegateRunner(delegates=shim.load_delegates(str(tmp_path)), slug=SLUG,
+                                    tools_path=str(tmp_path / "tools.json"),
+                                    server_url="https://mcp-dev.oppizi.com/mcp", model="sonnet",
+                                    binary="/opt/claude", runner=fake_run, **kw)
+
+
+def _mcp_config(cmd):
+    return json.loads(cmd[cmd.index("--mcp-config") + 1])["mcpServers"]
+
+
+def test_the_agent_is_offered_its_subagents_and_workflows_as_task_tools(tmp_path):
+    """research-desk-test, 2026-09-25: with no `workflow_brief` tool the local
+    agent could only SAY it would run the workflow, and then answered with its
+    own web_search. The tool must exist, with the platform's `task` schema."""
+    runner = _delegate_runner(tmp_path, [])
+    server = shim.AgentToolsServer(SLUG, [], client=None, delegate_runner=runner,
+                                   delegate_ids=["subagent_research", "workflow_brief"])
+    by_name = {t["name"]: t for t in server.published}
+    assert set(by_name) == {"subagent_research", "workflow_brief"}
+    assert by_name["workflow_brief"]["inputSchema"]["required"] == ["task"]
+    assert by_name["workflow_brief"]["description"].startswith("Brief (manager-led")
+
+
+def test_a_subagent_runs_headless_with_only_its_own_tools_and_returns_its_answer(tmp_path):
+    calls = []
+    runner = _delegate_runner(tmp_path, calls)
+    server = shim.AgentToolsServer(SLUG, [], client=None, delegate_runner=runner,
+                                   delegate_ids=["subagent_research"])
+    out = server.call("subagent_research", {"task": "find sources on espresso machines"})
+    assert out["content"][0]["text"] == "brief with 3 checked sources" and not out.get("isError")
+    cmd = calls[0]
+    assert cmd[:3] == ["/opt/claude", "-p", "find sources on espresso machines"]
+    assert cmd[cmd.index("--system-prompt") + 1] == "Search the web."
+    assert cmd[cmd.index("--model") + 1] == "sonnet"
+    assert cmd[cmd.index("--tools") + 1] == "" and cmd[cmd.index("--setting-sources") + 1] == ""
+    assert "--strict-mcp-config" in cmd and "--no-session-persistence" in cmd
+    servers = _mcp_config(cmd)
+    assert set(servers) == {"soleon-workspace", "soleon-agent-tools"}
+    targs = servers["soleon-agent-tools"]["args"]
+    assert targs[targs.index("--only") + 1] == "web_search,web_fetch"
+    assert "--delegates" not in targs  # a member cannot delegate further (maxDepth 1)
+    assert cmd[cmd.index("--allowedTools") + 1] == "mcp__soleon-workspace,mcp__soleon-agent-tools"
+
+
+def test_a_subagent_without_external_tools_gets_the_workspace_only(tmp_path):
+    calls = []
+    runner = _delegate_runner(tmp_path, calls)
+    runner.run_delegate("subagent_writer", "write it")
+    assert set(_mcp_config(calls[0])) == {"soleon-workspace"}
+    assert calls[0][calls[0].index("--model") + 1] == "opus"
+
+
+def test_a_workflow_runs_its_manager_over_its_members_as_tools(tmp_path):
+    calls = []
+    runner = _delegate_runner(tmp_path, calls)
+    runner.run_delegate("workflow_brief", "sourced brief on budget espresso machines", turn="t_1")
+    cmd = calls[0]
+    assert cmd[cmd.index("--system-prompt") + 1] == "# Workflow `workflow_brief`"
+    servers = _mcp_config(cmd)
+    assert set(servers) == {"soleon-agent-tools"}  # members only: the manager does no work itself
+    targs = servers["soleon-agent-tools"]["args"]
+    assert targs[targs.index("--only") + 1] == ""
+    assert targs[targs.index("--delegates") + 1] == "subagent_research,subagent_writer"
+    assert targs[targs.index("--turn") + 1] == "t_1"
+
+
+def test_a_managers_server_publishes_exactly_its_members(tmp_path):
+    """`--only "" --delegates a,b`: no external tools, the members as tools —
+    including a member the agent itself is not offered."""
+    (tmp_path / "tools.json").write_text(json.dumps(tools_envelope()))
+    (tmp_path / "delegates.json").write_text(json.dumps({"schemaVersion": 1, "delegates": DELEGATES}))
+    import io
+    stdin = io.BytesIO((json.dumps({"jsonrpc": "2.0", "id": 1, "method": "tools/list"}) + "\n").encode())
+    stdout = io.BytesIO()
+    orig = shim.serve
+    shim.serve = lambda server: orig(server, stdin=stdin, stdout=stdout)
+    try:
+        rc = shim.main(["--slug", SLUG, "--tools", str(tmp_path / "tools.json"), "--server-url",
+                        "https://mcp-dev.oppizi.com/mcp", "--only", "", "--delegates",
+                        "subagent_research,subagent_writer"])
+    finally:
+        shim.serve = orig
+    assert rc == 0
+    names = [t["name"] for t in json.loads(stdout.getvalue().decode().splitlines()[0])["result"]["tools"]]
+    assert names == ["subagent_research", "subagent_writer"]
+
+
+def test_the_agents_server_offers_only_the_offered_delegates(tmp_path):
+    (tmp_path / "tools.json").write_text(json.dumps(tools_envelope()))
+    (tmp_path / "delegates.json").write_text(json.dumps({"schemaVersion": 1, "delegates": DELEGATES}))
+    import io
+    stdin = io.BytesIO((json.dumps({"jsonrpc": "2.0", "id": 1, "method": "tools/list"}) + "\n").encode())
+    stdout = io.BytesIO()
+    orig = shim.serve
+    shim.serve = lambda server: orig(server, stdin=stdin, stdout=stdout)
+    try:
+        assert shim.main(["--slug", SLUG, "--tools", str(tmp_path / "tools.json"),
+                          "--server-url", "https://mcp-dev.oppizi.com/mcp"]) == 0
+    finally:
+        shim.serve = orig
+    names = {t["name"] for t in json.loads(stdout.getvalue().decode().splitlines()[0])["result"]["tools"]}
+    assert {"subagent_research", "workflow_brief"} <= names and "subagent_writer" not in names
+
+
+def test_an_unknown_delegate_id_fails_loud(tmp_path):
+    (tmp_path / "tools.json").write_text(json.dumps(tools_envelope()))
+    (tmp_path / "delegates.json").write_text(json.dumps({"schemaVersion": 1, "delegates": DELEGATES}))
+    assert shim.main(["--slug", SLUG, "--tools", str(tmp_path / "tools.json"), "--server-url",
+                      "https://mcp-dev.oppizi.com/mcp", "--only", "", "--delegates", "subagent_nope"]) == 2
+
+
+def test_a_delegate_call_needs_a_task(tmp_path):
+    calls = []
+    out = _delegate_runner(tmp_path, calls).run_delegate("subagent_research", "  ")
+    assert out.get("isError") and "needs a `task`" in out["content"][0]["text"] and calls == []
+
+
+def test_a_workflow_members_join_the_managers_message_budget(tmp_path):
+    """A member's run books into the message the manager was started for —
+    the manager's own calls do not touch the ledger, so without the explicit
+    message a member starting 30 s later would get a fresh budget."""
+    runner = _delegate_runner(tmp_path, [], budget_message="prompt:abc")
+    assert runner._budget_message("t_1", "r1") == "prompt:abc"
+    (tmp_path / "config.json").write_text(json.dumps({"loop": {"tokenBudget": 50000}}))
+    cmd = runner.delegate_command("workflow_brief", "go", turn="t_1", budget_run=("prompt:abc", "r1"))
+    targs = _mcp_config(cmd)["soleon-agent-tools"]["args"]
+    assert targs[targs.index("--budget-message") + 1] == "prompt:abc"
+    assert "--settings" in cmd and cmd[cmd.index("--output-format") + 1] == "stream-json"

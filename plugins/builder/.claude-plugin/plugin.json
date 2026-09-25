@@ -1,7 +1,7 @@
 {
   "name": "soleon-builder",
   "description": "The Soleon agent build loop. Everything in soleon-observer, plus: create and update agent drafts, deploy and promote agents, bind channels, and author custom MCP servers and knowledge bases. Includes the create-agent skill, which interviews you about a new agent — only the questions your own description leaves open — then creates, configures and validates it on dev, with approval on every change it can make, and deploys on your yes. And the deploy-agent skill, which converts a local Claude Code agent identity (.claude/agents/<name>.md) into a validated, deploy-ready POST /agents request via an Allium specification — distill, elicit gaps, and validate fully offline; then deploy the confirmed assets via the Soleon MCP server. And the reverse arrow: pull-agent pulls a Soleon agent into Claude Code as a local subagent that reasons here and runs every tool on the platform, with SOUL.md / config.json / skills / evals materialized as files whose every save lands on your Soleon draft (a conflict stops and asks), and run-local-eval scores it with the platform's own judge prompt.",
-  "version": "0.4.18",
+  "version": "0.4.19",
   "author": {
     "name": "Oppizi — Soleon Headless Toolkit (bet-1)"
   },
