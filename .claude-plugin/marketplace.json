@@ -7,7 +7,7 @@
     {
       "name": "observer",
       "source": "./plugins/observer",
-      "description": "Read-only access to Soleon: agents, traces, failures, usage, evals, ideas and wiki. Requests no write consent — the least-privilege way to connect Claude Code to Soleon."
+      "description": "Read-only access to Soleon: agents, traces, failures, usage, evals and ideas. Requests no write consent — the least-privilege way to connect Claude Code to Soleon."
     },
     {
       "name": "builder",

@@ -2,20 +2,20 @@
 
 Read-only access to a Soleon system from Claude Code. Inspect agents and their
 configuration, read traces and failures, review usage and eval scores, and browse
-the ideas board and agent wiki — **without consenting to a single write.**
+the ideas board — **without consenting to a single write.**
 
 This is the least-privilege way to connect Claude Code to Soleon. If all you do is
 ask questions about what your agents are doing, this is the bundle you want.
 
 ## Scopes this bundle requests
 
-Eight, all reads:
+Seven, all reads:
 
 ```
 soleon-mcp/agent.read          soleon-mcp/kb.read
 soleon-mcp/observability.read  soleon-mcp/eval.read
 soleon-mcp/usage.read          soleon-mcp/governance.read
-soleon-mcp/business.read       soleon-mcp/wiki.read
+soleon-mcp/business.read
 ```
 
 The plugin pins these, so the access token it obtains can never be used to write,

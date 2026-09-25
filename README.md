@@ -138,9 +138,9 @@ admin — and differ only in the OAuth scopes they request:
 
 | Plugin | Scopes | For |
 |---|---|---|
-| `observer` | 8, all reads | Reading agents, traces, failures, usage, evals, ideas, wiki. No write consent at all. |
+| `observer` | 7, all reads | Reading agents, traces, failures, usage, evals, ideas. No write consent at all. |
 | `builder` | 16 | The agent build loop: drafts, deploys, promotions, channel binds, custom MCPs, knowledge bases. Ships the `deploy-agent` and `write-evals` skills. |
-| `admin` | 21 (all) | Platform admins — adds channel/custom-MCP instance reads, eval runs, and discovery. Also ships `write-evals`. |
+| `admin` | 20 (all) | Platform admins — adds channel/custom-MCP instance reads, eval runs, and discovery. Also ships `write-evals`. |
 
 **Pick the narrowest one that covers your work.** A broader bundle grants no extra
 access: scope is a ceiling on what the token may consent to, never a role. Soleon
