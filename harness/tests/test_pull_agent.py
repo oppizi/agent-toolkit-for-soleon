@@ -160,7 +160,8 @@ def test_local_tool_routing_section(pulled):
     assert "`custom_echo-server_read` (prompt: `custom_echo_server_read`)" in names_line
     missing_line = next((l for l in routing.splitlines() if "**Not available locally**" in l), "")
     assert "custom_echo_server_read" not in missing_line and "read_file" not in missing_line
-    assert "channels, budgets, schedules, guardrails, online eval sampling" in routing
+    assert "channels, the daily token budgets, schedules, guardrails, online eval sampling" in routing
+    assert "The Per Message Token Budget IS enforced" in routing
     assert summary["approvalGated"] == ["custom_echo-server_write"]
     assert summary["externalTools"] == ["custom_echo-server_read", "custom_echo-server_write", "web_search"]
 

@@ -340,8 +340,12 @@ def routing_section(display_name: str, slug: str, tools: List[Dict[str, Any]], a
                 w["id"], agent_dir.resolve() / "workflows" / w["id"] / "SKILL.md", w.get("name") or w["id"], w.get("mode")))
     lines.append("")
     lines.append(
-        "- **Not emulated locally** (platform-only, shown read-only in `config.json`): channels, budgets, "
-        "schedules, guardrails, online eval sampling.")
+        "- **Not emulated locally** (platform-only, shown read-only in `config.json`): channels, the daily "
+        "token budgets, schedules, guardrails, online eval sampling.")
+    lines.append(
+        "- **The Per Message Token Budget IS enforced**: you and every integration helper share it. Once a "
+        "message reaches 85% of it, further tool calls are refused with the reason — then answer from what "
+        "you already have and say what you could not get to.")
     return "\n".join(lines) + "\n"
 
 
