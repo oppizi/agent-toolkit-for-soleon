@@ -1,4 +1,4 @@
-# soleon-observer
+# observer
 
 Read-only access to a Soleon system from Claude Code. Inspect agents and their
 configuration, read traces and failures, review usage and eval scores, and browse
@@ -30,13 +30,13 @@ is on the token.
 It also does **not** grant you access. Installing a bundle widens what you *consent*
 to, never what you are *permitted* to do — Soleon authorizes every request against
 your actual permissions, so you will only ever see and reach the tools you are
-already entitled to. Installing `soleon-admin` would not make you an admin.
+already entitled to. Installing `admin` would not make you an admin.
 
 ## Install
 
 ```
 /plugin marketplace add oppizi/agent-toolkit-for-soleon
-/plugin install soleon-observer@agent-toolkit-for-soleon
+/plugin install observer@agent-toolkit-for-soleon
 ```
 
 Then sign in — the first request to the server triggers the OAuth flow in your
@@ -51,8 +51,8 @@ breaks OAuth discovery.
 
 `soleon-deploy-agent` has been replaced by three role bundles and there is **no
 alias**. If you had it installed, uninstall it and install the bundle that matches
-what you do — `soleon-observer` to read, `soleon-builder` to build agents, or
-`soleon-admin` for the platform-admin surface.
+what you do — `observer` to read, `builder` to build agents, or
+`admin` for the platform-admin surface.
 
 Its **Soleon access token** setting is obsolete. Authentication is now the OAuth
 flow, so the long-lived JWT that used to sit in your keychain is gone; you can

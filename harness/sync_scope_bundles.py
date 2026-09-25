@@ -2,7 +2,7 @@
 
 Harness-only — this file never ships inside a plugin.
 
-The three role bundles (`soleon-observer` / `soleon-builder` / `soleon-admin`) pin
+The three role bundles (`observer` / `builder` / `admin`) pin
 the exact OAuth scopes they request. Those pins are **derived** from the platform's
 `stacks/_mcp_scopes.py`, never hand-written: a hand-written pin silently drifts the
 moment a scope family is added, and a wrong-but-well-formed pin is invisible to any
