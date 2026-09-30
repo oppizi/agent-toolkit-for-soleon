@@ -101,12 +101,12 @@ agents they hold a role on).
 
 | Tool | What it does |
 |---|---|
-| `list_ideas` | The Ideas board: title, department, status, submitter, the 3 agent-scored metrics, votes, comments — score-rank sorted. |
-| `get_idea` | One idea in full: content fields, scores with provenance, status, linked agent, votes, comments, reactions. |
-| `create_idea` | Submit a new idea (title required; content is the free-text interview brief; scores cannot be supplied). |
-| `update_idea` | Edit an idea — content fields for author/admin; status / priority / scores overrides are admin-only. |
-| `list_idea_comments` | An idea's discussion comments (oldest-first) with reply threading and vote counts. |
-| `add_idea_comment` | Add a comment or threaded reply; the forum locks (409) once the idea moves to preparation. |
+| `list_tickets` | The Ideas board: title, department, status, submitter, the 3 agent-scored metrics, votes, comments — score-rank sorted. |
+| `get_ticket` | One idea in full: content fields, scores with provenance, status, linked agent, votes, comments, reactions. |
+| `create_ticket` | Submit a new idea (title required; content is the free-text interview brief; scores cannot be supplied). |
+| `update_ticket` | Edit an idea — content fields for author/admin; status / priority / scores overrides are admin-only. |
+| `list_ticket_comments` | An idea's discussion comments (oldest-first) with reply threading and vote counts. |
+| `add_ticket_comment` | Add a comment or threaded reply; the forum locks (409) once the idea moves to preparation. |
 | `approve_idea` | Approve an idea — decision only, the idea stays on the board. Admin-only. |
 | `move_idea_to_preparation` | Promote an idea into the build pipeline: mints an in-build agent shell seeded with the brief + scores. Admin-only. |
 | `get_pipeline` | The agent build-pipeline board: every not-yet-launched agent grouped by the 6 build stages. |
