@@ -298,7 +298,10 @@ def test_add_is_idempotent_and_remove_is_reversible(clone):
     assert proc.returncode == 0 and "already subscribes" in proc.stdout
 
     assert _run("--remove", "observer", "skills", "write-evals", cwd=clone).returncode == 0
-    assert not (clone / "plugins/observer/skills").exists()
+    # observer now ships its own starter skills, so the directory stays; the
+    # removed subscription must be gone and the others left untouched.
+    assert not (clone / "plugins/observer/skills/write-evals").exists()
+    assert (clone / "plugins/observer/skills/find-an-agent/SKILL.md").is_file()
     assert _run("--check", cwd=clone).returncode == 0
 
 

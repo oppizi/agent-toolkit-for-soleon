@@ -47,6 +47,38 @@ against your real permissions, so a non-admin who installs this sees exactly the
 same tools they saw before — the admin-only ones stay hidden. Scope is a ceiling on
 the token, not a role.
 
+## Starter skills
+
+27 one-job skills for everyday Soleon work: reading and changing agents, checking usage, cost and failures, and releasing safely. Every skill that changes an agent reads the agent's profile first (from `start-an-agent`) and runs its "before you start" checks; `release-check` runs before anything reaches real people.
+
+- `start-an-agent` — Start an agent: the intake questions
+- `find-an-agent` — Find an agent and see its setup
+- `compare-environments` — See which version runs on dev, staging and production
+- `read-identity` — Read an agent's identity
+- `edit-identity` — Edit the identity, one section at a time
+- `review-draft` — See what your draft would change
+- `change-a-setting` — Change one draft setting
+- `test-draft-in-chat` — Try your draft in the test chat
+- `read-skills` — List and read an agent's skills
+- `edit-skill` — Add or rewrite one of the agent's skills
+- `browse-knowledge` — Find and read a knowledge base
+- `see-agent-tools` — See an agent's tools and tool servers
+- `attach-tool-server` — Give an agent a tool server
+- `tool-switches` — Switch single tools on or off, and set approval
+- `read-eval-results` — Read eval results
+- `write-an-eval` — Write or remove one eval
+- `run-an-eval` — Run evals
+- `usage-check` — Check usage
+- `cost-check` — Check cost
+- `failures-check` — Check failures
+- `read-a-conversation` — Find and read one conversation
+- `deploy-to-dev` — Deploy your draft to dev
+- `release-check` — Before it reaches real people: the release check
+- `promote` — Promote to staging or production
+- `connect-channel` — Connect an agent to a channel, or disconnect it
+- `roll-back` — Roll back to an earlier version
+- `pause-agent` — Pause or resume an agent
+
 ## Install
 
 ```

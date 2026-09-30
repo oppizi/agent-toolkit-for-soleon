@@ -23,7 +23,7 @@ deploy, or delete anything — even by accident, and even if you ask it to.
 
 ## What this plugin does NOT do
 
-It ships **no skills and no commands** — it is a connection and a scope pin. It
+It ships **read-only starter skills and no commands** (below). It
 does NOT write, deploy, promote, or delete anything, and it cannot: no write scope
 is on the token.
 
@@ -31,6 +31,22 @@ It also does **not** grant you access. Installing a bundle widens what you *cons
 to, never what you are *permitted* to do — Soleon authorizes every request against
 your actual permissions, so you will only ever see and reach the tools you are
 already entitled to. Installing `admin` would not make you an admin.
+
+## Starter skills
+
+11 one-job skills for everyday Soleon work: reading and changing agents, checking usage, cost and failures, and releasing safely. Every skill that changes an agent reads the agent's profile first (from `start-an-agent`) and runs its "before you start" checks; `release-check` runs before anything reaches real people.
+
+- `start-an-agent` — Start an agent: the intake questions
+- `find-an-agent` — Find an agent and see its setup
+- `compare-environments` — See which version runs on dev, staging and production
+- `read-identity` — Read an agent's identity
+- `review-draft` — See what your draft would change
+- `read-skills` — List and read an agent's skills
+- `read-eval-results` — Read eval results
+- `usage-check` — Check usage
+- `cost-check` — Check cost
+- `failures-check` — Check failures
+- `read-a-conversation` — Find and read one conversation
 
 ## Install
 
