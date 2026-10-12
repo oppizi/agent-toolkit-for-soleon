@@ -44,7 +44,7 @@ TOKEN_ENV_VAR = "SOLEON_MCP_TOKEN"
 
 RECONNECT_INSTRUCTION = (
     "No usable Soleon token. In Claude Code run /mcp, connect (or reconnect) the "
-    "soleon-agent-toolkit server, then retry."
+    "soleon server, then retry."
 )
 
 _RETRY_429_ATTEMPTS = 6

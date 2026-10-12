@@ -410,7 +410,7 @@ def test_agents_dir_created_is_false_when_it_already_existed(tmp_path):
 
 # The toolkit's OWN server is derived from the plugin that runs the pull, so
 # the same server under soleon-admin/-observer names a different rule.
-TOOLKIT_RULE = "mcp__plugin_soleon-builder_soleon-agent-toolkit__*"
+TOOLKIT_RULE = "mcp__plugin_builder_soleon__*"
 RULES = ["mcp__soleon-workspace", "mcp__soleon-agent-tools",
          "Edit(/.soleon/agents/**)", "Write(/.soleon/agents/**)", TOOLKIT_RULE]
 

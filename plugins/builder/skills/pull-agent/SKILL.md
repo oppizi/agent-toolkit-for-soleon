@@ -26,11 +26,11 @@ Resolve `$ASSETS` = this skill's `assets/` directory and `$PLUGIN` = the
 plugin root (two levels above `skills/pull-agent/`). `$SOLEON_MCP_URL` = the
 URL the plugin's `.mcp.json` server points at: the plugin user config
 `server_url` when set, else `https://mcp-dev.oppizi.com/mcp` — the SAME
-server the `soleon-agent-toolkit` MCP tools you call below are connected to.
+server the `soleon` MCP tools you call below are connected to.
 `$DIR` = `.soleon/agents/<slug>` (project-relative; pass its ABSOLUTE path to
 the script).
 
-Every MCP tool below is on the `soleon-agent-toolkit` server; every call uses
+Every MCP tool below is on the `soleon` server; every call uses
 `app_env: "dev"` (drafts exist on dev only — the tools refuse anything else).
 Save each RAW tool result to disk with the Write tool exactly as returned
 (JSON), under the file named in the step.
@@ -40,9 +40,9 @@ Save each RAW tool result to disk with the Write tool exactly as returned
 ### Step 0 — Preconditions
 1. The user names the slug (ask if missing — one question). It must match
    `^[a-z0-9][a-z0-9-]{0,62}[a-z0-9]$`.
-2. The `soleon-agent-toolkit` MCP server must be connected. If its tools are
+2. The `soleon` MCP server must be connected. If its tools are
    unavailable or a call answers 401/403 → STOP with the error-presentation
-   rule; the fix is "run `/mcp`, connect soleon-agent-toolkit (OAuth), then
+   rule; the fix is "run `/mcp`, connect soleon (OAuth), then
    re-run `/pull-agent <slug>`". Do not retry a rejected token.
 3. If `$DIR/pull.json` already exists, tell the user this re-pull REPLACES
    the local copy with the platform state (local unsaved edits are lost;

@@ -1,0 +1,22 @@
+version: 2
+
+# Actions are pinned to full commit SHAs (supply-chain hardening: a tag can be
+# moved, a SHA cannot). That safety has a cost — a pinned SHA never picks up an
+# upstream security fix on its own — so Dependabot is what keeps the pins moving.
+# It rewrites both the SHA and the trailing `# vX.Y.Z` comment.
+#
+# There is no ecosystem entry for anything else on purpose: the plugins are
+# stdlib-only Python with no manifest, and pytest is the sole CI-time dependency.
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: "ci"
+    labels:
+      - dependencies
+    groups:
+      actions:
+        patterns:
+          - "*"

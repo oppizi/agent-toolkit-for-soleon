@@ -37,16 +37,16 @@ the URL the plugin's `.mcp.json` server points at: the plugin user config
 `server_url` when set, else `https://mcp-dev.oppizi.com/mcp` — the SAME server
 the tools below are connected to, and what Step 5 derives the Soleon link from.
 Every MCP tool below
-is on the `soleon-agent-toolkit` server, and every call uses `app_env: "dev"`:
+is on the `soleon` server, and every call uses `app_env: "dev"`:
 new agents start on dev, and reach staging/prod later by promotion.
 
 ---
 
 ## Step 0 — What already exists (one read, before the first question)
 
-1. The `soleon-agent-toolkit` MCP server must be connected. If its tools are
+1. The `soleon` MCP server must be connected. If its tools are
    unavailable or a call answers 401/403 → STOP with the error-presentation
-   rule; the fix is "run `/mcp`, connect soleon-agent-toolkit, then re-run
+   rule; the fix is "run `/mcp`, connect soleon, then re-run
    `/create-agent`".
 2. `list_agents(app_env="dev")` → save the raw answer to `$WORK/list_agents.json`.
 3. `python3 $ASSETS/create_agent.py defaults --agents $WORK/list_agents.json`

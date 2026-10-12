@@ -19,7 +19,7 @@ tally, and you never word a result as "passed" or "failed". Report numbers.
 **Error-presentation rule (every step):** one plain-English sentence, the
 verbatim error in a code block, the single next action.
 
-`$DIR` = `.soleon/agents/<slug>`. Every MCP tool is on `soleon-agent-toolkit`
+`$DIR` = `.soleon/agents/<slug>`. Every MCP tool is on `soleon`
 with `app_env: "dev"`.
 
 ## State machine

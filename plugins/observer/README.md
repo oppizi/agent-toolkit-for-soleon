@@ -1,21 +1,21 @@
-# soleon-observer
+# observer
 
 Read-only access to a Soleon system from Claude Code. Inspect agents and their
 configuration, read traces and failures, review usage and eval scores, and browse
-the ideas board and agent wiki — **without consenting to a single write.**
+the ideas board — **without consenting to a single write.**
 
 This is the least-privilege way to connect Claude Code to Soleon. If all you do is
 ask questions about what your agents are doing, this is the bundle you want.
 
 ## Scopes this bundle requests
 
-Eight, all reads:
+Seven, all reads:
 
 ```
 soleon-mcp/agent.read          soleon-mcp/kb.read
 soleon-mcp/observability.read  soleon-mcp/eval.read
 soleon-mcp/usage.read          soleon-mcp/governance.read
-soleon-mcp/business.read       soleon-mcp/wiki.read
+soleon-mcp/business.read
 ```
 
 The plugin pins these, so the access token it obtains can never be used to write,
@@ -23,20 +23,36 @@ deploy, or delete anything — even by accident, and even if you ask it to.
 
 ## What this plugin does NOT do
 
-It ships **no skills and no commands** — it is a connection and a scope pin. It
+It ships **read-only starter skills and no commands** (below). It
 does NOT write, deploy, promote, or delete anything, and it cannot: no write scope
 is on the token.
 
 It also does **not** grant you access. Installing a bundle widens what you *consent*
 to, never what you are *permitted* to do — Soleon authorizes every request against
 your actual permissions, so you will only ever see and reach the tools you are
-already entitled to. Installing `soleon-admin` would not make you an admin.
+already entitled to. Installing `admin` would not make you an admin.
+
+## Starter skills
+
+11 one-job skills for everyday Soleon work: reading and changing agents, checking usage, cost and failures, and releasing safely. Every skill that changes an agent reads the agent's profile first (from `start-an-agent`) and runs its "before you start" checks; `release-check` runs before anything reaches real people.
+
+- `start-an-agent` — Start an agent: the intake questions
+- `find-an-agent` — Find an agent and see its setup
+- `compare-environments` — See which version runs on dev, staging and production
+- `read-identity` — Read an agent's identity
+- `review-draft` — See what your draft would change
+- `read-skills` — List and read an agent's skills
+- `read-eval-results` — Read eval results
+- `usage-check` — Check usage
+- `cost-check` — Check cost
+- `failures-check` — Check failures
+- `read-a-conversation` — Find and read one conversation
 
 ## Install
 
 ```
 /plugin marketplace add oppizi/agent-toolkit-for-soleon
-/plugin install soleon-observer@agent-toolkit-for-soleon
+/plugin install observer@agent-toolkit-for-soleon
 ```
 
 Then sign in — the first request to the server triggers the OAuth flow in your
@@ -51,8 +67,8 @@ breaks OAuth discovery.
 
 `soleon-deploy-agent` has been replaced by three role bundles and there is **no
 alias**. If you had it installed, uninstall it and install the bundle that matches
-what you do — `soleon-observer` to read, `soleon-builder` to build agents, or
-`soleon-admin` for the platform-admin surface.
+what you do — `observer` to read, `builder` to build agents, or
+`admin` for the platform-admin surface.
 
 Its **Soleon access token** setting is obsolete. Authentication is now the OAuth
 flow, so the long-lived JWT that used to sit in your keychain is gone; you can

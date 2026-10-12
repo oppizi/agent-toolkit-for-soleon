@@ -1,6 +1,6 @@
 """Mock-MCP deploy smoke — re-runs the OFFLINE pipeline for representative
 scenarios and feeds the produced request body through a FAKE
-`private_deploy_agent` that stands in for the stateless soleon-agent-toolkit
+`private_deploy_agent` that stands in for the stateless `soleon`
 MCP server. No network, no live deploy.
 
 What it proves at the offline -> deploy boundary (skill Step 7):
@@ -42,7 +42,7 @@ class DeployRejected(Exception):
 
 
 class FakeSoleonMcp:
-    """Stand-in for the stateless `soleon-agent-toolkit` MCP server's
+    """Stand-in for the stateless `soleon` MCP server's
     `private_deploy_agent` tool. Validates with the SAME contract the live
     server mirrors, and records the exact body it received so the caller can
     assert nothing was mutated on the way to the wire."""

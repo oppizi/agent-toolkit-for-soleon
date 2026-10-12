@@ -303,7 +303,7 @@ def test_401_without_refresh_material_surfaces_the_reconnect_instruction(soleon,
     out = server.call("custom_echo-server_read", {"prompt": "x"})
     assert out["isError"] is True
     text = out["content"][0]["text"]
-    assert "401" in text and "/mcp" in text and "soleon-agent-toolkit" in text
+    assert "401" in text and "/mcp" in text and "soleon server" in text
     assert "bogus" not in text  # never echo a token
     assert not [c for c in state["calls"] if c[0] == "token"]
 

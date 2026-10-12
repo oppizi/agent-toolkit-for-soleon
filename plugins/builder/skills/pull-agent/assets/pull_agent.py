@@ -983,8 +983,8 @@ def plugin_mcp_allow_rules(plugin_root: Path) -> List[str]:
     the person went looking for them on the platform where they had never
     arrived.
 
-    Derived, never hard-coded: the same server ships in soleon-builder,
-    soleon-admin and soleon-observer, so the plugin NAME is what varies and the
+    Derived, never hard-coded: the same server ships in builder,
+    admin and observer, so the plugin NAME is what varies and the
     rule has to name the plugin that is actually running. The trailing `__*` is
     the documented form — a glob is allowed only after a literal
     `mcp__<server>__` prefix, and the server segment itself may not be a glob.
