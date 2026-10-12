@@ -77,9 +77,14 @@ agent-toolkit-for-soleon/
 │   │   ├── .claude-plugin/  manifest
 │   │   ├── README.md        install, usage, supported platforms, escape hatches
 │   │   ├── bin/             vendored allium engine (v3.2.4, provenance in LICENSES/)
+│   │   │                    + the local-emulation stdio MCP servers, save hook,
+│   │   │                    turn hooks and shared client (stdlib Python)
+│   │   ├── hooks/           PostToolUse: saves under .soleon/agents/ → Soleon draft;
+│   │   │                    SubagentStart/Stop: each local agent run → one trace turn
 │   │   ├── contract.json    platform validation contract, generated from source
 │   │   ├── LICENSES/        MIT notice + binary provenance chain
-│   │   └── skills/          GENERATED copies of deploy-agent + write-evals
+│   │   ├── skills/          GENERATED copies of deploy-agent + write-evals, plus the
+│   │   │                    bundle-private create-agent / pull-agent / run-local-eval
 │   └── admin/               full platform surface + a generated copy of write-evals
 ├── preflight/               frozen correctness oracle (schema fixture + contract doc)
 ├── harness/                 offline validator, judge rubric, tests — never ships
@@ -117,7 +122,7 @@ Edit the catalogue, never a bundle copy — the next sync overwrites it.
 ### Documentation
 
 - **[TOOLS.md](TOOLS.md)** — full reference for every MCP tool the Soleon server
-  exposes (85 live, grouped by area), plus known gaps. Tools are discovered live
+  exposes (91 live, grouped by area), plus known gaps. Tools are discovered live
   from the server, so new ones appear in the plugin automatically — no plugin
   update needed.
 - **[MCP landing page](docs/index.html)** — a public, no-auth docs page for the
@@ -225,6 +230,72 @@ which is the usual reason a suite goes green while testing very little. Read it
 before writing an eval, and whenever a suite passes but you don't trust it.
 
 Full usage, escape hatches, and troubleshooting: [`plugins/builder/README.md`](plugins/builder/README.md).
+
+### Pull a Soleon agent into Claude Code
+
+The reverse arrow of `/deploy-agent` (`soleon-builder` v0.4.0):
+
+```
+/pull-agent <slug>
+```
+
+pulls your **dev draft** of a Soleon agent (else its deployed dev config —
+exactly what the platform's edit page opens) into the project as a Claude Code
+subagent, `~/.claude/agents/<slug>.md` (user scope), whose body is the system prompt the
+platform assembles for you, fetched live. **The local session is the brain;
+Soleon executes the tools**: every external tool (Gmail, web search, browser,
+custom MCPs, subagent pairs…) is published under its platform name and schema by
+a stdio MCP shim and run on the platform through `call_agent_tool` — with your
+credentials, the agent's tool policy and its approval gates (the subagent asks you
+before an approval-gated call, then sends `approved: true`). The workspace tools
+(`read_file`, `write_file`, `edit_file`, `list_dir`) run locally against a
+read-only snapshot of your platform workspace. You pick the local Claude model at
+pull time (default: the closest match to the agent's Bedrock model; non-Anthropic
+agents get a warning and no default).
+
+**The edit loop.** `/pull-agent` materializes the agent as files under
+`.soleon/agents/<slug>/` — `SOUL.md`, `config.json`, `skills/<id>/SKILL.md`,
+`evals/<id>.json`, `workspace/` — and the plugin's save hook pushes **every save**
+of the first four to your Soleon draft (`patch_agent_draft`), then re-syncs the
+platform's test sandbox. The draft IS the local state; there is no separate push.
+An edit made elsewhere in the meantime (the Soleon editor, another session) is a
+conflict: the hook stops the session and asks you to reload theirs
+(`/pull-agent` again) or overwrite with yours. The reverse direction is
+automatic: before every prompt the plugin checks each pulled agent's draft
+version on the platform and, when it changed elsewhere (the Soleon editor,
+another session), re-pulls the local copy — everything but `workspace/` — so
+the run uses the current agent; you are told when that happened. Going live is still
+`deploy_agent_draft`. Configured subagents and workflows are pulled too, and the
+local agent holds them as TOOLS exactly as on the platform (`subagent_<id>`,
+`workflow_<id>`, one `task` each): a call runs that subagent — or the workflow's
+manager, which calls its members the same way — as a headless Claude Code run on
+this machine, with every tool inside it still executed on Soleon. Each subagent is
+also a sibling agent `<slug>--<id>` you can talk to directly. `/run-local-eval <slug>` runs the agent's standard evals
+against the local subagent and grades them with the platform's own judge prompt
+(fetched live) — scores only, never a pass/fail verdict.
+
+**Traces.** Every local run shows up in Soleon's Monitoring → Traces under
+"Draft Agents" (channel `Local`; the pull report links the pre-filtered view).
+Each local conversation is one session (a new one after 30 idle minutes), and
+each prompt to the agent is one turn inside it: the prompt the agent received,
+every tool call it made — the platform-run ones and the local workspace ones,
+as steps — and its answer. The tool server tags each platform call with the
+run's `conversation` + `turn` ids; the plugin's SubagentStart/SubagentStop
+hooks mint the turn id and, when the agent finishes, send the prompt, answer
+and local steps from the subagent's transcript (`record_agent_turn`). Only the
+LLM calls are missing, because the thinking happened on your machine.
+
+**Not emulated** (platform-only, shown read-only in `config.json`): channels,
+budgets, schedules, guardrails, online-eval sampling. Workspace edits never push
+back.
+
+**Credentials.** The shim and the hook reuse the OAuth token Claude Code already
+holds for the `soleon-agent-toolkit` server. On **Linux** that token lives in
+`~/.claude/.credentials.json` (mode 0600, `mcpOAuth` map) and both read it there,
+refreshing it through the server's `refresh_token` grant when it expires. On
+**macOS** Claude Code keeps it in the Keychain — reading it from a hook (e.g. via
+`security find-generic-password`) is **untested**; set `SOLEON_MCP_TOKEN` in the
+environment as a workaround until it is.
 
 ## Running the tests
 

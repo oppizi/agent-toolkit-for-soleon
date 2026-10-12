@@ -260,7 +260,9 @@ def test_hooks_round_trip_generates_and_removes_the_manifest_entry(clone):
 
     assert _run("--remove", "builder", "hooks", "demo-guard", cwd=clone).returncode == 0
     assert json.loads(manifest.read_text()) == before
-    assert not (clone / "plugins/builder/hooks").exists()
+    # builder keeps its own private hooks/hooks.json (pull-agent's save and turn
+    # hooks), so only the subscription's directory goes away.
+    assert not (clone / "plugins/builder/hooks/demo-guard").exists()
 
 
 def test_check_catches_a_hand_edited_hooks_array(clone):

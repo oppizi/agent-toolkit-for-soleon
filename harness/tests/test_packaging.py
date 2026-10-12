@@ -60,6 +60,7 @@ EXPECTED_SKILLS = {
         "compare-environments",
         "connect-channel",
         "cost-check",
+        "create-agent",
         "deploy-agent",
         "deploy-to-dev",
         "edit-identity",
@@ -68,12 +69,14 @@ EXPECTED_SKILLS = {
         "find-an-agent",
         "pause-agent",
         "promote",
+        "pull-agent",
         "read-a-conversation",
         "read-eval-results",
         "read-identity",
         "read-skills",
         "review-draft",
         "roll-back",
+        "run-local-eval",
         "start-an-agent",
         "test-draft-in-chat",
         "tool-switches",
@@ -117,8 +120,36 @@ FORBIDDEN_REFS = ("harness/", "samples/", "preflight/", "runs.jsonl", "transcrip
 
 STDLIB_OK = {
     "__future__", "annotations", "argparse", "ast", "json", "os", "platform",
-    "re", "shutil", "subprocess", "sys", "pathlib", "datetime", "engine", "typing",
+    "re", "shutil", "subprocess", "sys", "pathlib", "datetime", "typing",
+    # added with the local-emulation tooling (bin/*.py + skills/pull-agent)
+    "urllib", "http", "zipfile", "hashlib", "time", "threading", "io", "socket",
+    "select", "stat", "tempfile", "uuid", "base64", "mimetypes", "fnmatch",
+    "dataclasses", "functools", "textwrap", "difflib",
+    # the local message budget (bin/soleon_message_budget.py)
+    "contextlib", "fcntl", "shlex",
 }
+# The plugin's OWN modules that its scripts import from a sibling path (they ship
+# together, so they are not third-party): the deploy-agent engine seam plus every
+# bin/ and skill-asset module the stdio servers, the hooks and pull_agent.py share.
+# DERIVED from what the plugin actually ships — a hand-written list went stale the
+# moment a bin/ server imported a new sibling (`soleon_turn_hooks` importing
+# `soleon_agent_tools_mcp` is precisely the "sibling plugin module" the assertion
+# below says it allows, and it was reported as a third-party dependency instead).
+def _plugin_local_modules():
+    names = {p.stem for p in (PLUGIN / "bin").glob("*.py")}
+    names |= {p.stem for p in (PLUGIN / "skills").glob("*/assets/*.py")}
+    assert names, "no plugin Python found — layout changed?"
+    return names | {"engine"}
+
+
+PLUGIN_LOCAL_MODULES = _plugin_local_modules()
+
+
+def _plugin_python_files():
+    files = list((PLUGIN / "skills").glob("*/assets/*.py"))
+    files += list((PLUGIN / "bin").glob("*.py"))
+    assert files, "no plugin Python found — layout changed?"
+    return sorted(files)
 
 
 def _telemetry_offenders(root):
@@ -156,17 +187,29 @@ def test_no_telemetry_references_in_catalogue_entry(entry):
     assert not offenders, f"catalogue entry {entry.name} references bet telemetry: {offenders}"
 
 
-def test_plugin_python_is_stdlib_only():
-    for path in ASSETS.glob("*.py"):
-        tree = ast.parse(path.read_text(encoding="utf-8"))
-        for node in ast.walk(tree):
-            mods = []
-            if isinstance(node, ast.Import):
-                mods = [a.name.split(".")[0] for a in node.names]
-            elif isinstance(node, ast.ImportFrom) and node.module:
-                mods = [node.module.split(".")[0]]
-            for mod in mods:
-                assert mod in STDLIB_OK, f"{path.name} imports non-stdlib {mod!r}"
+@pytest.mark.parametrize("path", _plugin_python_files(), ids=lambda p: str(p.relative_to(PLUGIN)))
+def test_plugin_python_is_stdlib_only(path):
+    """Every shipped .py (deploy-agent + pull-agent assets, bin/ servers and hook)
+    imports only the standard library or a sibling plugin module."""
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    for node in ast.walk(tree):
+        mods = []
+        if isinstance(node, ast.Import):
+            mods = [a.name.split(".")[0] for a in node.names]
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            mods = [node.module.split(".")[0]]
+        for mod in mods:
+            assert mod in STDLIB_OK or mod in PLUGIN_LOCAL_MODULES, (
+                f"{path.relative_to(PLUGIN)} imports non-stdlib {mod!r}"
+            )
+
+
+def test_plugin_python_is_python39_compatible():
+    """The README promises Python 3.9+: no `match`, no `X | Y` unions evaluated at
+    runtime, no parenthesized context managers. Checked by parsing with the 3.9
+    grammar via `ast.parse(feature_version=(3, 9))`."""
+    for path in _plugin_python_files():
+        ast.parse(path.read_text(encoding="utf-8"), filename=str(path), feature_version=(3, 9))
 
 
 def test_isolation_smoke_plugin_alone_converts(tmp_path):
