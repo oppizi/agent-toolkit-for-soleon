@@ -129,6 +129,8 @@ STDLIB_OK = {
     "dataclasses", "functools", "textwrap", "difflib",
     # the local message budget (bin/soleon_message_budget.py)
     "contextlib", "fcntl", "shlex",
+    # the macOS Keychain read in bin/soleon_mcp_client.py
+    "getpass",
 }
 # The plugin's OWN modules that its scripts import from a sibling path (they ship
 # together, so they are not third-party): the deploy-agent engine seam plus every
