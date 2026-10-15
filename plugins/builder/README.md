@@ -197,16 +197,19 @@ workflows follow the platform's steps (manager: assign → review → next decis
 until finish, bounded by the configured rounds; peer: bounded rounds)
 approximately, not identically.
 
-**Credentials — Linux vs macOS.** The shim and the hook run outside Claude
+**Credentials — macOS and Linux.** The shim and the hooks run outside Claude
 Code's MCP connection, so they reuse the OAuth token Claude Code already holds
-for the `soleon` server. On Linux it is in `~/.claude/.credentials.json`
-(mode 0600, `mcpOAuth` map keyed by server); both read the entry whose
-`serverUrl` matches the plugin's server URL and refresh it through the server's
-`refresh_token` grant on a 401 (the file is rewritten with its mode kept). On
-macOS Claude Code stores it in the Keychain; reading it from the hook (e.g.
-`security find-generic-password`) is **untested** — until it is, export
-`SOLEON_MCP_TOKEN` in the environment Claude Code runs in. Tokens are never
-logged or printed.
+for the `soleon` server. On macOS it is in the login Keychain (generic
+password, service `Claude Code-credentials`, your login user as account),
+read with `/usr/bin/security find-generic-password`; the file below is the
+fallback. On Linux it is in `~/.claude/.credentials.json` (mode 0600,
+`mcpOAuth` map keyed by server). Both hold the same document: the helpers take
+the entry whose `serverUrl` matches the plugin's server URL — when an older
+plugin name left a sign-in for the same server behind, the one that expires
+last — and refresh it through the server's `refresh_token` grant on a 401. A
+token from the file is written back (mode kept); a Keychain token is refreshed
+in memory only, because that item is Claude Code's. `SOLEON_MCP_TOKEN` in the
+environment overrides both. Tokens are never logged or printed.
 
 ## Authentication
 
