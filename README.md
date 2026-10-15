@@ -145,7 +145,7 @@ admin — and differ only in the OAuth scopes they request:
 |---|---|---|
 | `observer` | 7, all reads | Reading agents, traces, failures, usage, evals, ideas. No write consent at all. |
 | `builder` | 16 | The agent build loop: drafts, deploys, promotions, channel binds, custom MCPs, knowledge bases. Ships the `deploy-agent` and `write-evals` skills. |
-| `admin` | 20 (all) | Platform admins — adds channel/custom-MCP instance reads, eval runs, and discovery. Also ships `write-evals`. |
+| `admin` | 20 (all) | Platform admins — adds channel/custom-MCP instance reads, eval runs, and discovery. Also ships `write-evals` and local agent testing (`pull-agent`, `run-local-eval`). |
 
 **Pick the narrowest one that covers your work.** A broader bundle grants no extra
 access: scope is a ceiling on what the token may consent to, never a role. Soleon
@@ -355,7 +355,7 @@ This is an internal prototype in a bet worktree, so the loop is lightweight:
    `plugins/`; anything else is harness. The packaging tests enforce this.
 3. Change a bundle's composition only through
    `python3 harness/sync_bundles.py --add/--remove` (or `/bundle-plugin`, which
-   drives it). Edit capabilities in `plugins/{skills,agents,hooks}/`, never in a
+   drives it). Edit capabilities in `plugins/{skills,agents,hooks,bin}/`, never in a
    bundle — the next sync overwrites bundle copies.
 4. Regenerate the generated artifacts after touching platform code:
    `python3 harness/sync_contract.py` and `python3 harness/sync_scope_bundles.py`

@@ -248,21 +248,28 @@ def test_hooks_round_trip_generates_and_removes_the_manifest_entry(clone):
 
     manifest = clone / "plugins/builder/.claude-plugin/plugin.json"
     before = json.loads(manifest.read_text())
-    assert "hooks" not in before
+    # builder already subscribes to the real local-emulation hook.
+    assert before["hooks"] == ["./hooks/local-emulation/hooks.json"]
 
     assert _run("--add", "builder", "hooks", "demo-guard", cwd=clone).returncode == 0
     after = json.loads(manifest.read_text())
-    assert after["hooks"] == ["./hooks/demo-guard/hooks.json"]
+    assert after["hooks"] == [
+        "./hooks/demo-guard/hooks.json",
+        "./hooks/local-emulation/hooks.json",
+    ]
     assert (clone / "plugins/builder/hooks/demo-guard/check.sh").is_file()
     # Everything else in the manifest survives the rewrite.
-    assert {k: v for k, v in after.items() if k != "hooks"} == before
+    assert {k: v for k, v in after.items() if k != "hooks"} == {
+        k: v for k, v in before.items() if k != "hooks"
+    }
     assert _run("--check", cwd=clone).returncode == 0
 
     assert _run("--remove", "builder", "hooks", "demo-guard", cwd=clone).returncode == 0
     assert json.loads(manifest.read_text()) == before
-    # builder keeps its own private hooks/hooks.json (pull-agent's save and turn
-    # hooks), so only the subscription's directory goes away.
+    # builder keeps its local-emulation subscription (pull-agent's save and turn
+    # hooks), so only the demo subscription's directory goes away.
     assert not (clone / "plugins/builder/hooks/demo-guard").exists()
+    assert (clone / "plugins/builder/hooks/local-emulation/hooks.json").is_file()
 
 
 def test_check_catches_a_hand_edited_hooks_array(clone):

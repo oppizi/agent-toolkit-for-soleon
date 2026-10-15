@@ -29,7 +29,7 @@ An entry with no catalogue match is left completely alone, so bundle-private
 capabilities need no special casing. There is no manifest of subscriptions to keep
 in sync, and drift is still testable because the catalogue is the source.
 
-Three kinds, three different runtime mechanics — this is the whole reason the
+Four kinds, and three different runtime mechanics — this is the whole reason the
 script is more than a copy loop:
 
 * **skills** — `<name>/SKILL.md`. Auto-scanned from `<pluginRoot>/skills/`, and the
@@ -43,6 +43,10 @@ script is more than a copy loop:
   therefore be listed in that bundle's `plugin.json` `hooks` array (which *is*
   additive and merged), so this script generates that array. A bundle may still
   keep its own private `hooks/hooks.json` — it is auto-loaded alongside.
+* **bin** — `<name>.py`. Helper scripts the skills and hooks run through
+  `${CLAUDE_PLUGIN_ROOT}/bin/`. Nothing scans `bin/`; it only has to be at that
+  path. Only `.py` entries are catalogued, so a bundle-private binary (builder's
+  vendored `allium-*`) sits alongside them untouched.
 
 Usage::
 
@@ -98,6 +102,7 @@ KINDS = {
         Kind("skills", is_dir=True, marker="SKILL.md"),
         Kind("agents", is_dir=False, suffix=".md"),
         Kind("hooks", is_dir=True, marker="hooks.json"),
+        Kind("bin", is_dir=False, suffix=".py"),
     )
 }
 
@@ -474,7 +479,7 @@ def main(argv: "list[str] | None" = None) -> int:
         print(f"\nDRIFT — {len(all_drift)} problem(s):", file=sys.stderr)
         for message in all_drift:
             print(f"  {message}", file=sys.stderr)
-        print("\nThe catalogue under plugins/{skills,agents,hooks}/ is the source of "
+        print("\nThe catalogue under plugins/{skills,agents,hooks,bin}/ is the source of "
               "truth. Fix it there, then run `python3 harness/sync_bundles.py`.",
               file=sys.stderr)
         return 1

@@ -3,8 +3,10 @@
 The source of truth for every hook any bundle ships. **Edit here, never in a
 bundle** — `plugins/<bundle>/hooks/<name>/` holds a generated copy.
 
-Empty for now. The convention is fixed so the first hook does not have to
-rediscover it.
+One entry today: `local-emulation/` — pull-agent's save, refresh, turn and
+message-budget hooks, shipped by `builder` and `admin`. Its scripts live in the
+`bin/` catalogue (`plugins/bin/`), not next to the hook, because the skills and
+the stdio servers call the same scripts through `${CLAUDE_PLUGIN_ROOT}/bin/`.
 
 ```
 plugins/hooks/<name>/hooks.json      required — the hook config
