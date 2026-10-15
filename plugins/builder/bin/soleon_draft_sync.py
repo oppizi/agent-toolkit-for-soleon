@@ -2,7 +2,7 @@
 """PostToolUse hook: a save under `.soleon/agents/<slug>/` becomes a
 `patch_agent_draft` on the Soleon platform, instantly (spec D5, D17).
 
-Wired by the plugin's `hooks/hooks.json` on `Write|Edit|MultiEdit`. Reads the
+Wired by the plugin's `hooks/local-emulation/hooks.json` on `Write|Edit|MultiEdit`. Reads the
 hook payload on stdin, and:
 
 * exits 0 immediately for any path that is not a synced artefact of a pulled

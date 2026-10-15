@@ -341,7 +341,7 @@ def test_no_change_answer_is_reported_not_treated_as_failure(agent_dir, capsys):
 
 
 def test_hooks_json_wires_the_script_on_write_edit_multiedit():
-    hooks = json.loads((PLUGIN / "hooks" / "hooks.json").read_text())
+    hooks = json.loads((PLUGIN / "hooks" / "local-emulation" / "hooks.json").read_text())
     (entry,) = hooks["hooks"]["PostToolUse"]
     assert entry["matcher"] == "Write|Edit|MultiEdit"
     (cmd,) = entry["hooks"]

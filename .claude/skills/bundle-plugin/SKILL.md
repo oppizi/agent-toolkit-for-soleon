@@ -7,7 +7,7 @@ description: Compose a Soleon plugin bundle from the shared capability catalogue
 
 Repo-development skill for `agent-toolkit-for-soleon`. It does not ship.
 
-`plugins/{skills,agents,hooks}/` is the catalogue: the single source of truth for
+`plugins/{skills,agents,hooks,bin}/` is the catalogue: the single source of truth for
 every capability. `plugins/{observer,builder,admin}/` are the bundles, which carry
 **real copies**. `harness/sync_bundles.py` is the only thing that writes those
 copies.
@@ -75,7 +75,7 @@ python3 harness/sync_bundles.py --add    <bundle> <kind> <name>
 python3 harness/sync_bundles.py --remove <bundle> <kind> <name>
 ```
 
-`<kind>` is `skills`, `agents`, or `hooks`. The script copies the content, and for
+`<kind>` is `skills`, `agents`, `hooks`, or `bin`. The script copies the content, and for
 hooks it also regenerates that bundle's `plugin.json` `hooks` array — only
 `hooks/hooks.json` is auto-discovered at runtime, so an unlisted hook file is
 inert.

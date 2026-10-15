@@ -28,18 +28,42 @@ platform admins. That is exactly why they are here and not in a lower bundle.
 
 ## Skills
 
-One: **`/write-evals`** — designing evals whose score reflects the behaviour under
+**`/write-evals`** — designing evals whose score reflects the behaviour under
 test rather than resemblance to a reference answer. Read it before writing an eval,
 and whenever a suite passes but you don't trust it.
 
-It is the same skill `builder` ships, byte for byte: both bundles are
-composed from one shared source, so the two copies can never drift apart.
+**Local agent testing** (AHP-889) — the same pair `builder` ships:
+
+```
+/pull-agent <slug>
+/run-local-eval <slug> [evalId]
+```
+
+`/pull-agent` pulls a Soleon agent into Claude Code as a local subagent that
+reasons on your machine and runs every external tool on Soleon (through
+`call_agent_tool`, with your credentials, the agent's tool policy and its
+approval gates). Its SOUL, config, skills and evals land as files under
+`.soleon/agents/<slug>/`, and every save is pushed to your Soleon draft — never
+live; deploy as usual. `/run-local-eval` scores the agent's evals locally with
+the platform's own judge prompt. The full behaviour — traces, the edit loop, the
+refresh hook, the message budget, what is not emulated, macOS credentials — is
+documented once, in the
+[builder README](../builder/README.md#pull-a-soleon-agent-into-claude-code).
+
+These are uses of the `soleon-mcp/agent.invoke` scope this bundle already
+requests; Soleon also checks that you may invoke the agent.
+
+All of it is the same content `builder` ships, byte for byte: both bundles are
+composed from one shared source, so the copies can never drift apart.
+
+**Install `admin` or `builder`, not both.** Both register the local-emulation
+hooks, so with both installed every save is pushed to your draft twice, and
+the duplicate push can come back as a conflict that stops the session.
 
 ## What this plugin does NOT do
 
-It ships **no commands**, and none of the agent build loop. `/deploy-agent` — local
-identity file → validated `POST /agents` → deploy — lives in `builder` only.
-Beyond `/write-evals`, this bundle is a connection and a scope pin.
+`/deploy-agent` — local identity file → validated `POST /agents` → deploy —
+lives in `builder` only (it needs the contract and the vendored engine).
 
 Most importantly, it does **not** grant you admin. A bundle widens what you
 *consent* to, never what you are *permitted* to do. Soleon authorizes every request
@@ -99,8 +123,8 @@ breaks OAuth discovery.
 `soleon-deploy-agent` has been replaced by three role bundles and there is **no
 alias**. Uninstall it and install the bundle matching what you do. Note that the
 `deploy-agent` skill now lives in **`builder`**, not here — if that skill is
-what you came for, install `builder` (or both). `/write-evals` is available
-in both.
+what you came for, install `builder` instead. `/write-evals`, `/pull-agent` and
+`/run-local-eval` are available in both.
 
 Its **Soleon access token** setting is obsolete. Authentication is now the OAuth
 flow, so the long-lived JWT that used to sit in your keychain is gone; you can

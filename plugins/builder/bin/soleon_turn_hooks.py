@@ -3,7 +3,7 @@
 becomes ONE turn on the platform trace — the prompt it received, every tool
 call it made, and its final answer — instead of a bare list of tool calls.
 
-Wired by the plugin's `hooks/hooks.json`:
+Wired by the plugin's `hooks/local-emulation/hooks.json`:
 
     python3 soleon_turn_hooks.py start   # SubagentStart
     python3 soleon_turn_hooks.py stop    # SubagentStop

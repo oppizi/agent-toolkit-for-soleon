@@ -113,6 +113,11 @@ the name of anything else as it appears on the Tools page. To convert an
 /pull-agent <slug>
 ```
 
+`admin` ships the same pull-agent, run-local-eval and hooks, byte for byte.
+Install one of the two, not both: each registers the hooks below, so with both
+installed every save is pushed to your draft twice, and the duplicate push can
+come back as a conflict that stops the session.
+
 **What it does.** Reads your dev draft of the agent (else the deployed dev
 config — what the platform's edit page opens), the tools its session actually
 registers, the system prompt the platform assembles for you, and a zip of your
@@ -142,13 +147,13 @@ platform to finish — no client-side timeout, as on the platform.
 (Monitoring → Traces, Activity "Draft Agents"; the pull report links the
 view): the tool server sends every platform call with the run's
 `conversation` + `turn` ids, and the plugin's SubagentStart/SubagentStop
-hooks (`hooks/hooks.json` → `bin/soleon_turn_hooks.py`) mint the turn id and,
+hooks (`hooks/local-emulation/hooks.json` → `bin/soleon_turn_hooks.py`) mint the turn id and,
 when the agent finishes, record the prompt, the answer and the locally-run
 tool calls from the subagent's transcript (`record_agent_turn`). A record
 that cannot be sent is reported as a system message, never a blocked session.
 
 **The edit loop.** Edit `SOUL.md`, `config.json`, `skills/**` or
-`evals/*.json` and the plugin's PostToolUse hook (`hooks/hooks.json` →
+`evals/*.json` and the plugin's PostToolUse hook (`hooks/local-emulation/hooks.json` →
 `bin/soleon_draft_sync.py`) pushes the change to your Soleon draft on every
 save (`patch_agent_draft`, guarded by the pulled `draftEtag`) and re-syncs the
 platform's test sandbox. A concurrent edit elsewhere is a conflict: the hook
@@ -159,7 +164,7 @@ config.json a deploy of your draft would ship; the hook maps it back onto the
 editor's flat fields with the platform's own table (`bin/soleon_agent_document.py`).
 
 **The other direction is automatic too.** Before every prompt, the plugin's
-UserPromptSubmit hook (`hooks/hooks.json` → `bin/soleon_pull_refresh.py`)
+UserPromptSubmit hook (`hooks/local-emulation/hooks.json` → `bin/soleon_pull_refresh.py`)
 asks the platform for each pulled agent's draft version (one
 `get_agent_draft` read); when it differs from what the last pull or save
 recorded — an edit in the Soleon editor, a save from another session — the

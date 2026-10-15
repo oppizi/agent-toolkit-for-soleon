@@ -19,12 +19,14 @@ Capabilities come from a **catalogue** under `plugins/` (see *Catalogue and comp
 
 ```
 plugins/            ← the adoptable artifacts AND the catalogue they are composed from
-  skills/             CATALOGUE — source of truth for every skill (deploy-agent, write-evals)
-  agents/ hooks/      CATALOGUE — same convention, empty until first use
+  skills/             CATALOGUE — source of truth for every skill (deploy-agent, write-evals, pull-agent, …)
+  hooks/              CATALOGUE — local-emulation (pull-agent's save, refresh, turn and budget hooks)
+  bin/                CATALOGUE — the helper scripts those skills and hooks run (*.py)
+  agents/             CATALOGUE — same convention, empty until first use
   scope_bundles.json  generated scope pins + sha256 (vendored from platform source)
   observer/           bundle: scope pin only, subscribes to nothing
   builder/            bundle: the only one with contract.json and the vendored engine
-  admin/              bundle: scope pin + a generated copy of write-evals
+  admin/              bundle: scope pin + generated copies of the starter skills, write-evals and local emulation
 .claude-plugin/     root marketplace manifest — the ONE marketplace; GitHub installs resolve here
 harness/            tests, offline validator, judge rubric, generators. NEVER ships.
 preflight/          frozen correctness oracle (expected_channelless_config.json)
@@ -48,9 +50,9 @@ There must stay exactly **one** marketplace manifest (the root one). A nested `p
 
 - **`plugins/builder/contract.json`** — the frozen platform-validation contract (slug pattern, allowed dynamo/config keys, frameworks, soul byte cap, model aliases, PK template, projection constants). **Generated, not hand-edited** — see contract-as-data below.
 
-### Local agent emulation (the reverse arrow, AHP-889, builder 0.4.0)
+### Local agent emulation (the reverse arrow, AHP-889, builder 0.4.0, admin 0.7.0)
 
-`plugins/builder/skills/pull-agent/` + `skills/run-local-eval/` + `bin/*.py` + `hooks/hooks.json`. Same head/core split: the SKILL.md state machine does the Soleon MCP calls (`get_agent_draft`, `list_agent_tools` with the pending/poll protocol, `get_agent_system_prompt`, `get_agent_workspace_archive`) and saves the raw JSON; `skills/pull-agent/assets/pull_agent.py materialize` is the deterministic, offline core that writes `.soleon/agents/<slug>/` and the `~/.claude/agents/<slug>.md` subagent (USER scope on purpose: a project-scope agent file only starts its inline MCP servers in a trusted folder, the VS Code extension does not always ask, and the user watcher hot-loads the file so no restart is needed). Three things to know before touching it:
+`plugins/skills/pull-agent/` + `plugins/skills/run-local-eval/` + `plugins/bin/*.py` + `plugins/hooks/local-emulation/hooks.json`, all catalogue entries that `builder` and `admin` both subscribe to (they land at `skills/`, `bin/` and `hooks/local-emulation/` inside each bundle — the scripts resolve one another through `${CLAUDE_PLUGIN_ROOT}/bin/`, so the paths inside a bundle are load-bearing). Install one of the two bundles, not both: each registers the same hooks, so every save runs twice and both pushes carry the same pulled draft version — the duplicate can come back as a conflict that stops the session. Same head/core split: the SKILL.md state machine does the Soleon MCP calls (`get_agent_draft`, `list_agent_tools` with the pending/poll protocol, `get_agent_system_prompt`, `get_agent_workspace_archive`) and saves the raw JSON; `skills/pull-agent/assets/pull_agent.py materialize` is the deterministic, offline core that writes `.soleon/agents/<slug>/` and the `~/.claude/agents/<slug>.md` subagent (USER scope on purpose: a project-scope agent file only starts its inline MCP servers in a trusted folder, the VS Code extension does not always ask, and the user watcher hot-loads the file so no restart is needed). Three things to know before touching it:
 
 - **`bin/soleon_agent_document.py` is the ONE mapping between the platform's flat editor document and the nested `config.json`**, in both directions (a mirror of agent-infra's `_flat_draft_config_patch` and its inverse). `pull_agent.py` and the save hook (`bin/soleon_draft_sync.py`) both import it — never re-derive a field in either caller.
 - **`bin/soleon_mcp_client.py` is the ONE HTTP path to Soleon from outside Claude Code's MCP connection** (the `soleon-agent-tools` shim and the hook). It reads Claude Code's own OAuth token from `~/.claude/.credentials.json` (Linux; macOS Keychain is untested) and refreshes it at most once. Tokens are never logged, printed or put in exception text — keep it that way.
@@ -67,7 +69,7 @@ Everything under `plugins/` stays **stdlib-only and Python 3.9-compatible** — 
 
 ## Catalogue and composition
 
-`plugins/{skills,agents,hooks}/` is the catalogue: the single source of truth for every capability. `plugins/{observer,builder,admin}/` are the bundles, and they carry **real copies**, generated by `harness/sync_bundles.py`.
+`plugins/{skills,agents,hooks,bin}/` is the catalogue: the single source of truth for every capability. `plugins/{observer,builder,admin}/` are the bundles, and they carry **real copies**, generated by `harness/sync_bundles.py`.
 
 ```bash
 python3 harness/sync_bundles.py --check                        # drift guard (in the suite)
@@ -90,6 +92,7 @@ The `/bundle-plugin` skill (`.claude/skills/`, repo-dev only) is the LLM head ov
 | `skills` | `<name>/SKILL.md` | Auto-scanned; the manifest key is *additive*. Nothing to generate. |
 | `agents` | `<name>.md` (flat) | `agents/**/*.md` is scanned **recursively**, and a subdirectory becomes part of the scoped id. **Never set the `agents` manifest key** — unlike `skills` it *replaces* the default scan, hiding every unlisted agent. |
 | `hooks` | `<name>/hooks.json` | Only `hooks/hooks.json` is auto-discovered — there is **no** `hooks/*.json` scan. Each subscription must be listed in that bundle's `plugin.json` `hooks` array, which `sync_bundles.py` generates. It owns only the entries pointing at a catalogue entry; anything else there is preserved. |
+| `bin` | `<name>.py` (flat) | Nothing scans `bin/`; skills and hooks call the scripts through `${CLAUDE_PLUGIN_ROOT}/bin/<name>.py`, so the path is all that matters. Only `.py` entries are catalogued — builder's vendored `allium-*` binary is bundle-private and left alone. |
 
 ## Contract-as-data — two generated artifacts, both single-source-of-truth
 
