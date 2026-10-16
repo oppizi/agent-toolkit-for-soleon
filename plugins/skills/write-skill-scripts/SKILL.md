@@ -64,7 +64,9 @@ Platform facts with their source lines: `references/platform-facts.md`.
   - A write counts only when its reply confirms it: the row count written equals the rows
     sent, or the link or id you need is in it. Anything else is a failed write.
   - Missing fields are an error to return, never an empty list or a blank cell. A misnamed field
-    must not become "done, 0 found".
+    must not become "done, 0 found". Read **every** field you write or count through one helper
+    that fails when it's missing (`need(record, "amount")`), never `record.get("amount")` with a
+    default: a `.get` turns a renamed field into a blank column and a "done".
   - An empty result is a claim too. Accept "0 found" or "no contact" only from a reply whose
     keys are exactly those of a real good reply (copy them from a sample). Any other shape
     (`{"status": "error", "rows": []}`) is a failure.

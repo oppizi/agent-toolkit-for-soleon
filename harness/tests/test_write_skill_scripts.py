@@ -278,3 +278,10 @@ def test_error_messages_carry_keys_not_data(runner, form, fakes):
 
     res = runner.run(SCRIPT, form, leaky)
     assert "in a row" in res.value["error"] and "jane.private" not in json.dumps(res.value)
+
+
+def test_need_refuses_a_missing_field_instead_of_a_blank_cell(runner):
+    template = _load("script_template")
+    assert template.need({"amount": 0}, "amount") == 0
+    with pytest.raises(template.Missing):
+        template.need({"amt": 5}, "amount")

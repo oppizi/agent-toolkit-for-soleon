@@ -86,6 +86,17 @@ def describe(res):
     return type(res).__name__
 
 
+class Missing(Exception):
+    pass
+
+
+def need(record, key):
+    """A field the script relies on. Missing is an error, never a blank cell."""
+    if not isinstance(record, dict) or key not in record:
+        raise Missing(key)
+    return record[key]
+
+
 def says_failed(res):
     """A reply that says it failed. Not the opposite of success: success is only ever
     confirmed by the fields the script needs (errors come in too many shapes to list)."""
@@ -165,8 +176,12 @@ async def main(inputs):
                             **spent(lookups), "state": dict(inputs.get("state") or state)}
             else:
                 fails_in_a_row = 0
-            rows.append([str(record["id"]), record.get("name") or "",                     # CHANGE
-                         (found or {}).get("email") or ""])
+            try:                                                                          # CHANGE
+                rows.append([str(need(record, "id")), need(record, "name") or "",
+                             need(found, "email") if found else ""])
+            except Missing as exc:
+                return {"error": f"{LIST_TOOL} or {LOOKUP_TOOL} replied without '{exc}'; nothing "
+                        "was written", **spent(lookups), "state": dict(inputs.get("state") or state)}
         more = bool(listed.get("has_more")) and bool(batch) and state["next_row"] - 2 + len(rows) < MAX_ROWS
         page += 1
 
