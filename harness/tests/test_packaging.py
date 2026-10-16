@@ -83,6 +83,7 @@ EXPECTED_SKILLS = {
         "usage-check",
         "write-an-eval",
         "write-evals",
+        "write-skill-scripts",
     },
     "admin": {
         "attach-tool-server",
@@ -115,6 +116,7 @@ EXPECTED_SKILLS = {
         "usage-check",
         "write-an-eval",
         "write-evals",
+        "write-skill-scripts",
     },
 }
 
@@ -129,6 +131,8 @@ STDLIB_OK = {
     "dataclasses", "functools", "textwrap", "difflib",
     # the local message budget (bin/soleon_message_budget.py)
     "contextlib", "fcntl", "shlex",
+    # write-skill-scripts: the local runner, the script template and its example fakes
+    "asyncio", "importlib", "csv",
 }
 # The plugin's OWN modules that its scripts import from a sibling path (they ship
 # together, so they are not third-party): the deploy-agent engine seam plus every

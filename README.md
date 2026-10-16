@@ -69,7 +69,9 @@ agent-toolkit-for-soleon/
 ├── plugins/                 ← THE adoptable artifacts, plus the catalogue they're built from
 │   ├── skills/              CATALOGUE — the source of truth for every skill
 │   │   ├── deploy-agent/      SKILL.md state machine + converter assets
-│   │   └── write-evals/       designing evals whose score reflects the behaviour
+│   │   ├── write-evals/       designing evals whose score reflects the behaviour
+│   │   └── write-skill-scripts/ scripts for an agent's skills: validate first, data
+│   │                          kept out of the agent's context, local test runner
 │   ├── agents/ hooks/       CATALOGUE — same convention, empty until first use
 │   ├── scope_bundles.json   generated scope pins + sha256, vendored from the platform
 │   ├── observer/            read-only bundle (scope pin only, no skills)
@@ -144,8 +146,8 @@ admin — and differ only in the OAuth scopes they request:
 | Plugin | Scopes | For |
 |---|---|---|
 | `observer` | 7, all reads | Reading agents, traces, failures, usage, evals, ideas. No write consent at all. |
-| `builder` | 16 | The agent build loop: drafts, deploys, promotions, channel binds, custom MCPs, knowledge bases. Ships the `deploy-agent` and `write-evals` skills. |
-| `admin` | 20 (all) | Platform admins — adds channel/custom-MCP instance reads, eval runs, and discovery. Also ships `write-evals` and local agent testing (`pull-agent`, `run-local-eval`). |
+| `builder` | 16 | The agent build loop: drafts, deploys, promotions, channel binds, custom MCPs, knowledge bases. Ships the `deploy-agent`, `write-evals` and `write-skill-scripts` skills. |
+| `admin` | 20 (all) | Platform admins — adds channel/custom-MCP instance reads, eval runs, and discovery. Also ships `write-evals`, `write-skill-scripts` and local agent testing (`pull-agent`, `run-local-eval`). |
 
 **Pick the narrowest one that covers your work.** A broader bundle grants no extra
 access: scope is a ceiling on what the token may consent to, never a role. Soleon

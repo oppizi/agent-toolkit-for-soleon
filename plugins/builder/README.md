@@ -346,6 +346,18 @@ is the usual reason a suite goes green while testing very little.
 `/write-evals` also ships in `admin`, byte for byte: both bundles are
 composed from one shared source, so the two copies cannot drift apart.
 
+When an agent's skill needs a script (`run_code_file`), write it with:
+
+```
+/write-skill-scripts
+```
+
+The script checks its inputs before it spends anything, writes results to their
+destination itself and returns only counts, cost and links, keeps its own call limit
+below the platform's cap, and is run from one copy-exact form in the agent's SKILL.md.
+`assets/run_locally.py` tests it on your machine against fakes that keep the platform's
+rules. Also ships in `admin`.
+
 ## Supported platforms (bundled engine)
 
 | Platform | Bundled binary | Status |

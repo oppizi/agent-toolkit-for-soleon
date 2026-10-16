@@ -32,6 +32,12 @@ platform admins. That is exactly why they are here and not in a lower bundle.
 test rather than resemblance to a reference answer. Read it before writing an eval,
 and whenever a suite passes but you don't trust it.
 
+**`/write-skill-scripts`** — writing a Python script that an agent runs from one of
+its skills (`run_code_file`): check the inputs before anything is spent, keep the data
+out of the agent's context, stay under the platform's call limits, give the agent one
+copy-exact run form, and test it locally first (`assets/run_locally.py` runs the script
+against fakes that keep the platform's rules). Also ships in `builder`.
+
 **Local agent testing** (AHP-889) — the same pair `builder` ships:
 
 ```
