@@ -38,7 +38,7 @@ BUNDLES = sorted(
 )
 
 sys.path.insert(0, str(BET_ROOT / "harness"))
-from sync_scope_bundles import ExtractionError, expected_pins  # noqa: E402
+from sync_scope_bundles import NEVER_PIN, ExtractionError, expected_pins  # noqa: E402
 
 
 def _mcp_json(bundle: str) -> dict:
@@ -158,6 +158,17 @@ def test_vendored_artifact_sha256_covers_its_own_content():
     )
 
 
+def test_no_pin_requests_a_retired_scope():
+    """A retired family grants nothing, and the platform drops it from Cognito once
+    no published client pins it — so a pin that still requests it is one deploy
+    away from failing the whole sign-in."""
+    artifact = json.loads(VENDORED.read_text())
+    for bundle in ("observer", "builder", "admin"):
+        for scopes in (_scopes(bundle), artifact["bundles"][bundle].split()):
+            leaked = [s for s in scopes if s.split("/", 1)[-1] in NEVER_PIN]
+            assert not leaked, f"{bundle} pin requests retired scopes {leaked}"
+
+
 # ---------------------------------------------------------------------------
 # The extractor itself — proven against an inline fixture, so this runs anywhere.
 # ---------------------------------------------------------------------------
@@ -243,6 +254,34 @@ def test_expected_pins_rejects_a_scope_both_retired_and_assigned():
 def test_expected_pins_rejects_retiring_a_scope_outside_the_taxonomy():
     with pytest.raises(ExtractionError, match="not in MCP_SCOPE_TAXONOMY"):
         expected_pins(_with_retired_scope('frozenset({"old.read", "ghost.read"})'))
+
+
+def _with_wiki(retired_decl: str | None) -> str:
+    """The fixture plus wiki.read, assigned a bundle — or retired by the platform
+    when ``retired_decl`` is given (the shape AHP-975 shipped)."""
+    source = _FIXTURE_SOURCE.replace(
+        '    "secret.read": "read secret",\n}',
+        '    "secret.read": "read secret",\n    "wiki.read": "Agent wiki",\n}',
+    )
+    if retired_decl is None:
+        return source.replace('    "secret.read": "boss",\n}',
+                              '    "secret.read": "boss",\n    "wiki.read": "watcher",\n}')
+    return source + f"\nRETIRED_INERT_SCOPES: frozenset[str] = {retired_decl}\n"
+
+
+def test_expected_pins_refuses_a_platform_tree_from_before_a_retirement():
+    """The #21 failure: regenerating from a tree cut before the wiki retirement put
+    the scopes back. The generator must refuse that tree, not re-add them."""
+    with pytest.raises(ExtractionError, match="retired scope families"):
+        expected_pins(_with_wiki(retired_decl=None))
+
+
+def test_expected_pins_accepts_a_tree_that_retired_or_deleted_the_family():
+    """Both later platform states pin nothing retired: AHP-975 keeps the family as
+    retired-inert, AHP-981 deletes it from the taxonomy."""
+    assert expected_pins(_with_wiki('frozenset({"wiki.read"})')) == expected_pins(
+        _FIXTURE_SOURCE
+    )
 
 
 def test_expected_pins_fails_loud_on_missing_declarations():

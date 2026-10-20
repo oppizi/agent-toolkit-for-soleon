@@ -44,6 +44,14 @@ PLUGINS = BET_ROOT / "plugins"
 VENDORED_ARTIFACT = PLUGINS / "scope_bundles.json"
 SCOPES_SOURCE_REL = Path("stacks") / "_mcp_scopes.py"
 
+# Scope families the platform has retired for good. No pin may request one again,
+# even when --repo-root points at a platform tree from before the retirement. That
+# is how the wiki scopes came back: #20 dropped them, then #21 regenerated from an
+# agent-infra branch cut before AHP-975 declared them retired. The platform deletes
+# a retired family from its taxonomy once no published client pins it (agent-infra
+# AHP-981); this list stays, because an old tree can still be passed in.
+NEVER_PIN: frozenset[str] = frozenset({"wiki.read", "wiki.write"})
+
 
 class ExtractionError(RuntimeError):
     """The platform source did not carry the declarations we derive pins from."""
@@ -134,7 +142,14 @@ def expected_pins(source_text: str) -> dict[str, str]:
         )
 
     active = [name for name in taxonomy if name not in retired]
-    unassigned = [name for name in active if name not in min_bundle]
+    stale = [name for name in active if name in NEVER_PIN]
+    if stale:
+        raise ExtractionError(
+            f"the platform source still offers retired scope families {stale} — "
+            "--repo-root points at a tree from before their retirement; regenerate "
+            "from a current agent-infra dev checkout"
+        )
+    unassigned =[name for name in active if name not in min_bundle]
     if unassigned:
         raise ExtractionError(
             f"scope families with no bundle assignment: {unassigned} — assign them "
