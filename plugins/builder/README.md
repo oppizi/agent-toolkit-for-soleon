@@ -1,8 +1,8 @@
 # builder
 
 The Soleon agent build loop: everything `observer` can read, plus the
-scopes to create, update, deploy, promote and delete agents, bind channels, and
-author custom MCP servers and knowledge bases. It carries the `deploy-agent`
+scopes to create, update, deploy, promote and delete agents, bind channels, manage
+collaborators and access grants, and author custom MCP servers and knowledge bases. It carries the `deploy-agent`
 skill (local identity → Soleon) and, since 0.4.0, its reverse arrow: the
 `pull-agent` and `run-local-eval` skills (Soleon agent → local Claude Code
 subagent, edited as files whose every save lands on your draft).
