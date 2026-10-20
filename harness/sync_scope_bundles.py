@@ -149,7 +149,7 @@ def expected_pins(source_text: str) -> dict[str, str]:
             "--repo-root points at a tree from before their retirement; regenerate "
             "from a current agent-infra dev checkout"
         )
-    unassigned =[name for name in active if name not in min_bundle]
+    unassigned = [name for name in active if name not in min_bundle]
     if unassigned:
         raise ExtractionError(
             f"scope families with no bundle assignment: {unassigned} — assign them "

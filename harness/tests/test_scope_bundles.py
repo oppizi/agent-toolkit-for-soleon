@@ -158,6 +158,30 @@ def test_vendored_artifact_sha256_covers_its_own_content():
     )
 
 
+def _readme_scope_block(bundle: str) -> set[str]:
+    """The scopes listed in the first code block under the bundle README's
+    "Scopes this bundle requests" heading."""
+    text = (PLUGINS_DIR / bundle / "README.md").read_text()
+    section = text.split("## Scopes this bundle requests", 1)[1]
+    block = section.split("```", 2)[1]
+    return set(block.split())
+
+
+@pytest.mark.parametrize("bundle", ["observer", "builder", "admin"])
+def test_bundle_readme_lists_exactly_the_pinned_scopes(bundle):
+    """The README is the consent a user reads before installing; it drifted from
+    the pins twice (#20, #21). builder's block lists only what it adds to
+    observer, as its prose says."""
+    listed = _readme_scope_block(bundle)
+    if bundle == "builder":
+        listed |= set(_scopes("observer"))
+    assert listed == set(_scopes(bundle)), (
+        f"plugins/{bundle}/README.md scope list differs from its pin: "
+        f"missing {sorted(set(_scopes(bundle)) - listed)}, "
+        f"extra {sorted(listed - set(_scopes(bundle)))}"
+    )
+
+
 def test_no_pin_requests_a_retired_scope():
     """A retired family grants nothing, and the platform drops it from Cognito once
     no published client pins it — so a pin that still requests it is one deploy

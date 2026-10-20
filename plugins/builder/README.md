@@ -12,12 +12,13 @@ subagent, edited as files whose every save lands on your draft).
 
 ## Scopes this bundle requests
 
-Sixteen — the seven `observer` reads, plus:
+Twenty — the eight `observer` reads, plus:
 
 ```
-soleon-mcp/agent.write   soleon-mcp/agent.deploy  soleon-mcp/agent.delete
-soleon-mcp/agent.invoke  soleon-mcp/channel.read  soleon-mcp/channel.write
-soleon-mcp/mcp.write     soleon-mcp/kb.write      soleon-mcp/business.write
+soleon-mcp/agent.write       soleon-mcp/agent.deploy   soleon-mcp/agent.delete
+soleon-mcp/agent.invoke      soleon-mcp/channel.read   soleon-mcp/channel.write
+soleon-mcp/mcp.write         soleon-mcp/kb.write       soleon-mcp/eval.run
+soleon-mcp/governance.write  soleon-mcp/business.write soleon-mcp/discovery.write
 ```
 
 `agent.invoke` is the local-emulation scope: running one of an agent's tools on
@@ -29,8 +30,8 @@ what the token may consent to, never a role — Soleon authorizes every request
 against your real permissions, so you see and reach only the tools you are already
 entitled to.
 
-The admin-only families (`channel.read`, `mcp.read`, `eval.run`, `discovery.*`) are
-deliberately absent; they live in `admin`.
+The one admin-only family, `mcp.read` (custom-MCP server, connection and Tool
+Library reads), is deliberately absent; it lives in `admin`.
 
 ## What the deploy-agent skill does
 

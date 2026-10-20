@@ -146,7 +146,7 @@ admin — and differ only in the OAuth scopes they request:
 | Plugin | Scopes | For |
 |---|---|---|
 | `observer` | 8, all reads | Reading agents, traces, failures, usage, evals, ideas. No write consent at all. |
-| `builder` | 20 | The agent build loop: drafts, deploys, promotions, channel binds, access grants, custom MCPs, knowledge bases, eval runs, discovery. Ships the `deploy-agent`, `write-evals` and `write-skill-scripts` skills. |
+| `builder` | 20 | The agent build loop: drafts, deploys, promotions, channel binds, access grants, custom MCPs, knowledge bases, eval runs, discovery. Ships the `deploy-agent`, `write-evals` and `write-skill-scripts` skills, and local agent testing (`pull-agent`, `run-local-eval`). |
 | `admin` | 21 (all) | Platform admins — adds custom-MCP server, connection and Tool Library reads. Also ships `write-evals`, `write-skill-scripts` and local agent testing (`pull-agent`, `run-local-eval`). |
 
 **Pick the narrowest one that covers your work.** A broader bundle grants no extra

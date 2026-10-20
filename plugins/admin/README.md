@@ -1,30 +1,30 @@
 # admin
 
 The full Soleon surface for platform administrators. Everything `builder`
-covers, plus the five families whose tools are platform-admin-only: channel instance
-reads, custom-MCP instance reads, on-demand eval runs, and the discovery workspace.
+covers, plus the one family whose tools are platform-admin-only: custom-MCP server,
+connection and Tool Library reads.
 
 Install this if you are a Soleon platform admin. If you build agents but do not
 administer the platform, `builder` is the better fit — it consents to less.
 
 ## Scopes this bundle requests
 
-All 20 — every active scope family:
+All 21 — every active scope family:
 
 ```
-soleon-mcp/agent.read      soleon-mcp/agent.write     soleon-mcp/agent.deploy
-soleon-mcp/agent.delete    soleon-mcp/agent.invoke    soleon-mcp/channel.read
+soleon-mcp/agent.read        soleon-mcp/agent.write     soleon-mcp/agent.deploy
+soleon-mcp/agent.delete      soleon-mcp/agent.invoke    soleon-mcp/channel.read
 soleon-mcp/channel.write
-soleon-mcp/mcp.read        soleon-mcp/mcp.write       soleon-mcp/kb.read
-soleon-mcp/kb.write        soleon-mcp/observability.read
-soleon-mcp/eval.read       soleon-mcp/eval.run        soleon-mcp/usage.read
-soleon-mcp/governance.read soleon-mcp/business.read   soleon-mcp/business.write
-soleon-mcp/discovery.read  soleon-mcp/discovery.write
+soleon-mcp/mcp.read          soleon-mcp/mcp.write       soleon-mcp/kb.read
+soleon-mcp/kb.write          soleon-mcp/observability.read
+soleon-mcp/eval.read         soleon-mcp/eval.run        soleon-mcp/usage.read
+soleon-mcp/governance.read   soleon-mcp/governance.write
+soleon-mcp/business.read     soleon-mcp/business.write
+soleon-mcp/discovery.read    soleon-mcp/discovery.write
 ```
 
-The five beyond `builder` — `channel.read`, `mcp.read`, `eval.run`,
-`discovery.read`, `discovery.write` — cover only tools Soleon already restricts to
-platform admins. That is exactly why they are here and not in a lower bundle.
+The one beyond `builder`, `mcp.read`, covers only tools Soleon already restricts to
+platform admins. That is exactly why it is here and not in a lower bundle.
 
 ## Skills
 

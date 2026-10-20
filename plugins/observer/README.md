@@ -9,13 +9,13 @@ ask questions about what your agents are doing, this is the bundle you want.
 
 ## Scopes this bundle requests
 
-Seven, all reads:
+Eight, all reads:
 
 ```
 soleon-mcp/agent.read          soleon-mcp/kb.read
 soleon-mcp/observability.read  soleon-mcp/eval.read
 soleon-mcp/usage.read          soleon-mcp/governance.read
-soleon-mcp/business.read
+soleon-mcp/business.read       soleon-mcp/discovery.read
 ```
 
 The plugin pins these, so the access token it obtains can never be used to write,
