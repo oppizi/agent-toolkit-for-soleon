@@ -216,7 +216,7 @@ first request to the server opens the flow in your browser (or run
 `claude mcp login` explicitly); Claude Code then holds a short-lived access token
 and refreshes it for you.
 
-The plugin pins the sixteen scopes listed above, so the token it obtains is capped
+The plugin pins the twenty scopes listed above, so the token it obtains is capped
 at the builder surface no matter what the server would otherwise offer.
 
 The install prompt offers a **Soleon MCP server URL**, defaulting to the dev system
