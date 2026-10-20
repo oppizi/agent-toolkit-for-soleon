@@ -9,7 +9,7 @@ ask questions about what your agents are doing, this is the bundle you want.
 
 ## Scopes this bundle requests
 
-Eight, all reads:
+8, all reads:
 
 ```
 soleon-mcp/agent.read          soleon-mcp/kb.read

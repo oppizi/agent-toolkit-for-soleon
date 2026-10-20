@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import shutil
 import subprocess
 import sys
@@ -158,13 +159,6 @@ def test_vendored_artifact_sha256_covers_its_own_content():
     )
 
 
-_NUMBER_WORDS = {
-    7: "seven", 8: "eight", 9: "nine", 10: "ten", 11: "eleven", 12: "twelve",
-    13: "thirteen", 14: "fourteen", 15: "fifteen", 16: "sixteen", 17: "seventeen",
-    18: "eighteen", 19: "nineteen", 20: "twenty", 21: "twenty-one", 22: "twenty-two",
-}
-
-
 def _readme_scope_section(bundle: str) -> tuple[str, list[str]]:
     """The README's scope section: the line that states the count, and the
     scopes listed in the code block under it (duplicates kept)."""
@@ -179,43 +173,51 @@ def _readme_scope_section(bundle: str) -> tuple[str, list[str]]:
     return count_line, parts[1].split()
 
 
-def _states_count(text: str, n: int) -> bool:
-    words = text.lower().replace("—", " ").replace(",", " ").split()
-    return str(n) in words or _NUMBER_WORDS.get(n, "\0") in words
+def _numbers(text: str) -> list[int]:
+    """The counts a line states. READMEs write scope counts as digits, so a
+    count is checkable whatever punctuation surrounds it."""
+    return [int(n) for n in re.findall(r"\d+", text)]
 
 
 @pytest.mark.parametrize("bundle", ["observer", "builder", "admin"])
 def test_bundle_readme_lists_exactly_the_pinned_scopes(bundle):
     """The README is the consent a user reads before installing; it drifted from
     the pins twice (#20, #21). builder's block lists only what it adds to
-    observer, as its prose says. Checks the listed set, the listed count, and the
-    number the sentence above the block states."""
+    observer, as its prose says. Checks the listed set, that nothing repeats,
+    and the counts the line above the block states (as digits)."""
+    readme = f"plugins/{bundle}/README.md"
     count_line, listed = _readme_scope_section(bundle)
     pin = _scopes(bundle)
     expected = pin
+    stated = [len(pin)]
     if bundle == "builder":
-        observer = set(_scopes("observer"))
-        assert not set(listed) & observer, (
-            f"plugins/builder/README.md lists observer scopes as builder additions: "
-            f"{sorted(set(listed) & observer)}"
+        observer = _scopes("observer")
+        assert not set(listed) & set(observer), (
+            f"{readme} lists observer scopes as builder additions: "
+            f"{sorted(set(listed) & set(observer))}"
         )
         expected = [s for s in pin if s not in observer]
-    assert len(listed) == len(set(listed)), f"plugins/{bundle}/README.md repeats a scope"
+        stated.append(len(observer))
+    assert len(listed) == len(set(listed)), f"{readme} repeats a scope"
     assert set(listed) == set(expected), (
-        f"plugins/{bundle}/README.md scope list differs from its pin: "
+        f"{readme} scope list differs from its pin: "
         f"missing {sorted(set(expected) - set(listed))}, "
         f"extra {sorted(set(listed) - set(expected))}"
     )
-    assert _states_count(count_line, len(pin)), (
-        f"plugins/{bundle}/README.md says {count_line!r} but the pin has {len(pin)} scopes"
+    assert sorted(_numbers(count_line)) == sorted(stated), (
+        f"{readme} says {count_line!r}; expected the digit(s) {stated}"
     )
 
 
 def test_builder_readme_auth_section_states_the_pin_size():
     text = (PLUGINS_DIR / "builder" / "README.md").read_text()
-    sentence = text.split("The plugin pins the ", 1)[1].split(" scopes", 1)[0]
-    assert _states_count(sentence, len(_scopes("builder"))), (
-        f"plugins/builder/README.md says it pins {sentence!r} scopes; "
+    match = re.search(r"pins the\s+(\d+)\s+scopes", text)
+    assert match, (
+        "plugins/builder/README.md: expected a 'pins the <N> scopes' sentence "
+        "(digits) in its Authentication section"
+    )
+    assert int(match.group(1)) == len(_scopes("builder")), (
+        f"plugins/builder/README.md says it pins {match.group(1)} scopes; "
         f"the pin has {len(_scopes('builder'))}"
     )
 

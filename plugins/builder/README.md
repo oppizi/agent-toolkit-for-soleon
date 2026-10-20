@@ -12,7 +12,7 @@ subagent, edited as files whose every save lands on your draft).
 
 ## Scopes this bundle requests
 
-Twenty — the eight `observer` reads, plus:
+20 — the 8 `observer` reads, plus:
 
 ```
 soleon-mcp/agent.write       soleon-mcp/agent.deploy   soleon-mcp/agent.delete
@@ -216,7 +216,7 @@ first request to the server opens the flow in your browser (or run
 `claude mcp login` explicitly); Claude Code then holds a short-lived access token
 and refreshes it for you.
 
-The plugin pins the twenty scopes listed above, so the token it obtains is capped
+The plugin pins the 20 scopes listed above, so the token it obtains is capped
 at the builder surface no matter what the server would otherwise offer.
 
 The install prompt offers a **Soleon MCP server URL**, defaulting to the dev system
