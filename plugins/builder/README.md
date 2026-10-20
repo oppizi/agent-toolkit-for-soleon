@@ -1,8 +1,8 @@
 # builder
 
 The Soleon agent build loop: everything `observer` can read, plus the
-scopes to create, update, deploy, promote and delete agents, bind channels, and
-author custom MCP servers and knowledge bases. It carries the `deploy-agent`
+scopes to create, update, deploy, promote and delete agents, bind channels, manage
+collaborators and access grants, and author custom MCP servers and knowledge bases. It carries the `deploy-agent`
 skill (local identity → Soleon) and, since 0.4.0, its reverse arrow: the
 `pull-agent` and `run-local-eval` skills (Soleon agent → local Claude Code
 subagent, edited as files whose every save lands on your draft).
@@ -12,12 +12,13 @@ subagent, edited as files whose every save lands on your draft).
 
 ## Scopes this bundle requests
 
-Sixteen — the seven `observer` reads, plus:
+20 — the 8 `observer` reads, plus:
 
 ```
-soleon-mcp/agent.write   soleon-mcp/agent.deploy  soleon-mcp/agent.delete
-soleon-mcp/agent.invoke  soleon-mcp/channel.read  soleon-mcp/channel.write
-soleon-mcp/mcp.write     soleon-mcp/kb.write      soleon-mcp/business.write
+soleon-mcp/agent.write       soleon-mcp/agent.deploy   soleon-mcp/agent.delete
+soleon-mcp/agent.invoke      soleon-mcp/channel.read   soleon-mcp/channel.write
+soleon-mcp/mcp.write         soleon-mcp/kb.write       soleon-mcp/eval.run
+soleon-mcp/governance.write  soleon-mcp/business.write soleon-mcp/discovery.write
 ```
 
 `agent.invoke` is the local-emulation scope: running one of an agent's tools on
@@ -29,8 +30,8 @@ what the token may consent to, never a role — Soleon authorizes every request
 against your real permissions, so you see and reach only the tools you are already
 entitled to.
 
-The admin-only families (`channel.read`, `mcp.read`, `eval.run`, `discovery.*`) are
-deliberately absent; they live in `admin`.
+The one admin-only family, `mcp.read` (custom-MCP server, connection and Tool
+Library reads), is deliberately absent; it lives in `admin`.
 
 ## What the deploy-agent skill does
 
@@ -215,7 +216,7 @@ first request to the server opens the flow in your browser (or run
 `claude mcp login` explicitly); Claude Code then holds a short-lived access token
 and refreshes it for you.
 
-The plugin pins the sixteen scopes listed above, so the token it obtains is capped
+The plugin pins the 20 scopes listed above, so the token it obtains is capped
 at the builder surface no matter what the server would otherwise offer.
 
 The install prompt offers a **Soleon MCP server URL**, defaulting to the dev system
