@@ -137,7 +137,7 @@ The profile has an answer (or "not sure yet") for every question, and the person
 
 ## Never on your own
 
-Guess an answer, or start building before the person has confirmed the profile. Once the agent exists, posting the profile on its wiki (get_wiki(agent) → put_wiki_page(agent, title="Agent profile", section_id)) is visible to colleagues: ask first.
+Guess an answer, or start building before the person has confirmed the profile.
 
 
 ## Always
