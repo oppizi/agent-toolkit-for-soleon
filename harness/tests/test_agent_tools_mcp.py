@@ -734,3 +734,134 @@ def test_a_workflow_members_join_the_managers_message_budget(tmp_path):
     targs = _mcp_config(cmd)["soleon-agent-tools"]["args"]
     assert targs[targs.index("--budget-message") + 1] == "prompt:abc"
     assert "--settings" in cmd and cmd[cmd.index("--output-format") + 1] == "stream-json"
+
+
+# ---------------------------------------------------------------------------
+# macOS: Claude Code keeps the credentials document in the login Keychain
+# (generic password, service "Claude Code-credentials", account = login user).
+# The Keychain read is stubbed — the real one is never touched by the suite.
+# ---------------------------------------------------------------------------
+
+def _doc(url, token, **extra):
+    return {"mcpOAuth": {"soleon-agent-toolkit|k": {"serverName": "plugin:admin:soleon", "serverUrl": url,
+                                                    "accessToken": token, **extra}}}
+
+
+class FakeSecurity:
+    """Stands in for `subprocess.run` of /usr/bin/security."""
+
+    def __init__(self, outputs):
+        self.outputs = list(outputs)  # (returncode, stdout) per call, in order
+        self.argv = []
+
+    def __call__(self, argv, **kwargs):
+        self.argv.append(argv)
+        code, out = self.outputs.pop(0)
+        return subprocess.CompletedProcess(argv, code, stdout=out, stderr="")
+
+
+def test_read_keychain_asks_security_for_claude_codes_item():
+    doc = {"mcpOAuth": {}}
+    run = FakeSecurity([(0, json.dumps(doc) + "\n")])
+    assert client_mod.read_keychain(account="scott", run=run) == doc
+    assert run.argv == [["/usr/bin/security", "find-generic-password",
+                         "-s", "Claude Code-credentials", "-a", "scott", "-w"]]
+
+
+def test_read_keychain_accepts_a_hex_secret_and_falls_back_to_the_service_alone():
+    doc = {"mcpOAuth": {"x": {"accessToken": "t"}}}
+    run = FakeSecurity([(44, ""), (0, json.dumps(doc).encode().hex() + "\n")])
+    assert client_mod.read_keychain(account="nobody", run=run) == doc
+    assert run.argv[1] == ["/usr/bin/security", "find-generic-password", "-s", "Claude Code-credentials", "-w"]
+
+
+def test_read_keychain_is_empty_when_security_is_missing_or_finds_nothing():
+    def missing(argv, **kwargs):
+        raise FileNotFoundError(argv[0])
+    assert client_mod.read_keychain(account="scott", run=missing) == {}
+    assert client_mod.read_keychain(account="scott", run=FakeSecurity([(44, ""), (44, "")])) == {}
+    assert client_mod.read_keychain(account="scott", run=FakeSecurity([(0, "not json")])) == {}
+
+
+def test_keychain_token_is_used_on_macos(soleon, tmp_path, monkeypatch):
+    """The receipt (2026-10-15): on a Mac the token is only in the Keychain, the
+    file does not exist, and every helper failed with 'No usable Soleon token'."""
+    url, state = soleon
+    monkeypatch.delenv(client_mod.TOKEN_ENV_VAR, raising=False)
+    monkeypatch.setattr(client_mod.sys, "platform", "darwin")
+    monkeypatch.setattr(client_mod, "read_keychain", lambda: _doc(url, GOOD))
+    monkeypatch.setattr(client_mod, "DEFAULT_CREDENTIALS_PATH", str(tmp_path / "absent.json"))
+    client = client_mod.SoleonMcpClient(url)
+    env = client.call_tool("call_agent_tool", {"slug": SLUG, "app_env": "dev", "name": "custom_echo-server_read",
+                                               "args": {"prompt": "kc"}, "approved": False})
+    assert env["state"] == "done"
+    assert client._entry["_source"] == "keychain"
+
+
+def test_keychain_is_not_read_off_macos_or_with_an_explicit_file(tmp_path, monkeypatch):
+    def boom():
+        raise AssertionError("the Keychain must not be read here")
+    monkeypatch.setattr(client_mod, "read_keychain", boom)
+    monkeypatch.setattr(client_mod.sys, "platform", "linux")
+    assert client_mod.CredentialStore(str(tmp_path / "c.json")).find_entry("https://x/mcp") is None
+    monkeypatch.setattr(client_mod.sys, "platform", "darwin")
+    assert client_mod.CredentialStore(str(tmp_path / "c.json")).find_entry("https://x/mcp") is None
+
+
+def test_the_file_is_the_fallback_when_the_keychain_has_no_entry(tmp_path):
+    url = "https://mcp.example.com/mcp"
+    creds = tmp_path / "creds.json"
+    write_credentials(creds, url, "from-file")
+    store = client_mod.CredentialStore(str(creds), keychain=lambda: {"mcpOAuth": {}})
+    entry = store.find_entry(url)
+    assert entry["accessToken"] == "from-file" and entry["_source"] == "file"
+    store = client_mod.CredentialStore(str(creds), keychain=lambda: _doc(url, "from-keychain"))
+    entry = store.find_entry(url)
+    assert entry["accessToken"] == "from-keychain" and entry["_source"] == "keychain"
+
+
+def test_env_override_beats_the_keychain(soleon, monkeypatch):
+    url, _ = soleon
+    monkeypatch.setenv(client_mod.TOKEN_ENV_VAR, GOOD)
+    monkeypatch.setattr(client_mod.sys, "platform", "darwin")
+    monkeypatch.setattr(client_mod, "read_keychain", lambda: _doc(url, STALE))
+    client = client_mod.SoleonMcpClient(url)
+    env = client.call_tool("call_agent_tool", {"slug": SLUG, "app_env": "dev", "name": "custom_echo-server_read",
+                                               "args": {"prompt": "env"}, "approved": False})
+    assert env["state"] == "done"
+
+
+def test_a_leftover_sign_in_for_the_same_server_loses_to_the_live_one():
+    """Receipt (2026-10-15, Scott's Keychain): the plugin rename left an expired
+    `plugin:soleon-admin:…` entry for the same URL ahead of the live
+    `plugin:admin:soleon` one in the map; first-match picked the dead one."""
+    import time as _time
+    url = "https://mcp.example.com/mcp"
+    now = _time.time() * 1000
+    doc = {"mcpOAuth": {
+        "plugin:soleon-admin:soleon-agent-toolkit|old": {"serverUrl": url, "accessToken": "dead",
+                                                         "expiresAt": now - 9 * 86400000},
+        "plugin:admin:soleon|new": {"serverUrl": url, "accessToken": "live", "expiresAt": now + 3600000},
+        "no-expiry|x": {"serverUrl": url, "accessToken": "unknown"},
+    }}
+    store = client_mod.CredentialStore(keychain=lambda: doc)
+    assert store.find_entry(url)["accessToken"] == "live"
+    del doc["mcpOAuth"]["plugin:admin:soleon|new"]
+    # an entry with no recorded expiry beats one known to be expired
+    assert store.find_entry(url)["accessToken"] == "unknown"
+
+
+def test_a_keychain_token_is_refreshed_in_memory_and_nothing_is_written(soleon, tmp_path, monkeypatch):
+    url, state = soleon
+    monkeypatch.delenv(client_mod.TOKEN_ENV_VAR, raising=False)
+    creds = tmp_path / "creds.json"
+    write_credentials(creds, url, "file-token")
+    before = creds.read_bytes()
+    client = client_mod.SoleonMcpClient(url, credentials_path=str(creds))
+    client.store = client_mod.CredentialStore(str(creds), keychain=lambda: _doc(
+        url, STALE, refreshToken=REFRESH, clientId="cli-1"))
+    env = client.call_tool("call_agent_tool", {"slug": SLUG, "app_env": "dev", "name": "custom_echo-server_read",
+                                               "args": {"prompt": "r"}, "approved": False})
+    assert env["state"] == "done"
+    assert [c for c in state["calls"] if c[0] == "token"], "the refresh grant never ran"
+    assert creds.read_bytes() == before  # the file was not the source, so it is not rewritten

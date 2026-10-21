@@ -133,6 +133,8 @@ STDLIB_OK = {
     "contextlib", "fcntl", "shlex",
     # write-skill-scripts: the local runner, the script template and its example fakes
     "asyncio", "importlib", "csv",
+    # the macOS Keychain read in bin/soleon_mcp_client.py
+    "getpass",
 }
 # The plugin's OWN modules that its scripts import from a sibling path (they ship
 # together, so they are not third-party): the deploy-agent engine seam plus every

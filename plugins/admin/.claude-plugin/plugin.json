@@ -1,7 +1,7 @@
 {
   "name": "admin",
   "description": "The full Soleon surface for platform administrators. Everything in builder, plus the admin-only family: custom-MCP server, connection and Tool Library reads. Consent only — what you can actually do is still decided by your Soleon permissions. Ships the write-evals skill (designing evals whose score reflects the behaviour under test rather than resemblance to a reference answer) and local agent testing: pull-agent pulls a Soleon agent into Claude Code as a local subagent whose tools run on the platform and whose every file save lands on your draft, and run-local-eval scores it with the platform's own judge prompt.",
-  "version": "0.8.1",
+  "version": "0.8.2",
   "author": {
     "name": "Oppizi — Soleon Headless Toolkit"
   },
