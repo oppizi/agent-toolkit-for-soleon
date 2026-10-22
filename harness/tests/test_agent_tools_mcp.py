@@ -865,3 +865,90 @@ def test_a_keychain_token_is_refreshed_in_memory_and_nothing_is_written(soleon, 
     assert env["state"] == "done"
     assert [c for c in state["calls"] if c[0] == "token"], "the refresh grant never ran"
     assert creds.read_bytes() == before  # the file was not the source, so it is not rewritten
+
+
+# ---------------------------------------------------------------------------
+# A result the platform answered only as a link (AHP-1191)
+# ---------------------------------------------------------------------------
+
+class _StoredResp:
+    def __init__(self, body: bytes):
+        self._body = body
+
+    def read(self):
+        return self._body
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+
+class _LinkClient:
+    """The platform's answer for a result over its 800,000-character reply
+    limit: `result: {}` plus `result_url` (agent-infra
+    `capabilities._local_control_respond`)."""
+
+    def __init__(self, stored=None, fail=None, inline=None, state="done"):
+        self.opened = []
+        self._stored, self._fail, self._inline, self._state = stored, fail, inline, state
+
+    @staticmethod
+    def _sleep(_seconds):
+        raise AssertionError("a terminal envelope must not be polled")
+
+    def _open(self, req, timeout=None):
+        self.opened.append(req.full_url)
+        if self._fail:
+            raise self._fail
+        return _StoredResp(json.dumps(self._stored).encode("utf-8"))
+
+    def call_tool(self, name, args):
+        env = {"state": self._state, "call_id": "lc_0123456789abcdef01234567", "op": "tool_call",
+               "result_url": "https://bucket.s3.amazonaws.com/local-call-results/lc_x.json?X-Amz-Signature=s",
+               "result_url_expires_in_seconds": 900, "result_chars": 900_123,
+               "result": self._inline or {},
+               "next_action": "The result is 900123 characters, too large to return here. Download it."}
+        if self._state == "error":
+            env.update(error="op_failed", detail="")
+        return env
+
+
+def test_a_result_answered_as_a_link_reaches_the_local_agent_whole():
+    """On Soleon the agent gets a 900,000-character tool result whole, so the
+    local agent must too — not the empty `result` the reply carried."""
+    big = "row," * 225_000
+    client = _LinkClient(stored={"op": "tool_call", "callId": "lc_0123456789abcdef01234567",
+                                 "turnId": "t1", "sessionId": "ses_x", "tool": "send_email",
+                                 "result": big, "elapsed_ms": 12})
+    out = shim.AgentToolsServer(SLUG, MEMBERS, client=client, include_members=True).call(
+        "send_email", {"to": "sam@example.com"})
+    assert not out.get("isError"), out
+    assert client.opened == ["https://bucket.s3.amazonaws.com/local-call-results/lc_x.json?X-Amz-Signature=s"]
+    assert out["content"][0]["text"] == big
+
+
+def test_a_failed_download_is_an_error_never_an_empty_result():
+    import urllib.error
+    client = _LinkClient(fail=urllib.error.HTTPError("u", 403, "Forbidden", {}, None))
+    out = shim.AgentToolsServer(SLUG, MEMBERS, client=client, include_members=True).call(
+        "send_email", {"to": "sam@example.com"})
+    assert out["isError"]
+    text = out["content"][0]["text"]
+    assert "900123-character result" in text and "get_agent_tool_result" in text
+
+
+def test_a_result_that_arrived_inline_is_not_downloaded_again():
+    client = _LinkClient(inline={"tool": "send_email", "result": "sent"})
+    out = shim.AgentToolsServer(SLUG, MEMBERS, client=client, include_members=True).call(
+        "send_email", {"to": "sam@example.com"})
+    assert client.opened == [] and out["content"][0]["text"] == "sent"
+
+
+def test_a_stored_error_answers_its_own_error_and_detail():
+    from soleon_mcp_client import resolve_stored_result
+    client = _LinkClient(state="error", stored={"error": "tool_error", "detail": "RuntimeError: boom"})
+    out = resolve_stored_result(client, client.call_tool("call_agent_tool", {}))
+    assert out["error"] == "tool_error" and out["detail"] == "RuntimeError: boom"
+    assert "next_action" not in out  # "download it" no longer applies
