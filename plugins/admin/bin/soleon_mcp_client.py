@@ -484,7 +484,50 @@ def await_control(
         envelope = client.call_tool("get_agent_tool_result", {
             "slug": slug, "app_env": app_env, "call_id": envelope["call_id"],
         })
-    return envelope
+    return resolve_stored_result(client, envelope)
+
+
+#: Keys the platform strips from a finished op's envelope before answering
+#: (agent-infra `capabilities._local_control_respond`); a downloaded envelope
+#: is shaped the same way so every caller sees one shape.
+_ENVELOPE_BOOKKEEPING = ("op", "callId", "turnId", "sessionId")
+
+
+def resolve_stored_result(client: SoleonMcpClient, envelope: Any) -> Any:
+    """Download a result the platform answered only as a link (AHP-1191).
+
+    A finished op whose result is too large to ride the reply (over 800,000
+    characters) answers `result: {}` plus `result_url`. On Soleon the agent
+    gets that result whole, so the local agent must too: fetch it and answer
+    exactly as if it had arrived inline. The link is a presigned S3 URL, so
+    no bearer is sent. A failed download raises; it never reads as an empty
+    result."""
+    if not isinstance(envelope, dict) or not envelope.get("result_url") or envelope.get("result"):
+        return envelope
+    url = str(envelope["result_url"])
+    try:
+        with client._open(urllib.request.Request(url, headers={"Accept": "application/json"}),
+                          timeout=300) as resp:
+            stored = json.loads(resp.read().decode("utf-8"))
+    except (urllib.error.URLError, OSError, ValueError) as exc:
+        raise TransportError(
+            "could not download the {}-character result of call {} from its result_url ({}). "
+            "Retry: get_agent_tool_result answers a fresh link.".format(
+                envelope.get("result_chars"), envelope.get("call_id"), exc)) from exc
+    if not isinstance(stored, dict):
+        raise TransportError("the stored result of call {} is not a JSON object".format(envelope.get("call_id")))
+    out = dict(envelope)
+    out.pop("next_action", None)  # it said "download result_url" — done
+    if out.get("state") == "error":
+        out["error"] = stored.get("error") or out.get("error")
+        out["detail"] = stored.get("detail") or out.get("detail")
+        if stored.get("next_action"):
+            out["next_action"] = stored["next_action"]
+        return out
+    out["result"] = {k: v for k, v in stored.items() if k not in _ENVELOPE_BOOKKEEPING}
+    if stored.get("turnId") and not out.get("turn_id"):
+        out["turn_id"] = stored["turnId"]
+    return out
 
 
 def is_platform_error(envelope: Any) -> bool:
