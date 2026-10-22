@@ -1125,6 +1125,33 @@ def download(args: argparse.Namespace) -> int:
     return 0
 
 
+def fetch_result(args: argparse.Namespace) -> int:
+    """Download a result the platform stored behind `result_url` (AHP-1191).
+
+    A large answer (a big agent's tool list) is too long for the model to copy
+    into a file: Claude Code saves an MCP answer over its output limit to a
+    file of its own, and a transcribed copy can drop characters. So the script
+    writes it. The download is the container's envelope (`{op, callId, turnId,
+    sessionId, tools | prompt …}`), which `materialize` reads as-is."""
+    out = Path(args.out)
+    req = urllib.request.Request(args.url, headers={"Accept": "application/json"})
+    with urllib.request.urlopen(req, timeout=300) as resp:
+        data = resp.read()
+    try:
+        envelope = json.loads(data.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        raise SystemExit("downloaded {} bytes but it is not JSON — the link may have expired (15 min); "
+                         "call get_agent_tool_result with the same call_id for a fresh result_url".format(len(data)))
+    if not isinstance(envelope, dict) or not ("tools" in envelope or "prompt" in envelope):
+        raise SystemExit("the downloaded result carries no tools[] or prompt (keys: {})".format(
+            sorted(envelope)[:12] if isinstance(envelope, dict) else type(envelope).__name__))
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(json.dumps(envelope, ensure_ascii=False), encoding="utf-8")
+    print(json.dumps({"out": str(out), "bytes": len(data), "op": envelope.get("op"),
+                      "tools": len(envelope["tools"]) if isinstance(envelope.get("tools"), list) else None}))
+    return 0
+
+
 def adopt_etag(args: argparse.Namespace) -> int:
     plugin_root = _plugin_root(args.plugin_root)
     doc = _import_document_module(plugin_root)
@@ -1165,6 +1192,10 @@ def main(argv: Optional[List[str]] = None) -> int:
     dl.add_argument("--url", required=True)
     dl.add_argument("--out", required=True)
     dl.set_defaults(fn=download)
+    fr = sub.add_parser("fetch-result")
+    fr.add_argument("--url", required=True)
+    fr.add_argument("--out", required=True)
+    fr.set_defaults(fn=fetch_result)
     a = sub.add_parser("adopt-etag")
     a.add_argument("--dir", required=True)
     a.add_argument("--plugin-root", default=None)

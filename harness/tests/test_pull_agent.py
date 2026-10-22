@@ -582,3 +582,32 @@ def test_a_local_edit_to_a_budget_switch_syncs_to_the_draft():
     changes = doc.config_to_flat_changes({"loop": {"dailyTokenBudget": 200000,
                                                     "dailyTokenBudgetEnabled": True}})
     assert changes["dailyTokenBudgetEnabled"] is True and changes["dailyTokenBudget"] == 200000
+
+
+# ---------------------------------------------------------------------------
+# fetch-result — a result the platform stored behind result_url (AHP-1191)
+# ---------------------------------------------------------------------------
+
+def test_fetch_result_writes_the_stored_tool_list_materialize_reads(tmp_path):
+    """A big agent's list (website-landingpage-agent-fr: 328,211 characters) is
+    downloaded by the script, never transcribed, and tools.json then reads as
+    the terminal result."""
+    envelope = {"op": "tool_list", "callId": "lc_0123456789abcdef01234567", "turnId": "t1",
+                "sessionId": "ses_x", "tools": [{"name": "t", "description": "é" * 328_211}]}
+    src = tmp_path / "stored.json"
+    src.write_text(json.dumps(envelope), encoding="utf-8")
+    out = tmp_path / "agent" / "tools.json"
+    proc = _run("fetch-result", "--url", src.as_uri(), "--out", str(out), cwd=tmp_path)
+    assert proc.returncode == 0, proc.stderr
+    assert json.loads(proc.stdout)["tools"] == 1
+    assert json.loads(out.read_text(encoding="utf-8")) == envelope
+    assert pull_agent._tools_of(json.loads(out.read_text(encoding="utf-8")))[0]["name"] == "t"
+
+
+def test_fetch_result_refuses_an_expired_link_body(tmp_path):
+    src = tmp_path / "expired.xml"
+    src.write_text("<Error><Code>AccessDenied</Code><Message>Request has expired</Message></Error>")
+    out = tmp_path / "tools.json"
+    proc = _run("fetch-result", "--url", src.as_uri(), "--out", str(out), cwd=tmp_path)
+    assert proc.returncode != 0 and "get_agent_tool_result" in proc.stderr
+    assert not out.exists()
