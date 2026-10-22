@@ -74,9 +74,18 @@ Save each RAW tool result to disk with the Write tool exactly as returned
    - **`error`** → STOP with the error-presentation rule (`error`, `detail`,
      `next_action`). `connections_required` means the user must connect the
      agent's integrations in Soleon first.
-   - **`done`** → save the whole terminal envelope to `$DIR/tools.json`. Each
-     tool: `{name, description, inputSchema, approval, kind: "external"|"workspace",
-     subagentPair, serverId, serverName, upstreamTool}`.
+   - **`done` with `result_url`** → the list is large (a big agent's list runs
+     to hundreds of thousands of characters). Do NOT write it yourself — a copy
+     made by hand can lose characters, and Claude Code may have saved the
+     answer to a file instead of showing it (then read the file's first lines:
+     `result_url` comes before `result`). Run
+     `python3 $ASSETS/pull_agent.py fetch-result --url "<result_url>" --out $DIR/tools.json`.
+     The link lasts `result_url_expires_in_seconds`; on an expired-link error,
+     call `get_agent_tool_result(slug, app_env="dev", call_id)` for a fresh one
+     and run the script again.
+   - **`done`** (no `result_url`) → save the whole terminal envelope to
+     `$DIR/tools.json`. Each tool: `{name, description, inputSchema, approval,
+     kind: "external"|"workspace", subagentPair, serverId, serverName, upstreamTool}`.
 
 ### Step 3 — Assembled system prompt
 `get_agent_system_prompt(slug, app_env="dev")` — same pending/poll protocol
@@ -84,7 +93,8 @@ as Step 2 → `result: {prompt, sections[], model, toolNames[]}`. Save the
 terminal envelope to `$DIR/prompt.json`. This is the prompt the platform
 assembles for THIS user (soul, user metadata, memory, skills, platform
 contract); it becomes the subagent body with only paths and tool routing
-patched (D11). `unsupported_framework` → STOP: local emulation is for
+patched (D11). An answer carrying `result_url` is fetched by the script,
+exactly as in Step 2, with `--out $DIR/prompt.json`. `unsupported_framework` → STOP: local emulation is for
 maverick agents.
 
 ### Step 4 — Workspace snapshot
