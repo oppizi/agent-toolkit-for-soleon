@@ -65,29 +65,22 @@ until a future iteration scores the artifacts Allium uniquely produces.
 ```
 agent-toolkit-for-soleon/
 ├── .claude-plugin/          marketplace manifest (GitHub installs resolve here;
-│                            lists all three bundles)
-├── plugins/                 ← THE adoptable artifacts, plus the catalogue they're built from
-│   ├── skills/              CATALOGUE — the source of truth for every skill
-│   │   ├── deploy-agent/      SKILL.md state machine + converter assets
-│   │   ├── write-evals/       designing evals whose score reflects the behaviour
-│   │   └── write-skill-scripts/ scripts for an agent's skills: validate first, data
-│   │                          kept out of the agent's context, local test runner
-│   ├── agents/ hooks/       CATALOGUE — same convention, empty until first use
-│   ├── scope_bundles.json   generated scope pins + sha256, vendored from the platform
-│   ├── observer/            read-only bundle (scope pin only, no skills)
-│   ├── builder/             the agent build loop — the only bundle shipping Python
-│   │   ├── .claude-plugin/  manifest
-│   │   ├── README.md        install, usage, supported platforms, escape hatches
-│   │   ├── bin/             vendored allium engine (v3.2.4, provenance in LICENSES/)
-│   │   │                    + the local-emulation stdio MCP servers, save hook,
-│   │   │                    turn hooks and shared client (stdlib Python)
-│   │   ├── hooks/           PostToolUse: saves under .soleon/agents/ → Soleon draft;
-│   │   │                    SubagentStart/Stop: each local agent run → one trace turn
-│   │   ├── contract.json    platform validation contract, generated from source
-│   │   ├── LICENSES/        MIT notice + binary provenance chain
-│   │   ├── skills/          GENERATED copies of deploy-agent + write-evals, plus the
-│   │   │                    bundle-private create-agent / pull-agent / run-local-eval
-│   └── admin/               full platform surface + a generated copy of write-evals
+│                            lists the one plugin)
+├── plugins/
+│   ├── scope_pin.json       generated scope pin + sha256, vendored from the platform
+│   └── soleon/              ← THE adoptable artifact: the one plugin that ships
+│       ├── .claude-plugin/  manifest
+│       ├── .mcp.json        the soleon MCP server + its OAuth scope pin (every family)
+│       ├── README.md        install, usage, supported platforms, escape hatches
+│       ├── bin/             vendored allium engine (v3.2.4, provenance in LICENSES/)
+│       │                    + the local-emulation stdio MCP servers, save hook,
+│       │                    turn hooks and shared client (stdlib Python)
+│       ├── hooks/hooks.json PostToolUse: saves under .soleon/agents/ → Soleon draft;
+│       │                    SubagentStart/Stop: each local agent run → one trace turn
+│       ├── contract.json    platform validation contract, generated from source
+│       ├── LICENSES/        MIT notice + binary provenance chain
+│       └── skills/          create-agent, deploy-agent, pull-agent, run-local-eval,
+│                            write-evals, write-skill-scripts + 27 starter skills
 ├── preflight/               frozen correctness oracle (schema fixture + contract doc)
 ├── harness/                 offline validator, judge rubric, tests — never ships
 ├── samples/                 4 authored identity files (+ skill fixtures under
@@ -98,26 +91,9 @@ agent-toolkit-for-soleon/
                              committed to this repository
 ```
 
-The boundary is enforced by tests: each bundle under `plugins/` ships alone (an
-isolation smoke test copies `plugins/builder/` — the only bundle with executable
-assets — to a bare temp directory and runs the conversion end to end); everything
-else is experiment telemetry.
-
-**A capability shared by two bundles lives in the catalogue once, and each bundle
-carries a generated copy.** Not a symlink: cross-directory links are dereferenced
-only by a marketplace install that git-clones the repo, so they silently vanish on
-a local-clone install, on `--plugin-dir`, on Windows, and in a downloaded ZIP. The
-convention is adapted from
-[`aws/agent-toolkit-for-aws`](https://github.com/aws/agent-toolkit-for-aws) — the
-bundle directory declares *which* capabilities it subscribes to, the catalogue owns
-*what is in them*, and drift is a test failure:
-
-```bash
-python3 harness/sync_bundles.py --check              # drift guard
-python3 harness/sync_bundles.py --add admin skills write-evals
-```
-
-Edit the catalogue, never a bundle copy — the next sync overwrites it.
+The boundary is enforced by tests: the plugin ships alone (an isolation smoke
+test copies `plugins/soleon/` to a bare temp directory and runs the conversion end
+to end); everything else is experiment telemetry.
 
 ## Getting started
 
@@ -134,26 +110,18 @@ Edit the catalogue, never a bundle copy — the next sync overwrites it.
 
 - Claude Code (the plugin's skill is executed by it)
 - Python 3.9+ (standard library only — no pip installs)
-- macOS on Apple Silicon for the bundled engine (`builder` only); other
+- macOS on Apple Silicon for the bundled engine (`deploy-agent` only); other
   platforms need one `cargo install` (see
-  [Supported platforms](plugins/builder/README.md#supported-platforms-bundled-engine))
+  [Supported platforms](plugins/soleon/README.md#supported-platforms-bundled-engine))
 
-### Choose a bundle
+### One plugin, every role
 
-The repo ships three plugins, one per role. They nest — observer ⊂ builder ⊂
-admin — and differ only in the OAuth scopes they request:
-
-| Plugin | Scopes | For |
-|---|---|---|
-| `observer` | 8, all reads | Reading agents, traces, failures, usage, evals, ideas. No write consent at all. |
-| `builder` | 20 | The agent build loop: drafts, deploys, promotions, channel binds, access grants, custom MCPs, knowledge bases, eval runs, discovery. Ships the `deploy-agent`, `write-evals` and `write-skill-scripts` skills, and local agent testing (`pull-agent`, `run-local-eval`). |
-| `admin` | 21 (all) | Platform admins — adds custom-MCP server, connection and Tool Library reads. Also ships `write-evals`, `write-skill-scripts` and local agent testing (`pull-agent`, `run-local-eval`). |
-
-**Pick the narrowest one that covers your work.** A broader bundle grants no extra
-access: scope is a ceiling on what the token may consent to, never a role. Soleon
-authorizes every request against your real permissions, so installing
-`admin` does not make you an admin — it only widens what an access token
-could, in principle, be used for.
+The repo ships one plugin, `soleon`, for everyone. It requests consent for every
+Soleon scope family (21), and Soleon decides what you can actually do from your
+real permissions: the server lists only the tools you are permitted to use, and
+re-checks your permissions on every call. Installing it does not make you an
+admin — the platform-admin-only tools stay hidden from a member, and a call to one
+made by hand with the same token is refused.
 
 ### Install
 
@@ -161,7 +129,7 @@ From the GitHub marketplace (recommended):
 
 ```
 /plugin marketplace add oppizi/agent-toolkit-for-soleon
-/plugin install observer@agent-toolkit-for-soleon
+/plugin install soleon@agent-toolkit-for-soleon
 ```
 
 Or from a local clone:
@@ -169,33 +137,29 @@ Or from a local clone:
 ```
 git clone https://github.com/oppizi/agent-toolkit-for-soleon.git
 /plugin marketplace add ./agent-toolkit-for-soleon
-/plugin install observer@agent-toolkit-for-soleon
+/plugin install soleon@agent-toolkit-for-soleon
 ```
 
-Substitute `builder` or `admin` as needed. Sign-in is OAuth — the
-first request opens the flow in your browser (or run `claude mcp login`). There is
-no token to paste.
+Sign-in is OAuth — the first request opens the flow in your browser (or run
+`claude mcp login`). There is no token to paste.
 
-Each plugin takes an optional **Soleon MCP server URL**, defaulting to the dev
+The plugin takes an optional **Soleon MCP server URL**, defaulting to the dev
 system (`https://mcp-dev.oppizi.com/mcp`). Use the stage-less custom-domain form;
 a URL carrying an API-Gateway stage path breaks OAuth discovery.
 
-> **Upgrading from `soleon-observer` / `soleon-builder` / `soleon-admin`?** The
-> plugins are now named `observer` / `builder` / `admin`, and their MCP server is
-> `soleon` (was `soleon-agent-toolkit`), so `/mcp` lists `plugin:<role>:soleon`
-> and tools are named `mcp__plugin_<role>_soleon__<tool>`. There is no alias —
-> uninstall the old plugin, install the new one, sign in again, and update any
-> permission rules that named the old `mcp__plugin_soleon-…` tools.
-
-> **Upgrading from `soleon-deploy-agent`?** It has been renamed to
-> `builder`, with no alias — uninstall the old plugin and install the
-> bundle that matches your work. Its **Soleon access token** setting is obsolete
-> now that sign-in is OAuth; you can delete it from your keychain.
+> **Upgrading from `observer` / `builder` / `admin`?** They are replaced by
+> `soleon`, with no alias. Uninstall the old plugin, install `soleon`, and sign in
+> again. Tools are now named `mcp__plugin_soleon_soleon__<tool>`, so update any
+> permission rules that named `mcp__plugin_<role>_soleon__…`, and re-run
+> `/pull-agent <slug>` for agents you pulled with the old plugin. (Older names —
+> `soleon-observer` / `soleon-builder` / `soleon-admin`, `soleon-deploy-agent` —
+> upgrade the same way; the last one's **Soleon access token** setting is obsolete
+> and can be deleted from your keychain.)
 
 ### Health check (2 seconds, before anything else)
 
 ```bash
-python3 plugins/builder/skills/deploy-agent/assets/engine.py --selfcheck
+python3 plugins/soleon/skills/deploy-agent/assets/engine.py --selfcheck
 ```
 
 ### Use
@@ -212,7 +176,7 @@ JSON by design — the live `POST /agents` call is a later phase.
 Direct converter invocation (no LLM, spec already in hand):
 
 ```bash
-python3 plugins/builder/skills/deploy-agent/assets/allium_to_json.py spec.allium --app-env dev --out-dir out/
+python3 plugins/soleon/skills/deploy-agent/assets/allium_to_json.py spec.allium --app-env dev --out-dir out/
 ```
 
 Once an agent is deployed, the other half of the build loop is knowing whether it
@@ -222,8 +186,7 @@ actually behaves:
 /write-evals
 ```
 
-Available in `builder` and `admin`. Designs evals for a deployed
-agent — how to choose *what* to test (derive from
+Designs evals for a deployed agent — how to choose *what* to test (derive from
 decisions made and ways the agent can be confidently wrong, not from plausible
 user inputs), and how the platform's LLM judge computes a score. That second part
 matters more than it sounds: populating `expectedOutput` silently makes half the
@@ -231,7 +194,7 @@ score measure *resemblance to your reference answer* rather than correctness,
 which is the usual reason a suite goes green while testing very little. Read it
 before writing an eval, and whenever a suite passes but you don't trust it.
 
-Full usage, escape hatches, and troubleshooting: [`plugins/builder/README.md`](plugins/builder/README.md).
+Full usage, escape hatches, and troubleshooting: [`plugins/soleon/README.md`](plugins/soleon/README.md).
 
 ### Pull a Soleon agent into Claude Code
 
@@ -355,12 +318,10 @@ This is an internal prototype in a bet worktree, so the loop is lightweight:
    re-litigating a design choice — supersede explicitly, never silently.
 2. Keep the ship boundary: anything the plugin needs at runtime goes in
    `plugins/`; anything else is harness. The packaging tests enforce this.
-3. Change a bundle's composition only through
-   `python3 harness/sync_bundles.py --add/--remove` (or `/bundle-plugin`, which
-   drives it). Edit capabilities in `plugins/{skills,agents,hooks,bin}/`, never in a
-   bundle — the next sync overwrites bundle copies.
+3. Add a capability by adding it under `plugins/soleon/` (`skills/`, `bin/`,
+   `hooks/hooks.json`) and to `EXPECTED_SKILLS` in `harness/tests/test_packaging.py`.
 4. Regenerate the generated artifacts after touching platform code:
-   `python3 harness/sync_contract.py` and `python3 harness/sync_scope_bundles.py`
+   `python3 harness/sync_contract.py` and `python3 harness/sync_scope_pin.py`
    (the drift tests fail loudly otherwise).
 5. All tests green before handing off. New failure modes get a negative
    test, not a workaround.
@@ -376,7 +337,7 @@ check on PR titles. See `.github/workflows/`.
 The bundled `allium` engine is built from
 [juxt/allium-tools](https://github.com/juxt/allium-tools) (MIT); its verbatim
 license and the binary's provenance chain (source tag, commit, sha256) ship
-in [`plugins/builder/LICENSES/allium-tools-MIT.txt`](plugins/builder/LICENSES/allium-tools-MIT.txt).
+in [`plugins/soleon/LICENSES/allium-tools-MIT.txt`](plugins/soleon/LICENSES/allium-tools-MIT.txt).
 
 ## Acknowledgments
 
