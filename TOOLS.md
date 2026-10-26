@@ -141,9 +141,9 @@ The six `list_agent_tools` / `call_agent_tool` / `get_agent_tool_result` /
 `get_agent_system_prompt` / `get_eval_judge_prompt` / `get_agent_workspace_archive`
 tools above exist so a Claude Code session can RUN a Soleon agent locally: the
 reasoning happens on your machine, every tool executes on the platform. They ride
-the new `soleon-mcp/agent.invoke` consent scope (builder + admin bundles) except
+the `soleon-mcp/agent.invoke` consent scope except
 the judge prompt (`eval.read`); all of them run the caller's chat-plane invoke
-gate, so an agent you cannot chat with answers not-found. The `soleon-builder`
+gate, so an agent you cannot chat with answers not-found. The `soleon`
 plugin's `/pull-agent` skill drives them — you rarely call them by hand.
 
 ## Known gaps / wishlist

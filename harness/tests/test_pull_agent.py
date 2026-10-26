@@ -409,8 +409,8 @@ def test_agents_dir_created_is_false_when_it_already_existed(tmp_path):
 
 
 # The toolkit's OWN server is derived from the plugin that runs the pull, so
-# the same server under soleon-admin/-observer names a different rule.
-TOOLKIT_RULE = "mcp__plugin_builder_soleon__*"
+# the same server installed under another plugin name names a different rule.
+TOOLKIT_RULE = "mcp__plugin_soleon_soleon__*"
 RULES = ["mcp__soleon-workspace", "mcp__soleon-agent-tools",
          "Edit(/.soleon/agents/**)", "Write(/.soleon/agents/**)", TOOLKIT_RULE]
 
@@ -482,9 +482,10 @@ def test_the_pull_grants_the_toolkit_its_own_mcp_server(pulled):
 
 
 def test_the_toolkit_rule_is_derived_from_the_running_plugin(tmp_path):
-    """soleon-builder, -admin and -observer all ship the SAME server name, so a
-    hard-coded rule would grant the wrong plugin's tools. The plugin name is the
-    part that varies, and it comes from the plugin that is actually running."""
+    """The rule names the plugin AND the server, and the plugin name is fixed by
+    whatever installed it (the retired observer/builder/admin bundles shipped the
+    same server under three names). It comes from the plugin that is actually
+    running, never a hard-coded guess."""
     sys.path.insert(0, str(PULL_ASSETS))
     import pull_agent
 
