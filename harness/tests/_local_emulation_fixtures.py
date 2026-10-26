@@ -8,7 +8,7 @@ import json
 from pathlib import Path
 
 BET_ROOT = Path(__file__).resolve().parents[2]
-PLUGIN = BET_ROOT / "plugins" / "builder"
+PLUGIN = BET_ROOT / "plugins" / "soleon"
 BIN = PLUGIN / "bin"
 PULL_ASSETS = PLUGIN / "skills" / "pull-agent" / "assets"
 

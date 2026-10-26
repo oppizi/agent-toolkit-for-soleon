@@ -1,9 +1,0 @@
-{"request_id": "2026-10-16T14:05:00Z/overdue-list",
- "file": "overdue-list/scripts/build_list.py", "files": [],
- "inputs": {"region": "California", "due_before": "2026-10-31", "file_name": "overdue-california-2026-10-16"},
- "tool_scope": [{"tool": "records_list", "max_calls": 40, "constraints": {}},
-                {"tool": "records_lookup", "max_calls": 700, "constraints": {}},
-                {"tool": "mcp_google-drive_import_to_google_sheets", "max_calls": 1, "constraints": {}},
-                {"tool": "mcp_google-sheets_modify_sheet_values", "max_calls": 1, "constraints": {}}],
- "output_scope": {"workspace_prefix": "reports/overdue-list", "max_files": 1, "deliver": false},
- "llm_scope": null, "limits": {"max_tool_calls": 742}}

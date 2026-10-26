@@ -683,7 +683,7 @@ def test_web_is_its_own_fact_because_it_is_the_one_baseline_you_can_switch_off()
 
 
 def test_the_skill_looks_a_channel_up_before_asking_for_an_id():
-    """`channel.read` joined the builder bundle 2026-09-23, so the skill can name
+    """`channel.read` is in the plugin's consent pin, so the skill can name
     the workspace itself. Asking for a `ci_…` id is the FALLBACK for a member the
     admin-only tool refuses, never the opening move."""
     flat = " ".join(SKILL.split())

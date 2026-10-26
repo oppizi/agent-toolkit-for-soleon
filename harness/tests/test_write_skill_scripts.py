@@ -12,7 +12,7 @@ from pathlib import Path
 
 import pytest
 
-ASSETS = Path(__file__).resolve().parents[2] / "plugins" / "skills" / "write-skill-scripts" / "assets"
+ASSETS = Path(__file__).resolve().parents[2] / "plugins" / "soleon" / "skills" / "write-skill-scripts" / "assets"
 SCRIPT = ASSETS / "script_template.py"
 
 

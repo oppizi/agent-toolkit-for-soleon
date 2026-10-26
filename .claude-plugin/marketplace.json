@@ -5,19 +5,9 @@
   },
   "plugins": [
     {
-      "name": "observer",
-      "source": "./plugins/observer",
-      "description": "Read-only access to Soleon: agents, traces, failures, usage, evals and ideas. Requests no write consent — the least-privilege way to connect Claude Code to Soleon."
-    },
-    {
-      "name": "builder",
-      "source": "./plugins/builder",
-      "description": "Everything in observer, plus the agent build loop: create and update drafts, deploy and promote agents, bind channels, manage collaborators and access grants, author custom MCP servers and knowledge bases. Includes the deploy-agent skill (identity markdown → Allium spec → validated POST /agents) and its reverse arrow, pull-agent (a Soleon agent as a local Claude Code subagent whose tools run on the platform and whose every file save lands on your draft), plus run-local-eval."
-    },
-    {
-      "name": "admin",
-      "source": "./plugins/admin",
-      "description": "The full Soleon surface, including the platform-admin-only family: custom-MCP server, connection and Tool Library reads. For platform administrators. Includes the write-evals skill and local agent testing (pull-agent, run-local-eval)."
+      "name": "soleon",
+      "source": "./plugins/soleon",
+      "description": "Connects Claude Code to Soleon: read, build, test, deploy and release agents. Consents to the whole Soleon surface; the server shows and allows only what your Soleon permissions permit. Includes create-agent, deploy-agent (identity markdown → Allium spec → validated agent), pull-agent (a Soleon agent as a local subagent whose every save lands on your draft), run-local-eval, write-evals and write-skill-scripts."
     }
   ]
 }

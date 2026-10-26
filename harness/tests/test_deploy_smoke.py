@@ -29,7 +29,7 @@ from validate_offline import CONTRACT_PATH, _load, validate, validate_envelope
 
 from pathlib import Path
 
-PLUGIN = Path(__file__).resolve().parents[2] / "plugins" / "builder"
+PLUGIN = Path(__file__).resolve().parents[2] / "plugins" / "soleon"
 
 
 class DeployRejected(Exception):
