@@ -5,9 +5,8 @@ from pathlib import Path
 import pytest
 
 BET_ROOT = Path(__file__).resolve().parents[2]
-# The converter, engine, and contract live in the BUILDER bundle — it is the only
-# one of the three role plugins that ships Python.
-PLUGIN = BET_ROOT / "plugins" / "builder"
+# The converter, engine, and contract ship in the one plugin.
+PLUGIN = BET_ROOT / "plugins" / "soleon"
 ASSETS = PLUGIN / "skills/deploy-agent/assets"
 
 sys.path.insert(0, str(ASSETS))

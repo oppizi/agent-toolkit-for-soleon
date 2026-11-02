@@ -29,10 +29,10 @@ pytestmark = pytest.mark.skipif(
 
 
 def test_shipped_contract_matches_fresh_extraction():
-    shipped = json.loads((BET_ROOT / "plugins/builder/contract.json").read_text())
+    shipped = json.loads((BET_ROOT / "plugins/soleon/contract.json").read_text())
     fresh = extract(REPO_ROOT)
     assert shipped == fresh, (
-        "plugins/builder/contract.json has drifted from repo source — regenerate "
+        "plugins/soleon/contract.json has drifted from repo source — regenerate "
         "with python3 harness/sync_contract.py"
     )
 

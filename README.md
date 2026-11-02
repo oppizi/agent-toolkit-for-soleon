@@ -2,7 +2,7 @@
 
 > **Status: Prototype (v0.2).** This is a proof-of-concept built to answer one
 > question, offline, with evidence. It is not production software. It works —
-> 9 logged runs validated green, 99/99 tests passing — but it is the
+> 9 logged runs validated green, 165/165 tests passing — but it is the
 > *foundation we will extend*, not the finished product. Expect sharp edges,
 > a single supported platform for the bundled engine, and APIs that will
 > change as capabilities grow on top of it.
@@ -65,18 +65,22 @@ until a future iteration scores the artifacts Allium uniquely produces.
 ```
 agent-toolkit-for-soleon/
 ├── .claude-plugin/          marketplace manifest (GitHub installs resolve here;
-│                            lists all three bundles)
-├── plugins/                 ← THE adoptable artifacts, one per role bundle
-│   ├── scope_bundles.json   generated scope pins + sha256, vendored from the platform
-│   ├── observer/            read-only bundle (scope pin only, no skills)
-│   ├── builder/             the agent build loop — the only bundle shipping Python
-│   │   ├── .claude-plugin/  manifest
-│   │   ├── README.md        install, usage, supported platforms, escape hatches
-│   │   ├── bin/             vendored allium engine (v3.2.4, provenance in LICENSES/)
-│   │   ├── contract.json    platform validation contract, generated from source
-│   │   ├── LICENSES/        MIT notice + binary provenance chain
-│   │   └── skills/deploy-agent/ the skill (SKILL.md state machine + converter assets)
-│   └── admin/               full platform surface (scope pin only, no skills)
+│                            lists the one plugin)
+├── plugins/
+│   ├── scope_pin.json       generated scope pin + sha256, vendored from the platform
+│   └── soleon/              ← THE adoptable artifact: the one plugin that ships
+│       ├── .claude-plugin/  manifest
+│       ├── .mcp.json        the soleon MCP server + its OAuth scope pin (every family)
+│       ├── README.md        install, usage, supported platforms, escape hatches
+│       ├── bin/             vendored allium engine (v3.2.4, provenance in LICENSES/)
+│       │                    + the local-emulation stdio MCP servers, save hook,
+│       │                    turn hooks and shared client (stdlib Python)
+│       ├── hooks/hooks.json PostToolUse: saves under .soleon/agents/ → Soleon draft;
+│       │                    SubagentStart/Stop: each local agent run → one trace turn
+│       ├── contract.json    platform validation contract, generated from source
+│       ├── LICENSES/        MIT notice + binary provenance chain
+│       └── skills/          create-agent, deploy-agent, pull-agent, run-local-eval,
+│                            write-evals, write-skill-scripts + 27 starter skills
 ├── preflight/               frozen correctness oracle (schema fixture + contract doc)
 ├── harness/                 offline validator, judge rubric, tests — never ships
 ├── samples/                 4 authored identity files (+ skill fixtures under
@@ -87,17 +91,16 @@ agent-toolkit-for-soleon/
                              committed to this repository
 ```
 
-The boundary is enforced by tests: each bundle under `plugins/` ships alone (an
-isolation smoke test copies `plugins/builder/` — the only bundle with executable
-assets — to a bare temp directory and runs the conversion end to end); everything
-else is experiment telemetry.
+The boundary is enforced by tests: the plugin ships alone (an isolation smoke
+test copies `plugins/soleon/` to a bare temp directory and runs the conversion end
+to end); everything else is experiment telemetry.
 
 ## Getting started
 
 ### Documentation
 
 - **[TOOLS.md](TOOLS.md)** — full reference for every MCP tool the Soleon server
-  exposes (85 live, grouped by area), plus known gaps. Tools are discovered live
+  exposes (91 live, grouped by area), plus known gaps. Tools are discovered live
   from the server, so new ones appear in the plugin automatically — no plugin
   update needed.
 - **[MCP landing page](docs/index.html)** — a public, no-auth docs page for the
@@ -107,26 +110,18 @@ else is experiment telemetry.
 
 - Claude Code (the plugin's skill is executed by it)
 - Python 3.9+ (standard library only — no pip installs)
-- macOS on Apple Silicon for the bundled engine (`soleon-builder` only); other
+- macOS on Apple Silicon for the bundled engine (`deploy-agent` only); other
   platforms need one `cargo install` (see
-  [Supported platforms](plugins/builder/README.md#supported-platforms-bundled-engine))
+  [Supported platforms](plugins/soleon/README.md#supported-platforms-bundled-engine))
 
-### Choose a bundle
+### One plugin, every role
 
-The repo ships three plugins, one per role. They nest — observer ⊂ builder ⊂
-admin — and differ only in the OAuth scopes they request:
-
-| Plugin | Scopes | For |
-|---|---|---|
-| `soleon-observer` | 8, all reads | Reading agents, traces, failures, usage, evals, ideas, wiki. No write consent at all. |
-| `soleon-builder` | 16 | The agent build loop: drafts, deploys, promotions, channel binds, custom MCPs, knowledge bases. Ships the `deploy-agent` skill. |
-| `soleon-admin` | 21 (all) | Platform admins — adds channel/custom-MCP instance reads, eval runs, and discovery. |
-
-**Pick the narrowest one that covers your work.** A broader bundle grants no extra
-access: scope is a ceiling on what the token may consent to, never a role. Soleon
-authorizes every request against your real permissions, so installing
-`soleon-admin` does not make you an admin — it only widens what an access token
-could, in principle, be used for.
+The repo ships one plugin, `soleon`, for everyone. It requests consent for every
+Soleon scope family (21), and Soleon decides what you can actually do from your
+real permissions: the server lists only the tools you are permitted to use, and
+re-checks your permissions on every call. Installing it does not make you an
+admin — the platform-admin-only tools stay hidden from a member, and a call to one
+made by hand with the same token is refused.
 
 ### Install
 
@@ -134,7 +129,7 @@ From the GitHub marketplace (recommended):
 
 ```
 /plugin marketplace add oppizi/agent-toolkit-for-soleon
-/plugin install soleon-observer@agent-toolkit-for-soleon
+/plugin install soleon@agent-toolkit-for-soleon
 ```
 
 Or from a local clone:
@@ -142,26 +137,29 @@ Or from a local clone:
 ```
 git clone https://github.com/oppizi/agent-toolkit-for-soleon.git
 /plugin marketplace add ./agent-toolkit-for-soleon
-/plugin install soleon-observer@agent-toolkit-for-soleon
+/plugin install soleon@agent-toolkit-for-soleon
 ```
 
-Substitute `soleon-builder` or `soleon-admin` as needed. Sign-in is OAuth — the
-first request opens the flow in your browser (or run `claude mcp login`). There is
-no token to paste.
+Sign-in is OAuth — the first request opens the flow in your browser (or run
+`claude mcp login`). There is no token to paste.
 
-Each plugin takes an optional **Soleon MCP server URL**, defaulting to the dev
+The plugin takes an optional **Soleon MCP server URL**, defaulting to the dev
 system (`https://mcp-dev.oppizi.com/mcp`). Use the stage-less custom-domain form;
 a URL carrying an API-Gateway stage path breaks OAuth discovery.
 
-> **Upgrading from `soleon-deploy-agent`?** It has been renamed to
-> `soleon-builder`, with no alias — uninstall the old plugin and install the
-> bundle that matches your work. Its **Soleon access token** setting is obsolete
-> now that sign-in is OAuth; you can delete it from your keychain.
+> **Upgrading from `observer` / `builder` / `admin`?** They are replaced by
+> `soleon`, with no alias. Uninstall the old plugin, install `soleon`, and sign in
+> again. Tools are now named `mcp__plugin_soleon_soleon__<tool>`, so update any
+> permission rules that named `mcp__plugin_<role>_soleon__…`, and re-run
+> `/pull-agent <slug>` for agents you pulled with the old plugin. (Older names —
+> `soleon-observer` / `soleon-builder` / `soleon-admin`, `soleon-deploy-agent` —
+> upgrade the same way; the last one's **Soleon access token** setting is obsolete
+> and can be deleted from your keychain.)
 
 ### Health check (2 seconds, before anything else)
 
 ```bash
-python3 plugins/builder/skills/deploy-agent/assets/engine.py --selfcheck
+python3 plugins/soleon/skills/deploy-agent/assets/engine.py --selfcheck
 ```
 
 ### Use
@@ -178,16 +176,97 @@ JSON by design — the live `POST /agents` call is a later phase.
 Direct converter invocation (no LLM, spec already in hand):
 
 ```bash
-python3 plugins/builder/skills/deploy-agent/assets/allium_to_json.py spec.allium --app-env dev --out-dir out/
+python3 plugins/soleon/skills/deploy-agent/assets/allium_to_json.py spec.allium --app-env dev --out-dir out/
 ```
 
-Full usage, escape hatches, and troubleshooting: [`plugins/builder/README.md`](plugins/builder/README.md).
+Once an agent is deployed, the other half of the build loop is knowing whether it
+actually behaves:
+
+```
+/write-evals
+```
+
+Designs evals for a deployed agent — how to choose *what* to test (derive from
+decisions made and ways the agent can be confidently wrong, not from plausible
+user inputs), and how the platform's LLM judge computes a score. That second part
+matters more than it sounds: populating `expectedOutput` silently makes half the
+score measure *resemblance to your reference answer* rather than correctness,
+which is the usual reason a suite goes green while testing very little. Read it
+before writing an eval, and whenever a suite passes but you don't trust it.
+
+Full usage, escape hatches, and troubleshooting: [`plugins/soleon/README.md`](plugins/soleon/README.md).
+
+### Pull a Soleon agent into Claude Code
+
+The reverse arrow of `/deploy-agent` (`soleon-builder` v0.4.0):
+
+```
+/pull-agent <slug>
+```
+
+pulls your **dev draft** of a Soleon agent (else its deployed dev config —
+exactly what the platform's edit page opens) into the project as a Claude Code
+subagent, `~/.claude/agents/<slug>.md` (user scope), whose body is the system prompt the
+platform assembles for you, fetched live. **The local session is the brain;
+Soleon executes the tools**: every external tool (Gmail, web search, browser,
+custom MCPs, subagent pairs…) is published under its platform name and schema by
+a stdio MCP shim and run on the platform through `call_agent_tool` — with your
+credentials, the agent's tool policy and its approval gates (the subagent asks you
+before an approval-gated call, then sends `approved: true`). The workspace tools
+(`read_file`, `write_file`, `edit_file`, `list_dir`) run locally against a
+read-only snapshot of your platform workspace. You pick the local Claude model at
+pull time (default: the closest match to the agent's Bedrock model; non-Anthropic
+agents get a warning and no default).
+
+**The edit loop.** `/pull-agent` materializes the agent as files under
+`.soleon/agents/<slug>/` — `SOUL.md`, `config.json`, `skills/<id>/SKILL.md`,
+`evals/<id>.json`, `workspace/` — and the plugin's save hook pushes **every save**
+of the first four to your Soleon draft (`patch_agent_draft`), then re-syncs the
+platform's test sandbox. The draft IS the local state; there is no separate push.
+An edit made elsewhere in the meantime (the Soleon editor, another session) is a
+conflict: the hook stops the session and asks you to reload theirs
+(`/pull-agent` again) or overwrite with yours. The reverse direction is
+automatic: before every prompt the plugin checks each pulled agent's draft
+version on the platform and, when it changed elsewhere (the Soleon editor,
+another session), re-pulls the local copy — everything but `workspace/` — so
+the run uses the current agent; you are told when that happened. Going live is still
+`deploy_agent_draft`. Configured subagents and workflows are pulled too, and the
+local agent holds them as TOOLS exactly as on the platform (`subagent_<id>`,
+`workflow_<id>`, one `task` each): a call runs that subagent — or the workflow's
+manager, which calls its members the same way — as a headless Claude Code run on
+this machine, with every tool inside it still executed on Soleon. Each subagent is
+also a sibling agent `<slug>--<id>` you can talk to directly. `/run-local-eval <slug>` runs the agent's standard evals
+against the local subagent and grades them with the platform's own judge prompt
+(fetched live) — scores only, never a pass/fail verdict.
+
+**Traces.** Every local run shows up in Soleon's Monitoring → Traces under
+"Draft Agents" (channel `Local`; the pull report links the pre-filtered view).
+Each local conversation is one session (a new one after 30 idle minutes), and
+each prompt to the agent is one turn inside it: the prompt the agent received,
+every tool call it made — the platform-run ones and the local workspace ones,
+as steps — and its answer. The tool server tags each platform call with the
+run's `conversation` + `turn` ids; the plugin's SubagentStart/SubagentStop
+hooks mint the turn id and, when the agent finishes, send the prompt, answer
+and local steps from the subagent's transcript (`record_agent_turn`). Only the
+LLM calls are missing, because the thinking happened on your machine.
+
+**Not emulated** (platform-only, shown read-only in `config.json`): channels,
+budgets, schedules, guardrails, online-eval sampling. Workspace edits never push
+back.
+
+**Credentials.** The shim and the hook reuse the OAuth token Claude Code already
+holds for the `soleon-agent-toolkit` server. On **Linux** that token lives in
+`~/.claude/.credentials.json` (mode 0600, `mcpOAuth` map) and both read it there,
+refreshing it through the server's `refresh_token` grant when it expires. On
+**macOS** Claude Code keeps it in the Keychain — reading it from a hook (e.g. via
+`security find-generic-password`) is **untested**; set `SOLEON_MCP_TOKEN` in the
+environment as a workaround until it is.
 
 ## Running the tests
 
 ```bash
 ~/.asdf/installs/python/3.14.2/bin/python3 -m pytest harness/tests -o addopts=""
-# 99 passed
+# 165 passed, 7 skipped
 ```
 
 (Any Python ≥3.10 with pytest works; `-o addopts=""` bypasses the parent
@@ -239,10 +318,18 @@ This is an internal prototype in a bet worktree, so the loop is lightweight:
    re-litigating a design choice — supersede explicitly, never silently.
 2. Keep the ship boundary: anything the plugin needs at runtime goes in
    `plugins/`; anything else is harness. The packaging tests enforce this.
-3. Regenerate the contract after touching platform validation code:
-   `python3 harness/sync_contract.py` (the drift test fails loudly otherwise).
-4. All 99 tests green before handing off. New failure modes get a negative
+3. Add a capability by adding it under `plugins/soleon/` (`skills/`, `bin/`,
+   `hooks/hooks.json`) and to `EXPECTED_SKILLS` in `harness/tests/test_packaging.py`.
+4. Regenerate the generated artifacts after touching platform code:
+   `python3 harness/sync_contract.py` and `python3 harness/sync_scope_pin.py`
+   (the drift tests fail loudly otherwise).
+5. All tests green before handing off. New failure modes get a negative
    test, not a workaround.
+
+CI runs on every push and pull request to `main`: the full suite on macOS
+arm64 (where the bundled engine resolves), the engine-independent guards on
+Linux against Python 3.10 and 3.13, plus CodeQL and a conventional-commit
+check on PR titles. See `.github/workflows/`.
 
 ## License
 
@@ -250,7 +337,7 @@ This is an internal prototype in a bet worktree, so the loop is lightweight:
 The bundled `allium` engine is built from
 [juxt/allium-tools](https://github.com/juxt/allium-tools) (MIT); its verbatim
 license and the binary's provenance chain (source tag, commit, sha256) ship
-in [`plugins/builder/LICENSES/allium-tools-MIT.txt`](plugins/builder/LICENSES/allium-tools-MIT.txt).
+in [`plugins/soleon/LICENSES/allium-tools-MIT.txt`](plugins/soleon/LICENSES/allium-tools-MIT.txt).
 
 ## Acknowledgments
 

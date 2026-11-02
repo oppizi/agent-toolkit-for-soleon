@@ -1,0 +1,29 @@
+{
+  "name": "soleon",
+  "description": "Connects Claude Code to Soleon. One plugin for everyone: it requests consent for the whole Soleon surface, and the server decides what you can actually see and do from your real Soleon permissions — the tools you are not allowed to use are never listed, and a call to one is refused. Ships one-job skills for reading, changing, testing and releasing agents; create-agent, which interviews you about a new agent and creates, configures and deploys it on dev with approval on every change; deploy-agent, which converts a local Claude Code agent identity (.claude/agents/<name>.md) into a validated, deploy-ready agent via an Allium specification; pull-agent, its reverse arrow, which pulls a Soleon agent into Claude Code as a local subagent whose tools run on the platform and whose every file save lands on your draft, plus run-local-eval to score it with the platform's own judge prompt; write-evals, for evals whose score reflects the behaviour under test; and write-skill-scripts, for the Python an agent runs from its skills.",
+  "version": "1.0.0",
+  "author": {
+    "name": "Oppizi — Soleon Headless Toolkit"
+  },
+  "keywords": [
+    "soleon",
+    "agent-infra",
+    "agent-deployment",
+    "allium",
+    "identity-to-config",
+    "local-emulation",
+    "evals",
+    "observability",
+    "governance"
+  ],
+  "license": "MIT (bundled allium engine also MIT, see LICENSES/)",
+  "userConfig": {
+    "server_url": {
+      "type": "string",
+      "title": "Soleon MCP server URL",
+      "description": "Which Soleon system to connect to. Defaults to the dev system; point at another environment for development or testing.",
+      "required": false,
+      "default": "https://mcp-dev.oppizi.com/mcp"
+    }
+  }
+}

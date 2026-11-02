@@ -1,6 +1,6 @@
 # Soleon Agent Toolkit — Tool Reference
 
-The `soleon-agent-toolkit` MCP server exposes the Soleon platform's admin capabilities
+The `soleon` MCP server exposes the Soleon platform's admin capabilities
 as governed MCP tools. Tools are implemented server-side (agent-infra `lambda/mcp_server/`)
 and discovered live by any connected MCP client — installing this plugin gives you every
 tool the server publishes, automatically.
@@ -9,7 +9,7 @@ tool the server publishes, automatically.
 server. Access follows platform roles (platform admins see everything; members see the
 agents they hold a role on).
 
-## Current tools (85)
+## Current tools (84)
 
 ### Agents
 
@@ -28,6 +28,13 @@ agents they hold a role on).
 | `update_agent_profile` | Update presentation metadata — avatar icon/color, description, visibility — with no deploy (dev tier, If-Match CAS). |
 | `delete_agent` | Delete an agent (cascades to promoted tiers; removes Slack app, secrets, config, registry rows). Idempotent. |
 | `list_agent_collaborators` | The Cognito role grants on an agent: sub, email, role, grantedBy, grantedAt. |
+| `list_agent_tools` | List the tools this agent's session actually registers — name, description, input schema, whether a human must approve it before it runs, and whether it acts on the agent workspace (`kind: workspace`) or an external system (`kind: external`). Runs on your dev draft test-chat session; answers `pending + call_id` while the container is cold-starting. The result also carries `tracesUrl`: the Soleon Traces view pre-filtered to "Draft Agents" (where every local run is filed — the tab's default "Live Agents" filter hides them). |
+| `call_agent_tool` | Run ONE of the agent's registered tools on the platform with your own credentials and the agent's tool policy — exactly as a model-initiated call in the Test Chat would. Approval-gated tools refuse until `approved=true`; blocks until the tool finishes or answers `pending + call_id`. `conversation` picks the platform session (one Traces entry per local conversation); `turn` groups every call of ONE prompt under the same trace turn, which `record_agent_turn` then finishes. |
+| `get_agent_tool_result` | Poll a pending local-control op (from `list_agent_tools` / `call_agent_tool` / `get_agent_system_prompt` / `record_agent_turn`) by `call_id` until its state is `done` or `error`. Only your own calls are visible. |
+| `record_agent_turn` | Finish ONE local turn on the platform trace so it reads like a conversation: the prompt the local agent received, its final answer, its status and timing, the tool calls it ran locally (as steps) and every tool name it used — under the `conversation` and `turn` ids its `call_agent_tool` calls were sent with (their steps are already there). The plugin's SubagentStop hook sends it; idempotent on `turn`. |
+| `get_agent_system_prompt` | The system prompt the platform assembles for YOU on this agent — soul, user metadata, invocation context, memory, skills and the closing platform contract — built by the agent's own runtime from your draft (else the deployed dev config). |
+| `get_eval_judge_prompt` | Render the platform's LLM-judge prompt for one standard eval and a transcript you produced locally; answers the prompt, the judge model the platform would use, the JSON contract keys (`score`, `subScores`, `reasoning`) and the tool-match verdicts. The platform grades, it never adjudicates pass/fail. |
+| `get_agent_workspace_archive` | A 15-minute presigned download of YOUR workspace for this agent — the memory and files your own conversations with it built — as a zip, for a read-only local snapshot. No upload counterpart. |
 
 ### Channels
 
@@ -112,34 +119,32 @@ agents they hold a role on).
 | `get_pipeline` | The agent build-pipeline board: every not-yet-launched agent grouped by the 6 build stages. |
 | `set_pipeline_stage` | Set an agent's build-pipeline stage (one of the 6 stages, or terminal `Launched`). Admin-only. |
 
-### Business Center — Agent management & Wiki
-
-| Tool | What it does |
-|---|---|
-| `list_agent_thread` | An agent's discussion-thread comments (oldest-first) — the thread that takes over when an idea's forum locks. |
-| `add_agent_thread_comment` | Append a comment to an agent's discussion thread (flat — no reply nesting). |
-| `get_overview_visibility` | The manager-curated Business Center Overview visibility overrides (agent slug → shown \| hidden). |
-| `set_overview_visibility` | Set one agent's Overview visibility override (all other overrides survive). |
-| `get_wiki` | An agent's wiki: the ordered section layout, every page's metadata, and the nested page tree (no bodies). |
-| `get_wiki_page` | One wiki page in full: bodyMarkdown plus title, placement, and provenance. |
-| `put_wiki_page` | Create (title + section_id) or edit (page_id) a wiki page; the body is a full replacement. |
-| `delete_wiki_page` | Delete a wiki page and all its descendant sub-pages (soft-delete; re-create with `put_wiki_page` if needed). |
-
 ### Business Center — Discovery
 
 | Tool | What it does |
 |---|---|
-| `list_discovery_requests` | Discovery requests (owner-side interview/context collection): person, agent, modality, status, injected context. |
+| `list_discovery_requests` | Discovery requests (owner-side interview/context collection): person, agent, modality, status, injected context. Filter by `subject_ref` (`idea:{idea_id}`, or `agent:{slug}` to read an agent's existing requests) or `person_ref`. |
 | `get_discovery_request` | One request's full tree in one call: META, collected materials, gaps, interview summary, form. |
-| `create_discovery_request` | Ask a person for knowledge an agent needs — modality conversation (AI interview) or form; optional owner steering. |
+| `create_discovery_request` | Ask a person for knowledge a ticket needs (`subject_ref` `idea:{idea_id}`; agent subjects are retired) — modality conversation (AI interview) or form; optional owner steering. |
 | `update_discovery_request` | Edit a request's status, interview-chat binding, or injected context/gaps (identity fields are immutable). |
 | `manage_discovery_gap` | Manage a request's knowledge gaps: add / update / delete / expand / analyze (async AI gap analysis). |
 | `list_discovery_people` | The env-neutral Discovery people directory, with Cognito candidate matching and email duplicate-check. |
 | `manage_discovery_person` | Create / update / delete a directory person (an existing email reuses that person; delete removes the discovery profile only). |
-| `list_stakeholders` | An agent's discovery stakeholders — directory people bound to the agent as knowledge sources. |
-| `manage_stakeholder` | Bind (`add`, idempotent) or unbind (`remove`) a stakeholder on an agent — the person themself is untouched. |
-| `list_discovery_materials` | Materials (links, notes, files, photos) for one request or an agent's generic pool — metadata only, no file bytes. |
+| `list_stakeholders` | A subject's discovery stakeholders — directory people bound to it as knowledge sources. Per-subject: `subject_ref` is `idea:{idea_id}`, or `agent:{slug}` to read an agent's existing stakeholders. |
+| `manage_stakeholder` | Bind (`add`, idempotent) or unbind (`remove`) a stakeholder on a ticket (`subject_ref` `idea:{idea_id}`; agent subjects are refused) — the person themself is untouched. |
+| `list_discovery_materials` | Materials (links, notes, files, photos) for one request or a subject's generic pool (`subject_ref` `idea:{idea_id}`, or `agent:{slug}` to read an agent's existing pool) — metadata only, no file bytes. |
 | `get_material_download_link` | Mint a short-lived (15-minute) presigned download URL for one stored material file. |
+
+### Local agent emulation (AHP-889)
+
+The six `list_agent_tools` / `call_agent_tool` / `get_agent_tool_result` /
+`get_agent_system_prompt` / `get_eval_judge_prompt` / `get_agent_workspace_archive`
+tools above exist so a Claude Code session can RUN a Soleon agent locally: the
+reasoning happens on your machine, every tool executes on the platform. They ride
+the `soleon-mcp/agent.invoke` consent scope except
+the judge prompt (`eval.read`); all of them run the caller's chat-plane invoke
+gate, so an agent you cannot chat with answers not-found. The `soleon`
+plugin's `/pull-agent` skill drives them — you rarely call them by hand.
 
 ## Known gaps / wishlist
 
