@@ -504,7 +504,7 @@ def subagent_frontmatter(name: str, description: str, model: str, effort: Option
         "mcpServers:",
         "  - soleon-workspace:",
         "      type: stdio",
-        "      command: python3",
+        "      command: {}".format(json.dumps(sys.executable)),
         "      args: {}".format(json.dumps(
             [ws_py, ws_dir, "--readable", str(agent_dir.resolve())]
             + [a for d in (readable_extra or []) for a in ("--readable", str(d))])),
@@ -516,7 +516,7 @@ def subagent_frontmatter(name: str, description: str, model: str, effort: Option
         lines += [
             "  - soleon-agent-tools:",
             "      type: stdio",
-            "      command: python3",
+            "      command: {}".format(json.dumps(sys.executable)),
             "      args: {}".format(json.dumps(tools_args)),
         ]
     lines += ["---", ""]

@@ -106,7 +106,7 @@ def test_subagent_frontmatter_and_body(pulled):
     assert "\ntools: []\n" in fm
     assert "mcp__soleon-workspace__*" not in fm and "mcp__soleon-agent-tools__*" not in fm
     assert "mcpServers:" in fm and "  - soleon-workspace:" in fm and "  - soleon-agent-tools:" in fm
-    ws_args = re.search(r"soleon-workspace:\n\s+type: stdio\n\s+command: python3\n\s+args: (\[.*?\])\n", fm)
+    ws_args = re.search(r"soleon-workspace:\n\s+type: stdio\n\s+command: \S.*\n\s+args: (\[.*?\])\n", fm)
     assert ws_args, fm
     ws = json.loads(ws_args.group(1))
     assert ws[0] == str(PLUGIN / "bin" / "soleon_workspace_mcp.py")
@@ -118,7 +118,7 @@ def test_subagent_frontmatter_and_body(pulled):
     assert readable == [str(agent_dir.resolve()),
                         str(root / ".claude" / "projects" / re.sub(r"[^A-Za-z0-9-]", "-", str(root.resolve())))]
     assert "**Large tool results**" in text and "tool-results/" in text
-    tools_args = re.search(r"soleon-agent-tools:\n\s+type: stdio\n\s+command: python3\n\s+args: (\[.*?\])(?:\n|$)", fm)
+    tools_args = re.search(r"soleon-agent-tools:\n\s+type: stdio\n\s+command: \S.*\n\s+args: (\[.*?\])(?:\n|$)", fm)
     assert tools_args, fm
     ta = json.loads(tools_args.group(1))
     assert ta == [str(PLUGIN / "bin" / "soleon_agent_tools_mcp.py"), "--slug", SLUG,
@@ -180,7 +180,7 @@ def test_helper_subagents_and_workflows(pulled):
     # The helper's tool SUBSET rides the inline server's `--only`, never the
     # `tools:` line (which cannot see inline servers — see the main-agent test).
     assert "\ntools: []\n" in fm
-    only = re.search(r"soleon-agent-tools:\n\s+type: stdio\n\s+command: python3\n\s+args: (\[.*?\])(?:\n|$)", fm)
+    only = re.search(r"soleon-agent-tools:\n\s+type: stdio\n\s+command: \S.*\n\s+args: (\[.*?\])(?:\n|$)", fm)
     assert only, fm
     h_args = json.loads(only.group(1))
     assert h_args[-2] == "--only"
