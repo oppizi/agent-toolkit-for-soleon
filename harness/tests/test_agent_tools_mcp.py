@@ -554,6 +554,7 @@ def test_a_wrapper_without_a_worker_description_still_runs_on_soleon():
 def test_no_claude_binary_is_a_loud_actionable_error(tmp_path, monkeypatch):
     monkeypatch.delenv("CLAUDE_CODE_EXECPATH", raising=False)
     monkeypatch.setattr(shim.shutil, "which", lambda _name: None)
+    monkeypatch.setenv("HOME", str(tmp_path / "empty-home"))
     runner, calls = _runner(tmp_path)
     runner.binary = None
     out = runner.run(WRAPPER, "x", approved=False)
@@ -567,6 +568,25 @@ def test_the_binary_is_the_one_running_this_session(tmp_path, monkeypatch):
     exe.chmod(0o755)
     monkeypatch.setenv("CLAUDE_CODE_EXECPATH", str(exe))
     assert shim.claude_binary() == str(exe)
+
+
+def test_without_execpath_or_path_the_vscode_extension_binary_is_used(tmp_path, monkeypatch):
+    """A headless `claude -p` from the VS Code extension sets no
+    CLAUDE_CODE_EXECPATH for its MCP servers and puts nothing on PATH: every
+    local spawn_worker failed (Windows, 2026-11-02). The newest installed
+    extension binary is the fallback."""
+    monkeypatch.delenv("CLAUDE_CODE_EXECPATH", raising=False)
+    monkeypatch.setattr(shim.shutil, "which", lambda _name: None)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    exe_name = "claude.exe" if os.name == "nt" else "claude"
+    found = []
+    for i, version in enumerate(("2.1.200", "2.1.314")):
+        d = tmp_path / ".vscode" / "extensions" / f"anthropic.claude-code-{version}-linux-x64" / "resources" / "native-binary"
+        d.mkdir(parents=True)
+        (d / exe_name).write_text("#!/bin/sh\n")
+        os.utime(d / exe_name, (1_000_000 + i, 1_000_000 + i))
+        found.append(str(d / exe_name))
+    assert shim.claude_binary() == found[-1]
 
 
 def test_a_worker_that_stops_without_an_answer_says_so(tmp_path):

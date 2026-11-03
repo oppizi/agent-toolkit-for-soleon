@@ -409,7 +409,17 @@ def claude_binary() -> Optional[str]:
     path = os.environ.get("CLAUDE_CODE_EXECPATH")
     if path and os.path.isfile(path) and os.access(path, os.X_OK):
         return path
-    return shutil.which("claude")
+    found = shutil.which("claude")
+    if found:
+        return found
+    # A headless `claude -p` started from the VS Code extension's binary sets no
+    # CLAUDE_CODE_EXECPATH for its MCP servers, and nothing is on PATH there
+    # (2026-11-02, Windows: every spawn_worker answered "no Claude Code binary
+    # was found"). The extension's own binary is the one that is installed.
+    exe = "claude.exe" if os.name == "nt" else "claude"
+    hits = [p for p in Path(os.path.expanduser("~")).glob(
+        ".vscode*/extensions/anthropic.claude-code-*/resources/native-binary/" + exe) if p.is_file()]
+    return str(max(hits, key=lambda p: p.stat().st_mtime)) if hits else None
 
 
 #: A worker runs until IT finishes — the platform's 240 s cap is exactly the
