@@ -310,6 +310,24 @@ def test_401_triggers_one_refresh_and_a_retry_and_rewrites_the_credentials_file(
     assert stat.S_IMODE(os.stat(str(creds)).st_mode) == 0o600
 
 
+def test_a_401_adopts_the_token_another_process_saved_meanwhile(soleon, tmp_path):
+    """Claude Code and sibling tools servers share one credentials entry; when
+    one of them refreshes (rotating the refresh token) this process's own
+    refresh fails while the store already holds a working token."""
+    url, state = soleon
+    creds = tmp_path / "creds.json"
+    write_credentials(creds, url, GOOD)
+    server = make_server(url, creds)
+    assert "isError" not in server.call("custom_echo-server_read", {"prompt": "first"})
+    state["tokens"].discard(GOOD)                      # this process's token expires...
+    state["tokens"].add("saved-by-a-sibling")          # ...and another process saved a new one
+    write_credentials(creds, url, "saved-by-a-sibling")
+    out = server.call("custom_echo-server_read", {"prompt": "after the sibling refreshed"})
+    assert "isError" not in out, out
+    assert json.loads(out["content"][0]["text"]) == {"echo": "after the sibling refreshed"}
+    assert not [c for c in state["calls"] if c[0] == "token"]   # no refresh of its own was needed
+
+
 def test_401_without_refresh_material_surfaces_the_reconnect_instruction(soleon, tmp_path):
     url, state = soleon
     creds = tmp_path / "creds.json"
