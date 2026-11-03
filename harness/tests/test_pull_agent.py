@@ -166,6 +166,21 @@ def test_local_tool_routing_section(pulled):
     assert summary["externalTools"] == ["custom_echo-server_read", "custom_echo-server_write", "web_search"]
 
 
+@pytest.mark.parametrize("dial,offered", [("auto", True), ("off", False)])
+def test_spawn_worker_is_routed_locally_when_the_workers_dial_is_on(tmp_path, dial, offered):
+    """spawn_worker is a loop tool: list_agent_tools never names it, but the
+    local tool server runs it whenever `workers` is on. Listing it as not
+    available made the agent skip the picture review its skill requires
+    (flyer-builder, 2026-11-02)."""
+    (tmp_path / "config.json").write_text(json.dumps({"loop": {"dimensions": {"workers": dial}}}))
+    routing = pull_agent.routing_section("Demo", SLUG, [{"name": "web_search", "kind": "external"}], tmp_path,
+                                         ["web_search", "spawn_worker"], [], [])
+    ext_line = next(l for l in routing.splitlines() if "**External tools**" in l)
+    missing_line = next((l for l in routing.splitlines() if "**Not available locally**" in l), "")
+    assert ("`spawn_worker`" in ext_line) is offered
+    assert ("`spawn_worker`" in missing_line) is not offered
+
+
 def test_helper_subagents_and_workflows(pulled):
     root, agent_dir, summary = pulled
     agents = root / ".claude" / "agents"

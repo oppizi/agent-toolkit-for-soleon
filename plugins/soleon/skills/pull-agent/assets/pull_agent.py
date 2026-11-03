@@ -348,6 +348,13 @@ def routing_section(display_name: str, slug: str, tools: List[Dict[str, Any]], a
     # — so a registered tool is "known" when its sanitized name matches too.
     offered_helpers, offered_workflows = offered_delegates(helpers, workflows)
     known = set(external) | set(workspace) | {d["id"] for d in offered_helpers + offered_workflows}
+    # spawn_worker is a loop tool, not a registered one, so list_agent_tools never names it; the local tool
+    # server runs it itself whenever the agent's `workers` dial is on (2026-11-02: listing it as "not
+    # available locally" made the agent skip the picture review its skill requires, on every run).
+    from soleon_agent_tools_mcp import workers_enabled  # bin/ is on sys.path (_import_document_module)
+    if workers_enabled(str(agent_dir)):
+        known.add("spawn_worker")
+        external = sorted(set(external) | {"spawn_worker"})
     known_sanitized = {_sanitized_tool_name(n) for n in known}
     missing = sorted(n for n in (prompt_tool_names or [])
                      if n not in known and _sanitized_tool_name(n) not in known_sanitized)
