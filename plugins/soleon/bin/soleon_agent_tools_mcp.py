@@ -426,6 +426,10 @@ def claude_binary() -> Optional[str]:
 #: limit this exists to leave behind. The ceiling below only stops a wedged
 #: process from holding the agent forever, and it fails loud when it fires.
 LOCAL_WORKER_TIMEOUT_S = 1800
+#: A read-only spawn_worker is capped at WORKER_MAX_ITERATIONS steps of seconds each, so ten minutes is
+#: already a stall: one local worker went silent after its first model call and held the agent for 20 minutes
+#: (2026-11-02), long enough for the agent's prompt cache to lapse and its budget to run out before delivery.
+SPAWN_WORKER_TIMEOUT_S = 600
 
 
 class _Finished:
@@ -474,6 +478,8 @@ class LocalWorkerRunner:
         self._run = runner or subprocess.run
         self._popen = popen or subprocess.Popen
         self.agent_dir = os.path.dirname(self.tools_path)
+        #: Where a budgeted run's raw event stream is kept, one file per run (None: not kept).
+        self.stream_log_dir: Optional[str] = None
 
     def command(self, entry: Dict[str, Any], task: str, *, approved: bool, turn: Optional[str] = None,
                 budget_run: Optional[Tuple[str, str]] = None) -> List[str]:
@@ -550,8 +556,8 @@ class LocalWorkerRunner:
             except subprocess.TimeoutExpired:
                 proc = None
         if proc is None:
-            return _text_result("{}'s local helper was still running after {} s and was stopped.".format(
-                name, int(self.timeout_s)), True)
+            return _text_result("{}'s local helper was still running after {} s and was stopped; carry on "
+                                "without its answer.".format(name, int(self.timeout_s)), True)
         return self._render(name, proc)
 
     def _stream(self, cmd: List[str], message: str, run_id: str) -> Any:
@@ -568,9 +574,16 @@ class LocalWorkerRunner:
         err: List[str] = []
         proc = self._popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
                            stdin=subprocess.DEVNULL)
+        log = None
+        if self.stream_log_dir:
+            os.makedirs(self.stream_log_dir, exist_ok=True)
+            log = open(os.path.join(self.stream_log_dir, run_id + ".jsonl"), "a", encoding="utf-8")
 
         def read_out():
             for line in proc.stdout:
+                if log:
+                    log.write(line)
+                    log.flush()
                 try:
                     event = json.loads(line)
                 except ValueError:
@@ -598,6 +611,8 @@ class LocalWorkerRunner:
             returncode = None
         for t in readers:
             t.join(timeout=5)
+        if log:
+            log.close()
         ledger.note_helper(message, run_id,
                            message_budget.result_tokens(result) if result.get("modelUsage") else sum(calls.values()))
         if returncode is None:
@@ -882,6 +897,7 @@ class LocalSpawnWorker(LocalWorkerRunner):
                 "spawn_worker runs its worker locally with Claude Code, and no Claude Code binary was found "
                 "(CLAUDE_CODE_EXECPATH is unset and `claude` is not on PATH).", True)
         _log("spawn_worker → running a read-only worker locally")
+        self.stream_log_dir = os.path.join(self.agent_dir, ".local-workers")
         out = self._execute("spawn_worker", lambda budget_run: self.worker_command(
             task, turn=turn, budget_run=budget_run), turn)
         if out.get("isError"):
@@ -1186,7 +1202,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     if args.only is None and workers_enabled(agent_dir):
         spawner = LocalSpawnWorker(slug=args.slug, tools_path=args.tools, server_url=args.server_url,
                                    model=args.model or _pulled_model(agent_dir), app_env=args.app_env,
-                                   credentials=args.credentials)
+                                   credentials=args.credentials, timeout_s=SPAWN_WORKER_TIMEOUT_S)
     server = AgentToolsServer(args.slug, tools, client, app_env=args.app_env,
                               poll_interval_s=args.poll_interval, conversation=tracker, turn=turn,
                               local_workers=workers, pre_approved=args.pre_approved,

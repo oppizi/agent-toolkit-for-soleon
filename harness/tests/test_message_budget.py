@@ -274,6 +274,27 @@ def test_a_helper_runs_under_the_budget_hook_in_the_agents_turn(tmp_path):
     assert args[args.index("--turn") + 1] == "t1"                  # its platform calls join the agent's turn
 
 
+def test_a_spawn_worker_keeps_its_event_stream_and_stops_at_its_own_cap(tmp_path):
+    """A local worker that went silent held its agent for 20 minutes with no
+    record of where it stopped (2026-11-02). spawn_worker's runs keep their raw
+    stream under .local-workers/, and stop after SPAWN_WORKER_TIMEOUT_S."""
+    agent_dir = _pulled(tmp_path)
+    (agent_dir / "tools.json").write_text(json.dumps({"state": "done", "result": {"tools": []}}))
+    calls = []
+
+    def fake_popen(cmd, **opts):
+        calls.append(cmd)
+        return _Popen([_assistant("m1", 30000), FINAL], cmd, calls, agent_dir / mb.LEDGER_NAME)
+    worker = shim.LocalSpawnWorker(slug=SLUG, tools_path=str(agent_dir / "tools.json"),
+                                   server_url="https://mcp-dev.oppizi.com/mcp", model="sonnet", binary="/opt/claude",
+                                   popen=fake_popen, timeout_s=shim.SPAWN_WORKER_TIMEOUT_S)
+    out = worker.spawn("review the pictures", turn="t1")
+    assert json.loads(out["content"][0]["text"]) == {"workerResult": "3 unread"}
+    logs = list((agent_dir / ".local-workers").glob("*.jsonl"))
+    assert len(logs) == 1 and [json.loads(l)["type"] for l in logs[0].read_text().splitlines()] == ["assistant", "result"]
+    assert shim.SPAWN_WORKER_TIMEOUT_S < shim.LOCAL_WORKER_TIMEOUT_S
+
+
 def test_a_helpers_calls_are_booked_as_they_stream_and_settled_from_its_total(tmp_path):
     """While it runs: each call once (a call streams once per content block).
     When it ends: the run's `modelUsage`, which carries the final output counts."""

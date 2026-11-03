@@ -370,6 +370,10 @@ def routing_section(display_name: str, slug: str, tools: List[Dict[str, Any]], a
         "",
         "- **External tools** (server `soleon-agent-tools`, call each under its own name): {}".format(
             ", ".join("`{}`".format(n) for n in external) or "none"),
+        "- **Tool names here carry their server's prefix**: in this session `write_and_run_code` is "
+        "`mcp__soleon-agent-tools__write_and_run_code` and `read_file` is `mcp__soleon-workspace__read_file`. "
+        "A bare name is refused as \"No such tool\", and a long call (a whole build script) then has to be "
+        "written out again, so use the prefixed name the first time.",
         "- **Workspace tools** (server `soleon-workspace`, rooted at `{}` — a read-only snapshot of the "
         "person's platform workspace; local writes never push back): {}".format(
             agent_dir.resolve() / "workspace", ", ".join("`{}`".format(n) for n in workspace) or "none"),
