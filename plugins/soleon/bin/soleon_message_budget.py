@@ -92,13 +92,30 @@ def wind_down_at(budget: int) -> int:
 # counting
 # ---------------------------------------------------------------------------
 
+#: Soleon's cache weighting (agent-infra `shared.daily_budget.cache_weighted_input`):
+#: the budget counts a cache read at 10% of an input token and a cache write at
+#: 125%, the same figure as its daily ledger and Traces. Counting cached tokens
+#: in full made a local run wind down after ~9 calls that Soleon would allow.
+CACHE_READ_DISCOUNT = 0.9
+CACHE_WRITE_PREMIUM = 0.25
+
+
+def _num(usage: Dict[str, Any], key: str) -> int:
+    v = usage.get(key)
+    return int(v) if isinstance(v, (int, float)) and not isinstance(v, bool) else 0
+
+
+def _weighted(fresh: int, cache_read: int, cache_write: int, output: int) -> int:
+    """Budget tokens of one call. `fresh` excludes the cached tokens (Anthropic's
+    `input_tokens`); Soleon's input INCLUDES them, then discounts reads."""
+    total_input = fresh + cache_read + cache_write
+    weighted = total_input - CACHE_READ_DISCOUNT * cache_read + CACHE_WRITE_PREMIUM * cache_write
+    return max(0, int(weighted + 0.5)) + output
+
+
 def _usage_total(usage: Dict[str, Any]) -> int:
-    total = 0
-    for key in ("input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens", "output_tokens"):
-        v = usage.get(key)
-        if isinstance(v, (int, float)) and not isinstance(v, bool):
-            total += int(v)
-    return total
+    return _weighted(_num(usage, "input_tokens"), _num(usage, "cache_read_input_tokens"),
+                     _num(usage, "cache_creation_input_tokens"), _num(usage, "output_tokens"))
 
 
 def transcript_tokens(path: Optional[str]) -> int:
@@ -136,10 +153,8 @@ def result_tokens(result: Any) -> int:
     for per_model in usage.values():
         if not isinstance(per_model, dict):
             continue
-        for key in ("inputTokens", "cacheReadInputTokens", "cacheCreationInputTokens", "outputTokens"):
-            v = per_model.get(key)
-            if isinstance(v, (int, float)) and not isinstance(v, bool):
-                total += int(v)
+        total += _weighted(_num(per_model, "inputTokens"), _num(per_model, "cacheReadInputTokens"),
+                           _num(per_model, "cacheCreationInputTokens"), _num(per_model, "outputTokens"))
     return total
 
 
