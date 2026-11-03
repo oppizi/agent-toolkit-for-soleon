@@ -570,6 +570,24 @@ def test_the_binary_is_the_one_running_this_session(tmp_path, monkeypatch):
     assert shim.claude_binary() == str(exe)
 
 
+def test_an_event_stream_left_open_is_read_only_up_to_its_answer():
+    """One web_fetch held a local agent's tool server for 20 minutes
+    (2026-11-02): an event stream that stays open never reaches end-of-file,
+    so the body is read event by event and stops at the JSON-RPC answer."""
+    answer = {"jsonrpc": "2.0", "id": 7, "result": {"content": [{"type": "text", "text": "{}"}]}}
+
+    class OpenStream:
+        def __init__(self):
+            self.lines = [b": ping\n", b"event: message\n", ("data: " + json.dumps(answer) + "\n").encode()]
+
+        def readline(self):
+            assert self.lines, "read past the answer: the stream is still open and would block"
+            return self.lines.pop(0)
+
+    raw = client_mod._read_body(OpenStream(), "text/event-stream")
+    assert client_mod._parse_mcp_body(raw, "text/event-stream") == answer
+
+
 def test_without_execpath_or_path_the_vscode_extension_binary_is_used(tmp_path, monkeypatch):
     """A headless `claude -p` from the VS Code extension sets no
     CLAUDE_CODE_EXECPATH for its MCP servers and puts nothing on PATH: every

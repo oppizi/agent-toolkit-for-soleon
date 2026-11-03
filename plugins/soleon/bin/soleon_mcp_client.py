@@ -263,6 +263,37 @@ class CredentialStore:
 # HTTP transport
 # ---------------------------------------------------------------------------
 
+def _read_body(resp: Any, content_type: str, deadline_s: float = _TIMEOUT_S) -> bytes:
+    """The response body, read only as far as the answer.
+
+    An event-stream answer is read event by event and returned as soon as one
+    carries the JSON-RPC result: a stream the server leaves open (keep-alive
+    events) never reaches end-of-file, so `read()` would wait for ever, and the
+    socket timeout never fires while bytes keep arriving (2026-11-02: one
+    web_fetch held a local agent's tool server for 20 minutes). A stream still
+    without its answer after `deadline_s` of wall clock fails loud instead."""
+    started = time.monotonic()
+    if "text/event-stream" in (content_type or "") and hasattr(resp, "readline"):
+        lines: List[bytes] = []
+        while True:
+            line = resp.readline()
+            if not line:
+                break
+            lines.append(line)
+            text = line.decode("utf-8", "replace").strip()
+            if text.startswith("data:"):
+                try:
+                    obj = json.loads(text[5:].strip())
+                except json.JSONDecodeError:
+                    obj = None
+                if isinstance(obj, dict) and ("result" in obj or "error" in obj):
+                    break
+            if time.monotonic() - started > deadline_s:
+                raise TransportError("Soleon MCP's event stream sent no answer within {} s".format(int(deadline_s)))
+        return b"".join(lines)
+    return resp.read()  # a JSON body has a length and ends
+
+
 def _parse_mcp_body(raw: bytes, content_type: str) -> Dict[str, Any]:
     """The JSON-RPC response object from a JSON or single-event SSE body."""
     text = raw.decode("utf-8", "replace")
@@ -421,8 +452,8 @@ class SoleonMcpClient:
             },
         )
         with self._open(req, timeout=_TIMEOUT_S) as resp:
-            raw = resp.read()
             ctype = resp.headers.get("Content-Type", "") if hasattr(resp, "headers") else ""
+            raw = _read_body(resp, ctype)
         return _parse_mcp_body(raw, ctype)
 
     def call_tool(self, name: str, arguments: Dict[str, Any]) -> Dict[str, Any]:

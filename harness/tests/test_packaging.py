@@ -73,6 +73,8 @@ STDLIB_OK = {
     "dataclasses", "functools", "textwrap", "difflib",
     # the local message budget (bin/soleon_message_budget.py)
     "contextlib", "fcntl", "shlex",
+    # the slow-call stack dump in bin/soleon_agent_tools_mcp.py
+    "faulthandler",
     # write-skill-scripts: the local runner, the script template and its example fakes
     "asyncio", "importlib", "csv",
     # the macOS Keychain read in bin/soleon_mcp_client.py

@@ -29,6 +29,7 @@ Token: Claude Code's own MCP OAuth token for the configured server (see
 from __future__ import annotations
 
 import argparse
+import faulthandler
 import json
 import os
 import shutil
@@ -55,6 +56,9 @@ PROTOCOL_VERSION = "2025-03-26"
 SERVER_INFO = {"name": "soleon-agent-tools", "version": "0.4.15"}
 APPROVAL_NOTE = "Requires human approval: ask the person first, then call with approved=true."
 POLL_INTERVAL_S = 1.5
+#: A platform call still unanswered after this long dumps every thread's stack to stderr (and again each
+#: interval), so a silent stall shows where it is blocked.
+SLOW_CALL_DUMP_S = 90
 
 #: A parameter whose schema default is an email address names the account the
 #: PLATFORM connection is authorized for — the platform filled that default in
@@ -990,6 +994,10 @@ class AgentToolsServer:
                 return self.render(name, {"state": "error", "error": "approval_required"})
             return self.local_workers.run(entry, str(args.get("prompt") or ""), approved=approved,
                                           turn=self.turn.current())
+        # A platform call normally answers within the wire's ~25 s limit (pending after that). Two local
+        # workers went silent inside one web_fetch for 20 minutes with no error (2026-11-02): past
+        # SLOW_CALL_DUMP_S every thread's stack goes to stderr, which Claude Code keeps in its MCP log.
+        faulthandler.dump_traceback_later(SLOW_CALL_DUMP_S, repeat=True)
         try:
             envelope = self.client.call_tool("call_agent_tool", {
                 "slug": self.slug, "app_env": self.app_env,
@@ -1013,6 +1021,8 @@ class AgentToolsServer:
             return _text_result("Soleon refused the call — " + text, True)
         except TransportError as exc:
             return _text_result("Could not reach Soleon: {}. Retry once the platform is reachable.".format(exc), True)
+        finally:
+            faulthandler.cancel_dump_traceback_later()
         return self._with_identity_hint(name, args, self.render(name, envelope))
 
     def _schema_for(self, name: str) -> Dict[str, Any]:
