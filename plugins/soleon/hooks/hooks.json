@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/bin/soleon_pull_refresh.py\"",
+            "command": "p=python3; \"$p\" -c \"\" 2>/dev/null || p=python; \"$p\" \"${CLAUDE_PLUGIN_ROOT}/bin/soleon_pull_refresh.py\"",
             "timeout": 300
           }
         ]
@@ -17,7 +17,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/bin/soleon_message_budget.py\" agent-pretool",
+            "command": "p=python3; \"$p\" -c \"\" 2>/dev/null || p=python; \"$p\" \"${CLAUDE_PLUGIN_ROOT}/bin/soleon_message_budget.py\" agent-pretool",
             "timeout": 10
           }
         ]
@@ -29,7 +29,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/bin/soleon_draft_sync.py\"",
+            "command": "p=python3; \"$p\" -c \"\" 2>/dev/null || p=python; \"$p\" \"${CLAUDE_PLUGIN_ROOT}/bin/soleon_draft_sync.py\"",
             "timeout": 180
           }
         ]
@@ -40,7 +40,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/bin/soleon_turn_hooks.py\" start",
+            "command": "p=python3; \"$p\" -c \"\" 2>/dev/null || p=python; \"$p\" \"${CLAUDE_PLUGIN_ROOT}/bin/soleon_turn_hooks.py\" start",
             "timeout": 10
           }
         ]
@@ -51,7 +51,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/bin/soleon_turn_hooks.py\" stop",
+            "command": "p=python3; \"$p\" -c \"\" 2>/dev/null || p=python; \"$p\" \"${CLAUDE_PLUGIN_ROOT}/bin/soleon_turn_hooks.py\" stop",
             "timeout": 120
           }
         ]

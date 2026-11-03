@@ -227,6 +227,26 @@ def _text_result(text: str, is_error: bool = False) -> Dict[str, Any]:
     return out
 
 
+def _content_parts(value: Any) -> Optional[List[Dict[str, Any]]]:
+    """A tool that answered MCP content (`[{type: text}, {type: image}, …]`,
+    e.g. `browser_screenshot`) is relayed as that content, so the local model
+    SEES the image as the platform model does. Anything else → None (text)."""
+    if not isinstance(value, list) or not value:
+        return None
+    parts: List[Dict[str, Any]] = []
+    for item in value:
+        if not isinstance(item, dict):
+            return None
+        kind = item.get("type")
+        if kind == "text" and isinstance(item.get("text"), str):
+            parts.append({"type": "text", "text": item["text"]})
+        elif kind == "image" and isinstance(item.get("data"), str) and isinstance(item.get("mimeType"), str):
+            parts.append({"type": "image", "data": item["data"], "mimeType": item["mimeType"]})
+        else:
+            return None
+    return parts
+
+
 def _render_tool_value(value: Any) -> str:
     if isinstance(value, str):
         return value
@@ -814,6 +834,9 @@ class AgentToolsServer:
         if state == "done":
             result = envelope.get("result")
             value = result.get("result") if isinstance(result, dict) and "result" in result else result
+            parts = _content_parts(value)
+            if parts is not None:
+                return {"content": parts}
             return _text_result(_render_tool_value(value))
         if state == "error":
             err = str(envelope.get("error") or "error")

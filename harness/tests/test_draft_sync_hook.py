@@ -13,6 +13,9 @@ from pathlib import Path
 
 import pytest
 
+#: Every plugin hook resolves a REAL Python first: on Windows `python3` is often the Store stub.
+HOOK_PY = 'p=python3; "$p" -c "" 2>/dev/null || p=python; "$p" '
+
 from _local_emulation_fixtures import (
     BIN, DOCUMENT, PLUGIN, PULL_ASSETS, SERVER_URL, SLUG, config_envelope, draft_envelope, make_pulled_dir,
     prompt_envelope, skills_envelope, tools_envelope,
@@ -346,7 +349,7 @@ def test_hooks_json_wires_the_script_on_write_edit_multiedit():
     assert entry["matcher"] == "Write|Edit|MultiEdit"
     (cmd,) = entry["hooks"]
     assert cmd["type"] == "command"
-    assert cmd["command"] == 'python3 "${CLAUDE_PLUGIN_ROOT}/bin/soleon_draft_sync.py"'
+    assert cmd["command"] == HOOK_PY + '"${CLAUDE_PLUGIN_ROOT}/bin/soleon_draft_sync.py"'
 
 
 def test_save_rebuilds_the_subagent_definition_the_next_run_spawns_from(agent_dir, tmp_path, capsys):

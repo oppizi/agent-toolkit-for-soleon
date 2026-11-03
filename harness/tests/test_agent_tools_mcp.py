@@ -260,6 +260,21 @@ def test_pending_is_polled_until_done_without_giving_up(soleon, tmp_path):
     assert len(sleeps) == 3 and all(s == 0.01 for s in sleeps)
 
 
+def test_mcp_content_result_is_relayed_as_content_so_images_stay_images(soleon, tmp_path):
+    url, _ = soleon
+    creds = tmp_path / "creds.json"
+    write_credentials(creds, url, GOOD)
+    server = make_server(url, creds)
+    parts = [{"type": "text", "text": "1 screen taken"},
+             {"type": "image", "data": "iVBORw0KGgo=", "mimeType": "image/png", "annotations": None}]
+    out = server.render("browser_screenshot", {"state": "done", "result": {"tool": "browser_screenshot", "result": parts}})
+    assert out == {"content": [{"type": "text", "text": "1 screen taken"},
+                               {"type": "image", "data": "iVBORw0KGgo=", "mimeType": "image/png"}]}
+    # A plain list that is not MCP content still reads as JSON text.
+    out = server.render("web_search", {"state": "done", "result": {"result": [{"title": "Paris"}]}})
+    assert json.loads(out["content"][0]["text"]) == [{"title": "Paris"}]
+
+
 def test_approval_required_is_an_error_result_that_asks_then_retries_with_approved(soleon, tmp_path):
     url, state = soleon
     creds = tmp_path / "creds.json"
