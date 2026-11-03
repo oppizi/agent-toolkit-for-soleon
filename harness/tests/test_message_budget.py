@@ -53,13 +53,15 @@ def test_a_model_call_counts_once_though_claude_code_writes_it_per_block(tmp_pat
     each carrying the whole call's usage — summing lines doubled the spend."""
     p = _transcript(tmp_path / "t.jsonl", [_call("m1", ["thinking", "tool_use"]),
                                            _call("m2", ["text"], read=40000)])
-    assert mb.transcript_tokens(p) == (10 + 30000 + 500 + 100) + (10 + 40000 + 500 + 100)
+    # each call: input incl. cache - 90% of reads + 25% of writes, + output
+    assert mb.transcript_tokens(p) == (30510 - 27000 + 125 + 100) + (40510 - 36000 + 125 + 100)
 
 
 def test_cached_tokens_count_like_soleons_accountant(tmp_path):
-    """Soleon's proxy counts cached reads and writes as input tokens."""
-    p = _transcript(tmp_path / "t.jsonl", [_call("m1", ["text"], inp=0, read=7, write=5, out=3)])
-    assert mb.transcript_tokens(p) == 15
+    """Soleon's proxy counts cache-weighted input (agent-infra #2279): a cache
+    read is 10% of an input token, a cache write 125%."""
+    p = _transcript(tmp_path / "t.jsonl", [_call("m1", ["text"], inp=0, read=70000, write=4000, out=3)])
+    assert mb.transcript_tokens(p) == 74000 - 63000 + 1000 + 3
 
 
 def test_a_finished_helper_counts_every_call_not_just_its_last():
@@ -69,7 +71,7 @@ def test_a_finished_helper_counts_every_call_not_just_its_last():
               "modelUsage": {"claude-sonnet-5": {"inputTokens": 900, "outputTokens": 700,
                                                  "cacheReadInputTokens": 90000,
                                                  "cacheCreationInputTokens": 11000}}}
-    assert mb.result_tokens(result) == 102600
+    assert mb.result_tokens(result) == 101900 - 81000 + 2750 + 700
 
 
 # --- the agent's hook -----------------------------------------------------------
@@ -194,7 +196,7 @@ def test_a_stream_event_books_its_calls_input_and_output():
     event = {"type": "assistant", "message": {"id": "m1", "usage": {
         "input_tokens": 10, "cache_creation_input_tokens": 1748, "cache_read_input_tokens": 27536,
         "output_tokens": 4}}}
-    assert mb.stream_call_tokens(event) == ("m1", 29298)
+    assert mb.stream_call_tokens(event) == ("m1", round(29294 - 0.9 * 27536 + 0.25 * 1748) + 4)
     assert mb.stream_call_tokens({"type": "user"}) is None
 
 
@@ -288,9 +290,9 @@ def test_a_helpers_calls_are_booked_as_they_stream_and_settled_from_its_total(tm
         runner.run(WRAPPER, "x", approved=False, turn="t1")
     finally:
         mb.Ledger.note_helper = orig
-    assert seen == [30000, 30000, 65000, 65000]
+    assert seen == [30000, 30000, 65000, 64500 - 54000 + 875 + 500]  # settled: FINAL, cache-weighted
     state = json.loads((agent_dir / mb.LEDGER_NAME).read_text())
-    assert list(state["helpers"].values()) == [65000]
+    assert list(state["helpers"].values()) == [11875]
 
 
 def test_a_helper_that_dies_keeps_the_spend_it_streamed(tmp_path):
