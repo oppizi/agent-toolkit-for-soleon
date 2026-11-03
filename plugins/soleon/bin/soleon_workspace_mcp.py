@@ -34,6 +34,8 @@ import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
 PROTOCOL_VERSION = "2025-03-26"
 SERVER_INFO = {"name": "soleon-workspace", "version": "0.4.15"}
 
@@ -386,25 +388,93 @@ _IMPL = {
     "list_dir": _list_dir,
 }
 
+#: The tools a READ-ONLY server (a `spawn_worker` worker's) publishes.
+READ_ONLY_TOOLS = ("read_file", "list_dir")
 
-def call_tool(ws: Workspace, name: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
-    """MCP `tools/call` result. Platform tools report failures as text that
-    starts with `Error:`/`Warning:`; we mirror that AND flag `isError` so an
-    MCP client can tell."""
-    fn = _IMPL.get(name)
-    if fn is None:
-        return {"content": [{"type": "text", "text": "Unknown tool: {}".format(name)}], "isError": True}
-    text = fn(ws, **(arguments or {}))
-    is_error = text.startswith("Error")
+
+def _local_result(ws: Workspace, name: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
+    text = _IMPL[name](ws, **(arguments or {}))
     out: Dict[str, Any] = {"content": [{"type": "text", "text": text}]}
-    if is_error:
+    if text.startswith("Error"):
         out["isError"] = True
     return out
 
 
+def _result_text(out: Dict[str, Any]) -> str:
+    return " ".join(str(p.get("text") or "") for p in out.get("content") or [] if p.get("type") == "text")
+
+
+class PlatformWorkspace:
+    """The agent's workspace ON SOLEON — the one its code execution reads and
+    writes. On the platform the file tools and `run_code_file` /
+    `write_and_run_code` share one workspace; locally the file tools used to
+    serve only the pulled snapshot, so the agent could not open a preview the
+    sandbox had just rendered, and the sandbox never saw a file the agent wrote.
+
+    With a platform attached, Soleon's copy is the truth: reads and listings go
+    there first and fall back to the snapshot (memory, files from the person's
+    own conversations) only when Soleon has no such file; writes and edits land
+    on Soleon first, then are mirrored into the snapshot. Paths under a
+    read-only root (the pulled skills) never leave this machine."""
+
+    def __init__(self, ws: Workspace, server):
+        self.ws = ws
+        self.server = server  # an AgentToolsServer publishing the four platform file tools
+
+    def _platform_path(self, raw: Any) -> Optional[str]:
+        """The workspace-relative path Soleon resolves, or None when `raw` is
+        not in the workspace (a skills path, or outside every root)."""
+        try:
+            resolved = self.ws.resolve(str(raw or ""), write=False)
+        except PermissionError:
+            return None
+        if not Workspace._is_under(resolved, self.ws.root):
+            return None
+        rel = resolved.relative_to(self.ws.root).as_posix()
+        return rel or "."
+
+    def _platform(self, name: str, arguments: Dict[str, Any], rel: str) -> Dict[str, Any]:
+        return self.server.call(name, dict(arguments, path=rel))
+
+    def call(self, name: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
+        rel = self._platform_path(arguments.get("path"))
+        if rel is None:
+            return _local_result(self.ws, name, arguments)
+        out = self._platform(name, arguments, rel)
+        failed = bool(out.get("isError")) or _result_text(out).startswith("Error")
+        if name in ("read_file", "list_dir"):
+            if not failed:
+                return out
+            local = _local_result(self.ws, name, arguments)
+            return out if local.get("isError") else local
+        if failed:
+            return out
+        # The write landed on Soleon: mirror it into the snapshot (best effort —
+        # Soleon's copy is the one that counts, and an edit whose text is only
+        # there must not fail here).
+        mirrored = _local_result(self.ws, name, arguments)
+        if mirrored.get("isError"):
+            _log("{} {}: saved on Soleon, not mirrored locally ({})".format(name, rel, _result_text(mirrored)[:200]))
+        return out
+
+
+def call_tool(ws: Workspace, name: str, arguments: Dict[str, Any],
+              platform: Optional[PlatformWorkspace] = None,
+              tools: Optional[List[str]] = None) -> Dict[str, Any]:
+    """MCP `tools/call` result. Platform tools report failures as text that
+    starts with `Error:`/`Warning:`; we mirror that AND flag `isError` so an
+    MCP client can tell."""
+    if name not in _IMPL or (tools is not None and name not in tools):
+        return {"content": [{"type": "text", "text": "Unknown tool: {}".format(name)}], "isError": True}
+    if platform is not None:
+        return platform.call(name, arguments or {})
+    return _local_result(ws, name, arguments)
+
+
 # --- JSON-RPC loop ---------------------------------------------------------------
 
-def handle_message(ws: Workspace, msg: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+def handle_message(ws: Workspace, msg: Dict[str, Any], platform: Optional[PlatformWorkspace] = None,
+                   tools: Optional[List[str]] = None) -> Optional[Dict[str, Any]]:
     """One request → one response dict (None for notifications)."""
     method = msg.get("method")
     msg_id = msg.get("id")
@@ -421,19 +491,21 @@ def handle_message(ws: Workspace, msg: Dict[str, Any]) -> Optional[Dict[str, Any
     if method == "ping":
         return {"jsonrpc": "2.0", "id": msg_id, "result": {}}
     if method == "tools/list":
-        return {"jsonrpc": "2.0", "id": msg_id, "result": {"tools": TOOLS}}
+        return {"jsonrpc": "2.0", "id": msg_id, "result": {
+            "tools": [t for t in TOOLS if tools is None or t["name"] in tools]}}
     if method == "tools/call":
         name = params.get("name") or ""
         arguments = params.get("arguments") or {}
         if not isinstance(arguments, dict):
             return {"jsonrpc": "2.0", "id": msg_id, "error": {"code": -32602, "message": "arguments must be an object"}}
-        return {"jsonrpc": "2.0", "id": msg_id, "result": call_tool(ws, name, arguments)}
+        return {"jsonrpc": "2.0", "id": msg_id, "result": call_tool(ws, name, arguments, platform, tools)}
     if msg_id is None:
         return None  # unknown notification — ignore
     return {"jsonrpc": "2.0", "id": msg_id, "error": {"code": -32601, "message": "Method not found: {}".format(method)}}
 
 
-def serve(ws: Workspace, stdin=None, stdout=None) -> None:
+def serve(ws: Workspace, stdin=None, stdout=None, platform: Optional[PlatformWorkspace] = None,
+          tools: Optional[List[str]] = None) -> None:
     inp = stdin or sys.stdin.buffer
     out = stdout or sys.stdout.buffer
     for raw in inp:
@@ -448,7 +520,7 @@ def serve(ws: Workspace, stdin=None, stdout=None) -> None:
         if not isinstance(msg, dict):
             continue
         try:
-            resp = handle_message(ws, msg)
+            resp = handle_message(ws, msg, platform, tools)
         except Exception as exc:  # noqa: BLE001 — the loop must survive any single call
             _log("internal error on {}: {}".format(msg.get("method"), exc))
             resp = {"jsonrpc": "2.0", "id": msg.get("id"), "error": {"code": -32603, "message": str(exc)}}
@@ -462,12 +534,45 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("root", help="the local workspace copy (.soleon/agents/<slug>/workspace)")
     ap.add_argument("--readable", action="append", default=[],
                     help="extra READ-ONLY root (repeatable) — e.g. the pulled skills/ dir")
+    ap.add_argument("--slug", default=None,
+                    help="the pulled agent: with --server-url, file tools work on its workspace ON SOLEON "
+                         "(the one code execution uses), falling back to this local snapshot")
+    ap.add_argument("--server-url", default=None, help="the Soleon MCP URL the agent was pulled from")
+    ap.add_argument("--app-env", default="dev")
+    ap.add_argument("--credentials", default=None)
+    ap.add_argument("--turn", default=None, help="a local worker's server: the agent turn its calls belong to")
+    ap.add_argument("--read-only", action="store_true",
+                    help="publish read_file and list_dir only (a spawn_worker worker's server)")
     args = ap.parse_args(argv)
     ws = Workspace(args.root, args.readable)
     ws.root.mkdir(parents=True, exist_ok=True)
-    _log("serving {} (readable: {})".format(ws.root, ", ".join(str(d) for d in ws.readable) or "-"))
-    serve(ws)
+    tools = list(READ_ONLY_TOOLS) if args.read_only else None
+    platform = None
+    if args.slug and args.server_url:
+        platform = PlatformWorkspace(ws, _platform_file_tools(args))
+    _log("serving {} (readable: {}; {})".format(
+        ws.root, ", ".join(str(d) for d in ws.readable) or "-",
+        "Soleon's workspace first via " + args.server_url if platform else "local snapshot only"))
+    serve(ws, platform=platform, tools=tools)
     return 0
+
+
+def _platform_file_tools(args: Any):
+    """An `AgentToolsServer` publishing exactly the platform's four file tools,
+    in the same platform session (conversation + turn) as the agent's other
+    tools, so a file the sandbox writes is the file `read_file` opens."""
+    import soleon_agent_tools_mcp as tools_mcp
+    from soleon_mcp_client import SoleonMcpClient
+    agent_dir = os.path.dirname(os.path.abspath(args.root))
+    entries = [{"name": n, "kind": "external", "description": "", "inputSchema": t["inputSchema"]}
+               for t in TOOLS for n in [t["name"]]]
+    turn = (tools_mcp.TurnTracker(None, fixed=args.turn) if args.turn
+            else tools_mcp.TurnTracker(os.path.join(agent_dir, tools_mcp.TURN_FILE_NAME)))
+    return tools_mcp.AgentToolsServer(
+        args.slug, entries, SoleonMcpClient(args.server_url, credentials_path=args.credentials),
+        app_env=args.app_env,
+        conversation=tools_mcp.ConversationTracker(os.path.join(agent_dir, ".local-conversation.json")),
+        turn=turn)
 
 
 if __name__ == "__main__":
