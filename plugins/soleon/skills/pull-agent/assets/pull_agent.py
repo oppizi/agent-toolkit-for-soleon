@@ -507,7 +507,10 @@ def subagent_frontmatter(name: str, description: str, model: str, effort: Option
         "      command: {}".format(json.dumps(sys.executable)),
         "      args: {}".format(json.dumps(
             [ws_py, ws_dir, "--readable", str(agent_dir.resolve())]
-            + [a for d in (readable_extra or []) for a in ("--readable", str(d))])),
+            + [a for d in (readable_extra or []) for a in ("--readable", str(d))]
+            # The file tools share the agent's Soleon workspace with its code
+            # execution, as on the platform; the snapshot is the fallback.
+            + ["--slug", slug, "--server-url", server_url])),
     ]
     if external_only is None or external_only:
         tools_args = [tools_py, "--slug", slug, "--tools", tools_json, "--server-url", server_url]

@@ -196,3 +196,78 @@ def test_edit_file_tolerates_whitespace_and_crlf(tmp_path):
     assert warn.startswith("Warning: old_text appears 2 times")
     assert ws_mod._edit_file(ws, path="b.txt", old_text="x", new_text="y", replace_all=True).startswith("Successfully")
     assert (tmp_path / "b.txt").read_text() == "y\ny\n"
+
+
+# --- the agent's workspace ON SOLEON (shared with its code execution) ----------
+
+class FakePlatform:
+    """Stands in for the AgentToolsServer that runs the platform's file tools."""
+
+    def __init__(self, files=None):
+        self.files = dict(files or {})
+        self.calls = []
+
+    def call(self, name, args):
+        self.calls.append((name, dict(args)))
+        path = args["path"]
+        if name == "read_file":
+            if path not in self.files:
+                return {"content": [{"type": "text", "text": "Error: File not found: " + path}], "isError": True}
+            return {"content": [{"type": "image", "data": "iVBOR", "mimeType": "image/png"}]}
+        if name == "write_file":
+            self.files[path] = args["content"]
+            return {"content": [{"type": "text", "text": "Successfully wrote"}]}
+        if name == "edit_file":
+            return {"content": [{"type": "text", "text": "Successfully edited " + path}]}
+        return {"content": [{"type": "text", "text": "\n".join(sorted(self.files))}]}
+
+
+def _platform_ws(tmp_path, files=None):
+    root = tmp_path / "workspace"
+    skills = tmp_path / "skills"
+    root.mkdir()
+    skills.mkdir()
+    ws = ws_mod.Workspace(str(root), [str(skills)])
+    fake = FakePlatform(files)
+    return ws, fake, ws_mod.PlatformWorkspace(ws, fake), root, skills
+
+
+def test_a_file_the_sandbox_rendered_is_read_from_soleon(tmp_path):
+    ws, fake, platform, root, _ = _platform_ws(tmp_path, {"out/a-front-preview.png": b""})
+    out = ws_mod.call_tool(ws, "read_file", {"path": str(root / "out/a-front-preview.png")}, platform)
+    assert out["content"] == [{"type": "image", "data": "iVBOR", "mimeType": "image/png"}]
+    assert fake.calls == [("read_file", {"path": "out/a-front-preview.png"})]
+
+
+def test_a_file_only_in_the_snapshot_falls_back_to_the_local_copy(tmp_path):
+    ws, fake, platform, root, _ = _platform_ws(tmp_path)
+    (root / "memory").mkdir()
+    (root / "memory" / "notes.md").write_text("hello\n")
+    out = ws_mod.call_tool(ws, "read_file", {"path": "/mnt/workspace/memory/notes.md"}, platform)
+    assert "1| hello" in out["content"][0]["text"] and "isError" not in out
+    assert fake.calls[0] == ("read_file", {"path": "memory/notes.md"})
+
+
+def test_a_write_lands_on_soleon_and_is_mirrored_locally(tmp_path):
+    ws, fake, platform, root, _ = _platform_ws(tmp_path)
+    out = ws_mod.call_tool(ws, "write_file", {"path": "spec-a.json", "content": "{}"}, platform)
+    assert "isError" not in out
+    assert fake.files["spec-a.json"] == "{}"
+    assert (root / "spec-a.json").read_text() == "{}"
+
+
+def test_skills_never_leave_this_machine(tmp_path):
+    ws, fake, platform, _, skills = _platform_ws(tmp_path)
+    (skills / "SKILL.md").write_text("skill\n")
+    out = ws_mod.call_tool(ws, "read_file", {"path": str(skills / "SKILL.md")}, platform)
+    assert "1| skill" in out["content"][0]["text"]
+    assert fake.calls == []
+
+
+def test_a_read_only_server_publishes_and_serves_reads_only(tmp_path):
+    ws = ws_mod.Workspace(str(tmp_path))
+    listed = ws_mod.handle_message(ws, {"jsonrpc": "2.0", "id": 1, "method": "tools/list"},
+                                   tools=list(ws_mod.READ_ONLY_TOOLS))
+    assert [t["name"] for t in listed["result"]["tools"]] == ["read_file", "list_dir"]
+    refused = ws_mod.call_tool(ws, "write_file", {"path": "x", "content": "y"}, tools=list(ws_mod.READ_ONLY_TOOLS))
+    assert refused["isError"] is True and not (tmp_path / "x").exists()

@@ -967,3 +967,68 @@ def test_a_stored_error_answers_its_own_error_and_detail():
     out = resolve_stored_result(client, client.call_tool("call_agent_tool", {}))
     assert out["error"] == "tool_error" and out["detail"] == "RuntimeError: boom"
     assert "next_action" not in out  # "download it" no longer applies
+
+
+# --- spawn_worker (the platform loop's tool, emulated locally) ------------------
+
+WORKER_TOOLS = [
+    {"name": "web_fetch", "kind": "external", "inputSchema": {"type": "object", "properties": {
+        "url": {"type": "string"}, "save_to": {"type": "string"}}, "required": ["url"]}},
+    {"name": "web_search", "kind": "external", "inputSchema": {"type": "object", "properties": {}}},
+    {"name": "read_skill", "kind": "external", "inputSchema": {"type": "object", "properties": {}}},
+    {"name": "write_and_run_code", "kind": "external", "inputSchema": {"type": "object", "properties": {}}},
+    {"name": "mcp_gmail_read", "kind": "external", "approval": True, "inputSchema": {"type": "object"}},
+    {"name": "read_file", "kind": "workspace", "inputSchema": {"type": "object"}},
+]
+
+
+def test_a_worker_keeps_the_read_tools_a_platform_worker_keeps():
+    assert shim.worker_tool_names(WORKER_TOOLS) == ["web_fetch", "web_search", "read_skill"]
+
+
+def test_spawn_worker_is_published_and_answers_in_the_platforms_envelope(tmp_path):
+    class Spawner:
+        def __init__(self):
+            self.tasks = []
+
+        def spawn(self, task, turn=None):
+            self.tasks.append(task)
+            return shim._text_result(json.dumps({"workerResult": "the hero photo is theirs"}))
+
+    spawner = Spawner()
+    server = shim.AgentToolsServer(SLUG, WORKER_TOOLS, client=None, spawn_worker=spawner)
+    assert "spawn_worker" in [t["name"] for t in server.published]
+    out = server.call("spawn_worker", {"task": "review the pictures"})
+    assert json.loads(out["content"][0]["text"]) == {"workerResult": "the hero photo is theirs"}
+    assert spawner.tasks == ["review the pictures"]
+
+
+def test_a_workers_web_fetch_cannot_save(tmp_path):
+    server = shim.AgentToolsServer(SLUG, WORKER_TOOLS, client=None, include_members=True,
+                                   read_only_views=shim.WORKER_READ_ONLY_VIEWS)
+    fetch = next(t for t in server.published if t["name"] == "web_fetch")
+    assert "save_to" not in fetch["inputSchema"]["properties"]
+    refused = server.call("web_fetch", {"url": "https://x", "save_to": "a.html"})
+    assert refused["isError"] is True and "read only" in refused["content"][0]["text"]
+
+
+def test_the_worker_runs_read_only_with_the_platform_workers_prompt(tmp_path):
+    tools_path = tmp_path / "tools.json"
+    tools_path.write_text(json.dumps({"state": "done", "result": {"tools": WORKER_TOOLS}}))
+    runner = shim.LocalSpawnWorker(slug=SLUG, tools_path=str(tools_path), server_url="https://s/mcp",
+                                   model="opus", binary="claude")
+    cmd = runner.worker_command("review the pictures", turn="t1")
+    assert cmd[cmd.index("--system-prompt") + 1] == shim.WORKER_PROMPT
+    assert cmd[cmd.index("--max-turns") + 1] == "15"
+    servers = json.loads(cmd[cmd.index("--mcp-config") + 1])["mcpServers"]
+    assert "--read-only" in servers["soleon-workspace"]["args"]
+    tool_args = servers["soleon-agent-tools"]["args"]
+    assert tool_args[tool_args.index("--only") + 1] == "web_fetch,web_search,read_skill"
+    assert "--worker" in tool_args
+
+
+def test_workers_follow_the_agents_workers_dial(tmp_path):
+    (tmp_path / "config.json").write_text(json.dumps({"loop": {"effort": {"workers": "auto"}}}))
+    assert shim.workers_enabled(str(tmp_path)) is True
+    (tmp_path / "config.json").write_text(json.dumps({"loop": {"effort": {"workers": "off"}}}))
+    assert shim.workers_enabled(str(tmp_path)) is False
