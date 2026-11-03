@@ -390,6 +390,22 @@ class SoleonMcpClient:
         self._token = str(entry["accessToken"])
         return self._token
 
+    def _reload_from_store(self) -> bool:
+        """Adopt a token another process saved since this one read it. Claude
+        Code and every sibling tools server share one credentials entry, and a
+        refresh rotates the refresh token: when another process refreshed first,
+        this process's own refresh fails, while the store already holds a
+        working token (2026-11-03: a build failed "token rejected" and the very
+        next call, 3 s later, worked). True when the store's token is new."""
+        if self._token_override:
+            return False
+        entry = self.store.find_entry(self.server_url)
+        fresh = str(entry.get("accessToken") or "") if entry else ""
+        if not fresh or fresh == self._token:
+            return False
+        self._entry, self._token = entry, fresh
+        return True
+
     def _try_refresh(self) -> bool:
         """ONE refresh_token grant. True when a new access token is in place."""
         entry = self._entry
@@ -460,6 +476,7 @@ class SoleonMcpClient:
         """One `tools/call`; returns the tool's parsed JSON envelope."""
         token = self._resolve_token()
         attempt = 0
+        reloaded = False
         while True:
             rpc_id = self._next_id
             self._next_id += 1
@@ -477,6 +494,10 @@ class SoleonMcpClient:
                     pass
                 if code == 401:
                     if self._try_refresh():
+                        token = self._token or token
+                        continue
+                    if not reloaded and self._reload_from_store():
+                        reloaded = True
                         token = self._token or token
                         continue
                     raise AuthError("Soleon rejected the token (401). " + RECONNECT_INSTRUCTION)
