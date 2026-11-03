@@ -430,6 +430,9 @@ def claude_binary() -> Optional[str]:
 #: limit this exists to leave behind. The ceiling below only stops a wedged
 #: process from holding the agent forever, and it fails loud when it fires.
 LOCAL_WORKER_TIMEOUT_S = 1800
+#: Claude Code writes its output as UTF-8; `text=True` alone decodes with the locale's code page, which on
+#: Windows (cp1252) turned every worker answer's em dash into "â€”" (2026-11-03).
+UTF8_PIPES = {"encoding": "utf-8", "errors": "replace"}
 #: A read-only spawn_worker is capped at WORKER_MAX_ITERATIONS steps of seconds each, so ten minutes is
 #: already a stall: one local worker went silent after its first model call and held the agent for 20 minutes
 #: (2026-11-02), long enough for the agent's prompt cache to lapse and its budget to run out before delivery.
@@ -556,7 +559,7 @@ class LocalWorkerRunner:
         else:
             try:
                 proc = self._run(cmd, capture_output=True, text=True, timeout=self.timeout_s,
-                                 stdin=subprocess.DEVNULL)
+                                 stdin=subprocess.DEVNULL, **UTF8_PIPES)
             except subprocess.TimeoutExpired:
                 proc = None
         if proc is None:
@@ -577,7 +580,7 @@ class LocalWorkerRunner:
         tail: List[str] = []
         err: List[str] = []
         proc = self._popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
-                           stdin=subprocess.DEVNULL)
+                           stdin=subprocess.DEVNULL, **UTF8_PIPES)
         log = None
         if self.stream_log_dir:
             os.makedirs(self.stream_log_dir, exist_ok=True)

@@ -173,7 +173,7 @@ def refresh(agent_dir: Path, pull: Dict[str, Any], draft_raw: Dict[str, Any], cl
     cmd = [sys.executable, str(plugin_root / "skills" / "pull-agent" / "assets" / "pull_agent.py"), "materialize",
            "--slug", slug, "--dir", str(agent_dir), "--server-url", server_url, "--model", model,
            "--plugin-root", str(plugin_root), "--keep-workspace"]
-    proc = runner(cmd, capture_output=True, text=True, timeout=120)
+    proc = runner(cmd, capture_output=True, text=True, timeout=120, encoding="utf-8", errors="replace")
     if proc.returncode != 0:
         raise RefreshError("materialize failed: {}".format((proc.stderr or proc.stdout or "").strip()[-800:]))
     try:
