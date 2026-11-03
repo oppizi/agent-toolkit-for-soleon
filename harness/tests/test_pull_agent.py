@@ -179,6 +179,8 @@ def test_spawn_worker_is_routed_locally_when_the_workers_dial_is_on(tmp_path, di
     missing_line = next((l for l in routing.splitlines() if "**Not available locally**" in l), "")
     assert ("`spawn_worker`" in ext_line) is offered
     assert ("`spawn_worker`" in missing_line) is not offered
+    # Claude Code names MCP tools with their server prefix; a bare call wastes the whole call.
+    assert "`mcp__soleon-agent-tools__write_and_run_code`" in routing
 
 
 def test_helper_subagents_and_workflows(pulled):
