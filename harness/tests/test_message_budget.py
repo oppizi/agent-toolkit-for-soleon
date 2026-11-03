@@ -263,7 +263,8 @@ def test_a_helper_runs_under_the_budget_hook_in_the_agents_turn(tmp_path):
     runner, calls = _runner(agent_dir)
     out = runner.run(WRAPPER, "what came in?", approved=False, turn="t1")
     assert out["content"][0]["text"] == "3 unread" and not out.get("isError")
-    cmd, _ = calls[0]
+    cmd, opts = calls[0]
+    assert opts["encoding"] == "utf-8"  # never the locale's code page (cp1252 mangled every em dash)
     flags = dict(zip(cmd, cmd[1:]))
     assert flags["--output-format"] == "stream-json" and "--verbose" in cmd
     assert "--no-session-persistence" in cmd                       # nothing left behind
