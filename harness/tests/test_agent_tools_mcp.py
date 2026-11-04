@@ -517,7 +517,9 @@ def test_the_worker_is_isolated_and_holds_only_the_integrations_tools(tmp_path):
     cmd = runner.command(WRAPPER, "what came in today?", approved=False)
     assert cmd[0] == "/opt/claude" and cmd[1:3] == ["-p", "what came in today?"]
     flags = dict(zip(cmd, cmd[1:]))
-    assert flags["--system-prompt"] == "You read Gmail."       # the platform worker's own prompt
+    # the platform worker's own prompt, plus how to read a long result in pages
+    assert flags["--system-prompt"] == "You read Gmail." + shim.HELPER_PAGING_NOTE
+    assert "read_result_page" in shim.HELPER_PAGING_NOTE
     assert flags["--model"] == "sonnet"
     assert flags["--setting-sources"] == "" and flags["--tools"] == ""
     assert "--strict-mcp-config" in cmd and "--no-session-persistence" in cmd

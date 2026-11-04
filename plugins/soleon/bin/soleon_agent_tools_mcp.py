@@ -65,6 +65,14 @@ SLOW_CALL_DUMP_S = 90
 #: Product Manager's helper as "saved it to a local file I have no tool to open" (2026-11-04). A longer
 #: text result is served in pages instead, the way the platform's own read_tool_result does.
 RESULT_PAGE_CHARS = 30_000
+#: Added to a local helper's platform prompt: that prompt lists only the integration's tools and says not to
+#: chain reads across turns, so a helper given the first page of a long meeting note reported it "truncated"
+#: and stopped (2026-11-04).
+HELPER_PAGING_NOTE = (
+    "\n\n[Long results] A tool result too long to return at once arrives as its first part, ending with a "
+    "note naming an id and an offset. That result is incomplete: call read_result_page with that id and "
+    "offset, and repeat until the note says \"End of result\", before you answer. These follow-up reads "
+    "are expected even though they span turns.")
 READ_RESULT_PAGE_TOOL = {
     "name": "read_result_page",
     "description": ("Read the next part of a tool result that was too long to return at once. Pass the id "
@@ -538,7 +546,7 @@ class LocalWorkerRunner:
             "type": "stdio", "command": sys.executable, "args": server_args}}}
         cmd = [self.binary or "", "-p", task,
                "--model", self.model,
-               "--system-prompt", str(worker["prompt"]),
+               "--system-prompt", str(worker["prompt"]) + HELPER_PAGING_NOTE,
                "--setting-sources", "",
                "--tools", "",
                "--strict-mcp-config", "--mcp-config", json.dumps(mcp),
@@ -1030,7 +1038,8 @@ class AgentToolsServer:
         text = self._pages[page_id]
         end = min(offset + RESULT_PAGE_CHARS, len(text))
         tail = ("\n\n(Showing characters {}-{} of {}. Call read_result_page with id={!r} and offset={} for "
-                "the rest.)".format(offset, end, len(text), page_id, end) if end < len(text) else
+                "the rest. This result is INCOMPLETE: read the rest before you answer.)".format(
+                    offset, end, len(text), page_id, end) if end < len(text) else
                 "\n\n(End of result {}: characters {}-{} of {}.)".format(page_id, offset, end, len(text)))
         return _text_result(text[offset:end] + tail, is_error)
 
