@@ -87,7 +87,6 @@ Produce `<slug>.agent_identity.allium` next to the identity file:
      <category>" rule → `contentFilters` strength. Be conservative: propose
      nothing the text doesn't clearly state. Strength/action enums come from
      `contract.json` (`guardrail_strengths`, `pii_actions`, …).
-   - **promptCaching**: NOT distilled — offered as a default in Step 3.
    - **tools / schedules**: NOT supported here (Claude Code `tools:` are
      built-ins, not platform MCP refs; schedules need a dep the plugin avoids).
    Summarize every proposed config item in plain words inside the
@@ -110,7 +109,7 @@ config {
     framework: Framework = <answered-or-stated>
     visibility: String = "private"
     soul: String = "<json-escaped full body>"
-    config_proposal: String = "<json-escaped {model?, evals?, guardrails?, promptCaching?}>"
+    config_proposal: String = "<json-escaped {model?, evals?, guardrails?}>"
 }
 
 entity AgentIdentity {
@@ -163,9 +162,6 @@ config, not restating the file:
 - **evals** (gap-id `config-evals`): list the proposed checks by name ("Never
   Invent Data; Always Cite Sources"). Confirm / drop individual ones / edit.
   Apply to `config_proposal.evals.standardEvals`.
-- **promptCaching** (gap-id `config-prompt-caching`): "enable prompt caching to
-  cut cost?"; if yes, "5-minute or 1-hour cache window?". Apply
-  `promptCaching` + `promptCacheTtl`.
 
 Update the spec (soul, invariants, and `config_proposal`) with each answer.
 
@@ -207,8 +203,7 @@ is a confirmed bundled skill from Step 3.5.
 Present to the user (from `<slug>.report.json`):
 1. The three output file paths.
 2. A plain-English summary: slug, display name, framework, app env; the
-   confirmed config (`config_keys` — model catalog id, guardrails, eval names,
-   prompt caching); the bundled skills (`skills_included` — id, display name,
+   confirmed config (`config_keys` — model catalog id, guardrails, eval names); the bundled skills (`skills_included` — id, display name,
    enabled, rendered byte size; flag any near the 64 KB cap); the extracted
    hard constraints (`invariants`); any content anomalies from the Security rule.
 3. State that the assets are validated and **ready to deploy**, that nothing

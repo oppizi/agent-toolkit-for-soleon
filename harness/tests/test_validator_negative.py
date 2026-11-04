@@ -204,8 +204,7 @@ def _body_with(config_extra):
 
 def test_positive_config_and_skills_schema_match():
     body = _body_with({
-        "config": {"model": "us.anthropic.claude-opus-4-8", "promptCaching": True,
-                   "promptCacheTtl": "1h",
+        "config": {"model": "us.anthropic.claude-opus-4-8",
                    "guardrails": {"piiEnabled": True, "piiEntities": {"EMAIL": "ANONYMIZE"}},
                    "evals": {"standardEvals": [{
                        "id": "x", "name": "X",
@@ -282,12 +281,12 @@ def test_config_schedules_rejected():
     assert any("schedules" in e for e in env_errors(_body_with({"config": {"schedules": []}})))
 
 
-def test_config_bad_prompt_cache_ttl():
-    assert env_errors(_body_with({"config": {"promptCacheTtl": "30m"}}))
+def test_config_retired_prompt_cache_ttl_refused():
+    assert any("retired" in e for e in env_errors(_body_with({"config": {"promptCacheTtl": "1h"}})))
 
 
-def test_config_prompt_caching_non_bool():
-    assert env_errors(_body_with({"config": {"promptCaching": "yes"}}))
+def test_config_retired_prompt_caching_refused():
+    assert any("retired" in e for e in env_errors(_body_with({"config": {"promptCaching": True}})))
 
 
 def test_config_bad_guardrail_enum():

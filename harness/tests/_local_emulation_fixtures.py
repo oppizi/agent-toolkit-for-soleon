@@ -47,8 +47,6 @@ DOCUMENT = {
     "automations": [{"id": "s1", "name": "Daily", "type": "schedule", "schedule": "0 9 * * *", "prompt": "Summarize",
                      "outputChannel": "slack", "timezone": "UTC", "paused": False, "destinationRaw": ""}],
     "userSchedulesEnabled": False,
-    "promptCaching": True,
-    "promptCacheTtl": "5m",
     "effort": {"default": "thorough", "ceiling": "exhaustive"},
     "loopDimensions": {"thinking": "auto"},
     "tokenBudget": 500000,

@@ -63,7 +63,6 @@ def test_materialize_writes_the_layout(pulled):
     assert cfg["loop"]["dailyTokenBudget"] == 2000000  # deployed-only key survives
     assert "guardrails" not in cfg  # draft says False → the deployed block is dropped
     assert cfg["schedules"][0]["id"] == "s1"  # platform-only, kept read-only
-    assert cfg["promptCaching"] is True and cfg["promptCacheTtl"] == "5m"
     assert cfg["evals"]["standardEvals"][0]["id"] == "terse"
     assert cfg["subagents"]["schemaVersion"] == 1
     # skills
@@ -379,7 +378,7 @@ def test_config_roundtrip_flat_to_nested_to_flat():
     """The two directions in soleon_agent_document agree on every behavioural field."""
     nested = doc.flat_document_to_config(DOCUMENT, {})
     flat_again = doc.config_to_flat_changes(nested)
-    for key in ("model", "computeMode", "access", "tools", "promptCaching", "promptCacheTtl",
+    for key in ("model", "computeMode", "access", "tools",
                 "effort", "loopDimensions", "tokenBudget", "evals", "subagents", "userSchedulesEnabled"):
         assert flat_again[key] == DOCUMENT[key], key
     assert flat_again["guardrails"] is False

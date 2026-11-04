@@ -73,7 +73,7 @@ def _build(scenario: str, tmp_path) -> dict:
         spec = write_spec(
             tmp_path, soul=soul,
             config_extra="    config_proposal: String = "
-            + json.dumps(json.dumps({"promptCaching": True, "promptCacheTtl": "1h"})),
+            + json.dumps(json.dumps({"guardrails": {"piiEnabled": True, "piiEntities": {"EMAIL": "ANONYMIZE"}}})),
         )
         return convert(spec, "dev", tmp_path / "out")
     if scenario == "skills":

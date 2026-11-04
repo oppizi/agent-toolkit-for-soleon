@@ -151,10 +151,9 @@ def _validate_config_envelope(cfg, contract: dict) -> list[str]:
                     errs.append("config.guardrails.requiredTopics must be non-empty strings")
             if "requiredTopicsStrictness" in g and g["requiredTopicsStrictness"] not in contract["required_topic_strictness"]:
                 errs.append("config.guardrails.requiredTopicsStrictness bad value")
-    if "promptCaching" in cfg and not isinstance(cfg["promptCaching"], bool):
-        errs.append("config.promptCaching must be a boolean")
-    if "promptCacheTtl" in cfg and cfg["promptCacheTtl"] not in contract["prompt_cache_ttl_values"]:
-        errs.append(f"config.promptCacheTtl must be one of {contract['prompt_cache_ttl_values']}")
+    for retired in ("promptCaching", "promptCacheTtl"):
+        if retired in cfg:
+            errs.append(f"config.{retired} is retired (prompt caching is always on)")
     if "user_schedules_enabled" in cfg and not isinstance(cfg["user_schedules_enabled"], bool):
         errs.append("config.user_schedules_enabled must be a boolean")
     tools = cfg.get("tools")

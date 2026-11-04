@@ -93,12 +93,10 @@ def _index_values(index_py: str) -> dict:
     """All fields derived from an ui_admin*/index.py source text.
 
     Computed for BOTH server files and asserted equal (dual-index parity)."""
-    # The promptCacheTtl + tools.upstreamOverrides.type enums are inline tuple
-    # literals inside the validators rather than named constants. Hardcode them
-    # but assert the source still spells them that way (mirrors the agent_pk
-    # composition assert) so a server change to either breaks here loudly.
-    if '("5m", "1h")' not in index_py:
-        raise SystemExit('sync_contract: promptCacheTtl enum ("5m", "1h") not found in index source')
+    # The tools.upstreamOverrides.type enum is an inline tuple literal inside
+    # the validator rather than a named constant. Hardcode it but assert the
+    # source still spells it that way (mirrors the agent_pk composition
+    # assert) so a server change breaks here loudly.
     if '("read", "write")' not in index_py:
         raise SystemExit('sync_contract: tools upstreamOverride type enum ("read", "write") not found')
     return {
@@ -116,7 +114,6 @@ def _index_values(index_py: str) -> dict:
             index_py, r'_SKILL_SLUG_RE\s*=\s*re\.compile\(r"([^"]+)"\)', "index.py"
         ),
         "skill_fields": _set_literal(index_py, "_SKILL_FIELDS", "index.py"),
-        "prompt_cache_ttl_values": ["5m", "1h"],
         "guardrail_strengths": _set_literal(index_py, "_GUARDRAIL_STRENGTHS", "index.py"),
         "pii_actions": _set_literal(index_py, "_PII_ACTIONS", "index.py"),
         "regex_actions": _set_literal(index_py, "_REGEX_ACTIONS", "index.py"),

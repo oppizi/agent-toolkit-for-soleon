@@ -53,7 +53,7 @@ the exact `POST /agents` request body plus the predicted DynamoDB CONFIG row.
 **v0.2 — what's now covered:** the request body carries the full `configFields`
 the No-channel create path accepts — `soul`, a distilled-then-confirmed `config`
 (model mapped from your alias, `evals` derived from your hard constraints,
-`guardrails` inferred from your safety language, prompt caching), and bundled
+`guardrails` inferred from your safety language), and bundled
 `skills`. Every emitted field is validated offline against the live server
 rules (offline-green ⇒ live-200).
 
@@ -328,7 +328,7 @@ To also bundle local skills, name their directories:
 The skill will: run a 2-second selfcheck → distill your identity file (soul +
 a proposed config) into an Allium spec → ask you only what the file cannot
 answer (the framework) and confirm the proposed config in plain language (the
-model mapping, guardrails, evals, prompt caching) plus a display name for each
+model mapping, guardrails, evals) plus a display name for each
 bundled skill → validate → write three files beside the spec:
 
 - `<slug>.request_body.json` — the `POST /agents` body (top-level
@@ -398,7 +398,7 @@ output contract is verified against 3.2.4 exactly). Set
 |---|---|---|
 | Deploy target app env | skill argument / `--app-env` converter flag | `dev` |
 | Bedrock model id | your frontmatter `model:` alias is mapped to a catalog id and **confirmed** at the elicit; aliases are never emitted raw | mapped from alias, or omitted (platform default) |
-| Config (model/evals/guardrails/prompt caching) | distilled from the identity, confirmed in plain language; nothing you must learn the schema for | proposed conservatively from honest signals only |
+| Config (model/evals/guardrails) | distilled from the identity, confirmed in plain language; nothing you must learn the schema for | proposed conservatively from honest signals only |
 | Skills | name local skill dirs with `--skill <path>` (repeatable); display name confirmed per skill | none bundled |
 | Framework | stated in the file or invocation → no question asked; otherwise one elicit turn | always asked (never silently defaulted) |
 | Engine version pin | `ALLIUM_ENGINE_UNPINNED=1` | pinned to `contract.json.engine_version` |

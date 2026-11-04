@@ -99,10 +99,6 @@
     "slackAuthorized": false,
     "visibility": "private"
   },
-  "prompt_cache_ttl_values": [
-    "5m",
-    "1h"
-  ],
   "regex_actions": [
     "ANONYMIZE",
     "BLOCK"

@@ -26,7 +26,7 @@ Risks to check against the profile: The type of agent decides almost everything 
 
 1. Read agent-profile.md (or run start-an-agent first). Say which Soleon system you're connected to
 2. get_agent(slug, app_env=<target>) — private or public, registration, channels; runtimeReady false with status idle is normal
-3. get_agent_document(slug, app_env=<target>, include="effective") — guardrails, tools and their approval switches, web and file tools, model, promptCaching, automations (schedules)
+3. get_agent_document(slug, app_env=<target>, include="effective") — guardrails, tools and their approval switches, web and file tools, model, automations (schedules)
 4. get_custom_mcp_server(<server from custom_<server>_read ids>, app_env=<target>) — check overrides.<target> for the database or connection it really uses; get_tool_policy(integration_id="custom_mcp:<server>", app_env=<target>). Neither shows other agents using the server: search list_agents / get_agent_document for it. Not an admin: ask one
 5. list_eval_runs(slug, app_env="dev") — latest results; runs don't record a version number, so compare dates with the promotion
 6. get_agent(slug, app_env) for each environment — the version to return to if it goes wrong

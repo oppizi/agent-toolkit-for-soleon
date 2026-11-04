@@ -291,7 +291,7 @@ Managing expectations — these are design boundaries, not oversights:
   cron validation (a third-party dep that would break the stdlib-only
   guarantee); Claude Code's `tools:` are built-ins, not platform MCP refs — no
   honest identity signal. Everything else in `config` (model, evals,
-  guardrails, prompt caching) is distilled + confirmed.
+  guardrails) is distilled + confirmed.
 - **Knowledge bases and MCP wiring** are future capability.
 - **The validation contract is a build-time snapshot** of platform source.
   At real distribution scale it must become server-published (named in

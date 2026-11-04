@@ -160,7 +160,7 @@ The **soul-fidelity judge** (`harness/soul_fidelity.md`) is an LLM rubric, not c
 - One bundled engine platform: `darwin-arm64`. Other platforms fall back to a version-pinned `cargo install` of `allium-cli@v3.2.4`.
 - Visibility is `private` only.
 - Soul (system prompt) and skill content travel **byte-exact** — no summarization.
-- `config` distillation covers **model, evals, guardrails, prompt caching** (distilled then confirmed). `config.schedules` (needs a third-party cron dep that would break stdlib-only) and `config.tools` (Claude Code `tools:` are built-ins, not platform MCP refs) are **deferred** — the converter rejects `schedules` loudly.
+- `config` distillation covers **model, evals, guardrails** (distilled then confirmed; prompt caching is always on and needs no setting). `config.schedules` (needs a third-party cron dep that would break stdlib-only) and `config.tools` (Claude Code `tools:` are built-ins, not platform MCP refs) are **deferred** — the converter rejects `schedules` loudly.
 - Skills are **operator-supplied** bundles (Claude Code has no `skills:` frontmatter key), with one elicit per skill for the display name the platform requires.
 - Knowledge bases and MCP wiring are future capability for `deploy-agent` (though the MCP server exposes tools for both — see `TOOLS.md`).
 - `plugins/soleon/README.md` is the user-facing install/troubleshooting doc (including the scope list a test keeps equal to the pin); the root `README.md` covers the experiment framing. `TOOLS.md` is the tool reference; keep it in sync when the server's catalog changes (tools are discovered live, so a stale `TOOLS.md` is a docs bug, not a plugin bug).

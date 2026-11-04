@@ -313,7 +313,6 @@ def test_config_proposal_model_evals_guardrails(resolved, tmp_path, monkeypatch)
     monkeypatch.setenv("CLAUDE_PLUGIN_ROOT", str(PLUGIN))
     proposal = {
         "model": "us.anthropic.claude-opus-4-8",
-        "promptCaching": True, "promptCacheTtl": "1h",
         "guardrails": {"piiEnabled": True, "piiEntities": {"EMAIL": "ANONYMIZE"}},
         "evals": {"standardEvals": [{
             "id": "never-invent", "name": "Never Invent Data",
@@ -327,7 +326,6 @@ def test_config_proposal_model_evals_guardrails(resolved, tmp_path, monkeypatch)
     assert validate(result["body"], result["projection"])["schema_match"]
     cfg = result["body"]["configFields"]["config"]
     assert cfg["model"] == "us.anthropic.claude-opus-4-8"
-    assert cfg["promptCacheTtl"] == "1h"
     assert cfg["evals"]["standardEvals"][0]["id"] == "never-invent"
     assert set(result["report"]["config_keys"]) == set(cfg)
 
@@ -445,7 +443,7 @@ def test_projection_identical_with_and_without_config_skills(resolved, tmp_path,
     plain = convert(write_spec(tmp_path / "a", soul=soul), "dev", tmp_path / "a/out")
     d = _write_skill_dir(tmp_path, "cite-sources", "cite", "body\n")
     rich = convert(
-        _proposal_spec(tmp_path / "b", {"promptCaching": True}, soul=soul),
+        _proposal_spec(tmp_path / "b", {"guardrails": {"piiEnabled": True, "piiEntities": {"EMAIL": "ANONYMIZE"}}}, soul=soul),
         "dev", tmp_path / "b/out", skill_inputs=[str(d)],
     )
     a, b = dict(plain["projection"]), dict(rich["projection"])

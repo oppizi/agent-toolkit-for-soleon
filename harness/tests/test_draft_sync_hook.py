@@ -148,7 +148,6 @@ def test_config_save_maps_nested_config_onto_the_flat_document(agent_dir, capsys
     cfg = json.loads((agent_dir / "config.json").read_text())
     cfg["agents"]["defaults"]["model"] = "us.anthropic.claude-opus-4-6-v1"
     cfg["loop"]["effort"] = {"default": "swift", "ceiling": "balanced"}
-    cfg["promptCaching"] = False
     cfg["guardrails"] = {"piiEnabled": True}
     cfg["schedules"].append({"id": "s2", "cron": "* * * * *", "prompt": "never synced"})
     (agent_dir / "config.json").write_text(json.dumps(cfg))
@@ -157,7 +156,6 @@ def test_config_save_maps_nested_config_onto_the_flat_document(agent_dir, capsys
     changes = FakeClient.instances[0].calls[0][1]["changes"]
     assert changes["model"] == "us.anthropic.claude-opus-4-6-v1"
     assert changes["effort"] == {"default": "swift", "ceiling": "balanced"}
-    assert changes["promptCaching"] is False
     assert changes["guardrails"] == {"piiEnabled": True}
     assert changes["tools"] == DOCUMENT["tools"]
     assert changes["loopDimensions"] == {"thinking": "auto"}

@@ -39,7 +39,7 @@ IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 # Spec config params the converter understands. `model` is an explicit Bedrock
 # catalog id (alias-guarded); `config_proposal` is the JSON-escaped distilled
-# config (model/evals/guardrails/promptCaching) the elicit step confirmed.
+# config (model/evals/guardrails) the elicit step confirmed.
 KNOWN_PARAMS = {
     "slug", "display_name", "framework", "visibility", "soul", "model",
     "config_proposal",
@@ -409,12 +409,12 @@ def validate_config(cfg: dict, contract: dict) -> None:
             )
     if "guardrails" in cfg:
         _validate_guardrails(cfg["guardrails"], contract)
-    if "promptCaching" in cfg and not isinstance(cfg["promptCaching"], bool):
-        raise ValidationError("config.promptCaching must be a boolean")
-    if "promptCacheTtl" in cfg and cfg["promptCacheTtl"] not in contract["prompt_cache_ttl_values"]:
-        raise ValidationError(
-            f"config.promptCacheTtl must be one of {contract['prompt_cache_ttl_values']}"
-        )
+    for retired in ("promptCaching", "promptCacheTtl"):
+        if retired in cfg:
+            raise ValidationError(
+                f"config.{retired} is retired: prompt caching is always on and Soleon "
+                "chooses the cache duration on every call"
+            )
     if "user_schedules_enabled" in cfg and not isinstance(cfg["user_schedules_enabled"], bool):
         raise ValidationError("config.user_schedules_enabled must be a boolean")
     if "tools" in cfg:

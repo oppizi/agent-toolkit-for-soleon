@@ -56,7 +56,6 @@ _LOOP_FIELDS: Tuple[Tuple[str, str], ...] = (
     ("dailyTotalTokenBudgetEnabled", "dailyTotalTokenBudgetEnabled"),
 )
 _DEFAULTS_FIELDS = ("model", "computeMode", "access", "accessUsers")
-_PROMPT_CACHE_TTLS = ("5m", "1h")
 
 #: Top-level document keys that are NOT behaviour and never come from config.json.
 #: Kept here so the inverse mapping never invents them.
@@ -120,10 +119,6 @@ def flat_document_to_config(flat: Dict[str, Any], deployed_config: Optional[Dict
         patch["guardrails"] = g if isinstance(g, dict) else None
     if flat.get("tools") is not None:
         patch["tools"] = flat["tools"]
-    if isinstance(flat.get("promptCaching"), bool):
-        patch["promptCaching"] = flat["promptCaching"]
-    if flat.get("promptCacheTtl") in _PROMPT_CACHE_TTLS:
-        patch["promptCacheTtl"] = flat["promptCacheTtl"]
     loop: Dict[str, Any] = {}
     for flat_key, cfg_key in _LOOP_FIELDS:
         v = flat.get(flat_key)
@@ -204,8 +199,6 @@ def config_to_flat_changes(config: Dict[str, Any]) -> Dict[str, Any]:
         agents.defaults.accessUsers  → accessUsers
         guardrails (dict | absent)   → guardrails (dict | False)
         tools (list)                 → tools
-        promptCaching (bool)         → promptCaching
-        promptCacheTtl ("5m"|"1h")   → promptCacheTtl
         loop.effort                  → effort
         loop.dimensions              → loopDimensions
         loop.interruption            → interruption
@@ -235,10 +228,6 @@ def config_to_flat_changes(config: Dict[str, Any]) -> Dict[str, Any]:
     changes["guardrails"] = g if isinstance(g, dict) else False
     if isinstance(config.get("tools"), list):
         changes["tools"] = config["tools"]
-    if isinstance(config.get("promptCaching"), bool):
-        changes["promptCaching"] = config["promptCaching"]
-    if config.get("promptCacheTtl") in _PROMPT_CACHE_TTLS:
-        changes["promptCacheTtl"] = config["promptCacheTtl"]
     loop = config.get("loop")
     if isinstance(loop, dict):
         for flat_key, cfg_key in _LOOP_FIELDS:

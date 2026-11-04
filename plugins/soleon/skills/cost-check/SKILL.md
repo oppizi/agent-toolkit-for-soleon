@@ -11,7 +11,7 @@ Shows an agent's dollar cost by model and day, and how much was test traffic.
 
 ## Before you start
 
-- **The model and the budgets set the bill.** The model, token budgets per message and per user per day (0 means no limit), thinking effort and prompt caching drive cost. *Check:* How many conversations a day, and what cost per month is acceptable?
+- **The model and the budgets set the bill.** The model, token budgets per message and per user per day (0 means no limit), and thinking effort drive cost. Prompt caching is always on and Soleon picks the cache duration, so it is not a setting to check. *Check:* How many conversations a day, and what cost per month is acceptable?
 
 ## Steps
 
