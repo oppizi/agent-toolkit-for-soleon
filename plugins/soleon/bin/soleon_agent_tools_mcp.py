@@ -60,6 +60,21 @@ POLL_INTERVAL_S = 1.5
 #: interval), so a silent stall shows where it is blocked.
 SLOW_CALL_DUMP_S = 90
 
+#: Claude Code moves any MCP result over ~50k chars into a file and hands the model only a preview, and an
+#: integration helper has no tool to open that file: an 84k-char Drive meeting note reached the Soleon
+#: Product Manager's helper as "saved it to a local file I have no tool to open" (2026-11-04). A longer
+#: text result is served in pages instead, the way the platform's own read_tool_result does.
+RESULT_PAGE_CHARS = 30_000
+READ_RESULT_PAGE_TOOL = {
+    "name": "read_result_page",
+    "description": ("Read the next part of a tool result that was too long to return at once. Pass the id "
+                    "and offset the result's last line names."),
+    "inputSchema": {"type": "object", "properties": {
+        "id": {"type": "string", "description": "The result id the truncated result names."},
+        "offset": {"type": "integer", "description": "The character offset to continue from."}},
+        "required": ["id", "offset"]},
+}
+
 #: A parameter whose schema default is an email address names the account the
 #: PLATFORM connection is authorized for — the platform filled that default in
 #: from the stored credential. A LOCAL model has an unrelated address in front
@@ -961,6 +976,10 @@ class AgentToolsServer:
         self.spawn_worker = spawn_worker if spawn_worker is not None and "spawn_worker" not in taken else None
         if self.spawn_worker is not None:
             self.published.append(json.loads(json.dumps(SPAWN_WORKER_TOOL)))
+        #: Long results this process returned in pages: id → full text.
+        self._pages: Dict[str, str] = {}
+        if tools and READ_RESULT_PAGE_TOOL["name"] not in taken:
+            self.published.append(json.loads(json.dumps(READ_RESULT_PAGE_TOOL)))
         #: A WORKER's server: tool → the writing parameter its view drops and refuses.
         self.read_only_views = dict(read_only_views or {})
         for t in self.published:
@@ -990,6 +1009,44 @@ class AgentToolsServer:
         self.pre_approved = pre_approved
 
     def call(self, name: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
+        if name == READ_RESULT_PAGE_TOOL["name"] and name not in self._platform_name:
+            return self._read_page(arguments or {})
+        return self._paged(name, self._call(name, arguments))
+
+    def _paged(self, name: str, out: Dict[str, Any]) -> Dict[str, Any]:
+        """A text-only result longer than RESULT_PAGE_CHARS comes back as its first page, with the id and
+        offset that read_result_page continues from."""
+        parts = out.get("content") or []
+        if not parts or any(p.get("type") != "text" for p in parts):
+            return out
+        text = "\n".join(p["text"] for p in parts)
+        if len(text) <= RESULT_PAGE_CHARS:
+            return out
+        page_id = "r{}".format(len(self._pages) + 1)
+        self._pages[page_id] = text
+        return self._page(page_id, 0, out.get("isError", False))
+
+    def _page(self, page_id: str, offset: int, is_error: bool = False) -> Dict[str, Any]:
+        text = self._pages[page_id]
+        end = min(offset + RESULT_PAGE_CHARS, len(text))
+        tail = ("\n\n(Showing characters {}-{} of {}. Call read_result_page with id={!r} and offset={} for "
+                "the rest.)".format(offset, end, len(text), page_id, end) if end < len(text) else
+                "\n\n(End of result {}: characters {}-{} of {}.)".format(page_id, offset, end, len(text)))
+        return _text_result(text[offset:end] + tail, is_error)
+
+    def _read_page(self, args: Dict[str, Any]) -> Dict[str, Any]:
+        page_id = str(args.get("id") or "")
+        if page_id not in self._pages:
+            return _text_result("No long result {!r} in this session; call the tool again.".format(page_id), True)
+        try:
+            offset = int(args.get("offset") or 0)
+        except (TypeError, ValueError):
+            return _text_result("offset must be a whole number.", True)
+        if not 0 <= offset < len(self._pages[page_id]):
+            return _text_result("offset must be between 0 and {}.".format(len(self._pages[page_id]) - 1), True)
+        return self._page(page_id, offset)
+
+    def _call(self, name: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
         if name not in {t["name"] for t in self.published}:
             return _text_result("Unknown tool {!r} — not one of this agent's external tools.".format(name), True)
         args = dict(arguments or {})
