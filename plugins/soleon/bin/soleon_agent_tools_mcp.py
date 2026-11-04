@@ -433,6 +433,23 @@ LOCAL_WORKER_TIMEOUT_S = 1800
 #: Claude Code writes its output as UTF-8; `text=True` alone decodes with the locale's code page, which on
 #: Windows (cp1252) turned every worker answer's em dash into "â€”" (2026-11-03).
 UTF8_PIPES = {"encoding": "utf-8", "errors": "replace"}
+#: Claude Code refuses an MCP result over MAX_MCP_OUTPUT_TOKENS (default 25,000) and hands the model an
+#: "exceeds maximum allowed tokens" error instead. A helper exists to read one integration's raw results, and
+#: the platform serves up to 128k chars per result (~85k tokens at dense HTML's ~1.5 chars/token), so a long
+#: meeting note in Drive could never reach the helper (2026-11-04). Helpers get a cap that fits a full result.
+HELPER_MCP_OUTPUT_TOKENS = 100_000
+
+
+def _helper_env() -> Dict[str, str]:
+    """The helper's environment: ours, with the MCP result cap raised to fit a platform result
+    (never lowered when the person set a larger one)."""
+    env = dict(os.environ)
+    try:
+        current = int(env.get("MAX_MCP_OUTPUT_TOKENS") or 0)
+    except ValueError:
+        current = 0
+    env["MAX_MCP_OUTPUT_TOKENS"] = str(max(current, HELPER_MCP_OUTPUT_TOKENS))
+    return env
 #: A read-only spawn_worker is capped at WORKER_MAX_ITERATIONS steps of seconds each, so ten minutes is
 #: already a stall: one local worker went silent after its first model call and held the agent for 20 minutes
 #: (2026-11-02), long enough for the agent's prompt cache to lapse and its budget to run out before delivery.
@@ -559,7 +576,7 @@ class LocalWorkerRunner:
         else:
             try:
                 proc = self._run(cmd, capture_output=True, text=True, timeout=self.timeout_s,
-                                 stdin=subprocess.DEVNULL, **UTF8_PIPES)
+                                 stdin=subprocess.DEVNULL, env=_helper_env(), **UTF8_PIPES)
             except subprocess.TimeoutExpired:
                 proc = None
         if proc is None:
@@ -580,7 +597,7 @@ class LocalWorkerRunner:
         tail: List[str] = []
         err: List[str] = []
         proc = self._popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
-                           stdin=subprocess.DEVNULL, **UTF8_PIPES)
+                           stdin=subprocess.DEVNULL, env=_helper_env(), **UTF8_PIPES)
         log = None
         if self.stream_log_dir:
             os.makedirs(self.stream_log_dir, exist_ok=True)

@@ -489,6 +489,26 @@ def test_a_wrapper_call_runs_its_worker_locally_and_returns_its_answer(tmp_path)
     assert len(calls) == 1
 
 
+def test_a_worker_can_receive_a_full_platform_result(tmp_path, monkeypatch):
+    """Claude Code's default 25k-token MCP result cap refused a long Drive
+    meeting note the platform returned whole (2026-11-04); the helper runs
+    with a cap that fits a platform result, and a larger one is kept."""
+    seen = []
+    (tmp_path / "config.json").write_text(json.dumps({"loop": {"tokenBudgetEnabled": False}}))
+
+    def fake_run(cmd, **opts):
+        seen.append(opts.get("env") or {})
+        return _Proc(json.dumps({"type": "result", "subtype": "success", "is_error": False, "result": "ok"}))
+    runner = shim.LocalWorkerRunner(slug=SLUG, tools_path=str(tmp_path / "tools.json"),
+                                    server_url="https://mcp-dev.oppizi.com/mcp", model="sonnet",
+                                    binary="/opt/claude", runner=fake_run)
+    monkeypatch.delenv("MAX_MCP_OUTPUT_TOKENS", raising=False)
+    _server(tmp_path, runner).call("mcp_gmail_read", {"prompt": "read the notes"})
+    monkeypatch.setenv("MAX_MCP_OUTPUT_TOKENS", "200000")
+    _server(tmp_path, runner).call("mcp_gmail_read", {"prompt": "read the notes"})
+    assert [e.get("MAX_MCP_OUTPUT_TOKENS") for e in seen] == ["100000", "200000"]
+
+
 def test_the_worker_is_isolated_and_holds_only_the_integrations_tools(tmp_path):
     """Every flag is load-bearing: no settings (so no plugin hooks record fake
     turns), no built-ins, none of the parent's MCP servers, nothing prompted."""
