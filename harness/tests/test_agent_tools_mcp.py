@@ -160,7 +160,7 @@ def test_tools_list_publishes_external_tools_with_own_schema_and_approval_flag(s
     server = make_server(url, creds)
     resp = shim.handle_message(server, {"jsonrpc": "2.0", "id": 1, "method": "tools/list"})
     tools = {t["name"]: t for t in resp["result"]["tools"]}
-    assert set(tools) == {"web_search", "custom_echo-server_read", "custom_echo-server_write"}
+    assert set(tools) == {"web_search", "custom_echo-server_read", "custom_echo-server_write", "read_result_page"}
     assert tools["web_search"]["inputSchema"] == TOOLS[2]["inputSchema"]
     assert tools["web_search"]["description"] == "Search the web."
     gated = tools["custom_echo-server_write"]
@@ -410,7 +410,8 @@ def test_stdio_end_to_end(soleon, tmp_path):
     lines = [json.loads(l) for l in out.decode().splitlines() if l.strip()]
     assert [l["id"] for l in lines] == [1, 2, 3], err.decode()
     assert lines[0]["result"]["serverInfo"]["name"] == "soleon-agent-tools"
-    assert {t["name"] for t in lines[1]["result"]["tools"]} == {"web_search", "custom_echo-server_read", "custom_echo-server_write"}
+    assert {t["name"] for t in lines[1]["result"]["tools"]} == {"web_search", "custom_echo-server_read", "custom_echo-server_write",
+                                                               "read_result_page"}
     assert json.loads(lines[2]["result"]["content"][0]["text"]) == [{"title": "Paris"}]
     assert GOOD not in err.decode()
 
@@ -1013,11 +1014,51 @@ def test_a_result_answered_as_a_link_reaches_the_local_agent_whole():
     client = _LinkClient(stored={"op": "tool_call", "callId": "lc_0123456789abcdef01234567",
                                  "turnId": "t1", "sessionId": "ses_x", "tool": "send_email",
                                  "result": big, "elapsed_ms": 12})
-    out = shim.AgentToolsServer(SLUG, MEMBERS, client=client, include_members=True).call(
-        "send_email", {"to": "sam@example.com"})
+    server = shim.AgentToolsServer(SLUG, MEMBERS, client=client, include_members=True)
+    out = server.call("send_email", {"to": "sam@example.com"})
     assert not out.get("isError"), out
     assert client.opened == ["https://bucket.s3.amazonaws.com/local-call-results/lc_x.json?X-Amz-Signature=s"]
-    assert out["content"][0]["text"] == big
+    assert _read_all_pages(server, out) == big
+
+
+def _read_all_pages(server, out):
+    """Follow a paged result's read_result_page hints to the whole text."""
+    import re
+    text, got = out["content"][0]["text"], ""
+    while True:
+        more = re.search(r"\n\n\(Showing characters \d+-(\d+) of \d+\. Call read_result_page with id='(\w+)'", text)
+        if not more:
+            return got + re.sub(r"\n\n\(End of result \w+: characters \d+-\d+ of \d+\.\)$", "", text)
+        got += text[:more.start()]
+        page = server.call("read_result_page", {"id": more.group(2), "offset": int(more.group(1))})
+        assert not page.get("isError"), page
+        text = page["content"][0]["text"]
+
+
+def test_a_long_result_comes_in_pages_a_model_can_read():
+    """Claude Code files a result over ~50k chars away where a helper cannot
+    open it (an 84k-char meeting note, 2026-11-04): every page stays under the
+    page size and the pages rebuild the result exactly."""
+    big = "".join("line {}\n".format(i) for i in range(12_000))
+    client = _LinkClient(stored={"op": "tool_call", "callId": "lc_0123456789abcdef01234567",
+                                 "turnId": "t1", "sessionId": "ses_x", "tool": "send_email",
+                                 "result": big, "elapsed_ms": 12})
+    server = shim.AgentToolsServer(SLUG, MEMBERS, client=client, include_members=True)
+    out = server.call("send_email", {"to": "sam@example.com"})
+    assert len(out["content"][0]["text"]) < shim.RESULT_PAGE_CHARS + 200
+    assert "read_result_page" in out["content"][0]["text"]
+    assert _read_all_pages(server, out) == big
+    assert server.call("read_result_page", {"id": "r9", "offset": 0})["isError"]
+    assert server.call("read_result_page", {"id": "r1", "offset": len(big)})["isError"]
+
+
+def test_a_short_result_is_returned_whole_without_a_page_note():
+    client = _LinkClient(stored={"op": "tool_call", "callId": "lc_0123456789abcdef01234567",
+                                 "turnId": "t1", "sessionId": "ses_x", "tool": "send_email",
+                                 "result": "short", "elapsed_ms": 12})
+    out = shim.AgentToolsServer(SLUG, MEMBERS, client=client, include_members=True).call(
+        "send_email", {"to": "sam@example.com"})
+    assert out["content"][0]["text"] == "short"
 
 
 def test_a_failed_download_is_an_error_never_an_empty_result():
