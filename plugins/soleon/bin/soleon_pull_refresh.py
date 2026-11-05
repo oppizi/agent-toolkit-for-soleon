@@ -1,27 +1,35 @@
 #!/usr/bin/env python3
-"""UserPromptSubmit hook: a pulled agent follows the platform.
+"""PreToolUse(Agent) hook: a pulled agent follows the platform.
 
 Local ↔ platform sync used to be one-way — every local save became a
 `patch_agent_draft`, but an edit made in the Soleon editor never came back
 until the person re-ran `/pull-agent` (2026-09-20: "the local version needs
-to stay in sync with the latest updates"). This hook closes the loop. Before
-every prompt in a project that holds a pulled agent (`.soleon/agents/<slug>/
-pull.json`) it asks the platform for the draft's version stamp; when the stamp
-differs from the one the last pull (or save) recorded, it re-runs the pull
-headlessly — the same reads the `/pull-agent` skill makes, then the same
-`materialize` step — so the subagent that answers THIS prompt reasons with the
-platform's current SOUL, config, skills, evals and system prompt.
+to stay in sync with the latest updates"). This hook closes the loop. When
+the session is about to start a pulled agent's subagent (the Agent tool
+naming `<slug>`, or one of its configured helpers `<slug>--<name>`, held at
+`.soleon/agents/<slug>/pull.json`) it asks the platform for the draft's
+version stamp; when the stamp differs from the one the last pull (or save)
+recorded, it re-runs the pull headlessly — the same reads the `/pull-agent`
+skill makes, then the same `materialize` step — before Claude Code reads the
+subagent's definition, so THIS run reasons with the platform's current SOUL,
+config, skills, evals and system prompt.
+
+It used to run before every prompt (UserPromptSubmit), so every message of
+every session in a project holding a pulled agent waited on the platform —
+~1 s for the version read, ~50 s when the draft had changed — even in a
+session that never called the agent (2026-11-04, agent-infra). Only a run of
+the agent needs it current.
 
 Rules:
 * Nothing on the wire when the version matches beyond the one
-  `get_agent_draft` read — that is the per-prompt cost, and there is none at
-  all in a project with no pulled agent.
+  `get_agent_draft` read — that is the per-run cost, and there is none for
+  any other tool call or subagent.
 * The local `workspace/` is never touched: it is session data (memory, notes)
   the person may have edited, not agent definition.
 * A pending save CONFLICT (`.pull/conflict.json`, written by the save hook)
   wins: the platform is NOT pulled over local edits that failed to push; the
   person is reminded to resolve it (reload theirs, or adopt-etag and save).
-* Never blocks the prompt (exit 0 always). A refresh that fails is reported as
+* Never blocks the run (exit 0 always). A refresh that fails is reported as
   context Claude relays, with the local copy left as it was.
 * Output: JSON with `systemMessage` (shown to the person) and
   `hookSpecificOutput.additionalContext` (so Claude knows the agent changed
@@ -49,7 +57,7 @@ from soleon_mcp_client import (  # noqa: E402
 )
 
 EXIT_OK = 0
-HOOK_EVENT = "UserPromptSubmit"
+HOOK_EVENT = "PreToolUse"
 AGENTS_ROOT = Path(".soleon") / "agents"
 
 
@@ -75,6 +83,18 @@ def pulled_agent_dirs(cwd: Path) -> List[Path]:
     if not root.is_dir():
         return []
     return sorted(p for p in root.iterdir() if p.is_dir() and (p / doc.PULL_JSON).is_file())
+
+
+def started_agent_dir(hook: Dict[str, Any]) -> Optional[Path]:
+    """The pulled agent this Agent call starts — `<slug>` itself or one of its
+    helpers `<slug>--<name>` — else None (any other subagent, or another tool)."""
+    tool_input = hook.get("tool_input") if isinstance(hook.get("tool_input"), dict) else {}
+    subagent = tool_input.get("subagent_type")
+    if not isinstance(subagent, str) or not subagent:
+        return None
+    slug = subagent.partition("--")[0]
+    cwd = Path(hook.get("cwd") or os.getcwd())
+    return next((d for d in pulled_agent_dirs(cwd) if d.name == slug), None)
 
 
 def version_of(draft_raw: Dict[str, Any]) -> str:
@@ -229,10 +249,10 @@ def check_agent(agent_dir: Path, client_factory=SoleonMcpClient, runner=subproce
 
 def main(argv: Optional[List[str]] = None, stream=None, client_factory=SoleonMcpClient, runner=subprocess.run) -> int:
     hook = read_hook_input(stream)
-    cwd = Path(hook.get("cwd") or os.getcwd())
-    messages = [m for m in (check_agent(d, client_factory=client_factory, runner=runner) for d in pulled_agent_dirs(cwd)) if m]
-    if messages:
-        text = "\n".join(messages)
+    agent_dir = started_agent_dir(hook)
+    message = check_agent(agent_dir, client_factory=client_factory, runner=runner) if agent_dir else None
+    if message:
+        text = message
         sys.stdout.write(json.dumps({
             "systemMessage": text,
             "hookSpecificOutput": {"hookEventName": HOOK_EVENT, "additionalContext": text},

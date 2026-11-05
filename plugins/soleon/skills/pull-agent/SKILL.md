@@ -196,8 +196,8 @@ From the script's JSON summary tell the user, in plain words:
 5. **The edit loop**: editing `SOUL.md`, `config.json`, `skills/**`, or
    `evals/*.json` pushes to their Soleon draft on every save (the plugin's
    hook); a conflict with an edit made elsewhere stops and asks. Platform
-   edits come back on their own: before every prompt the plugin's
-   UserPromptSubmit hook compares the draft version and re-pulls the local
+   edits come back on their own: each time the session starts the agent, the
+   plugin's PreToolUse hook compares the draft version and re-pulls the local
    copy (all but `workspace/`) when it changed, telling the user. The
    `workspace/` copy is read-only towards the platform (never pushed).
    Helper/workflow files and `pull.json` are local only. Going live is still
