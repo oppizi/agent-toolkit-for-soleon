@@ -189,7 +189,12 @@ runs each `evals/*.json` against the local subagent, fetches the platform's judg
 prompt live (`get_eval_judge_prompt` — never vendored), runs it on the same local
 model and writes `evals/results/<ts>-<evalId>.json` with `score` / `subScores` /
 `reasoning`. Scores only — the platform never adjudicates pass/fail, and neither
-does this.
+does this. An eval with declared tool results (`toolResponses`) or a clock
+(`now`) runs here too: for the length of the case the local tool server answers
+the declared calls itself and gives `convert_time(time="now")` the eval's time.
+Use this, not the platform's `run_eval`, while you tune a pulled agent: a
+platform eval starts a full agent session per case, and the Cost tab charges
+each case its share of the runtime on top of its tokens.
 
 **What is NOT emulated** (platform-only, listed read-only in `config.json` and
 in the pull summary): channels, the daily token budgets, schedules, guardrails,
