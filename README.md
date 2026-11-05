@@ -226,7 +226,7 @@ platform's test sandbox. The draft IS the local state; there is no separate push
 An edit made elsewhere in the meantime (the Soleon editor, another session) is a
 conflict: the hook stops the session and asks you to reload theirs
 (`/pull-agent` again) or overwrite with yours. The reverse direction is
-automatic: before every prompt the plugin checks each pulled agent's draft
+automatic: each time the session starts a pulled agent, the plugin checks its draft
 version on the platform and, when it changed elsewhere (the Soleon editor,
 another session), re-pulls the local copy — everything but `workspace/` — so
 the run uses the current agent; you are told when that happened. Going live is still

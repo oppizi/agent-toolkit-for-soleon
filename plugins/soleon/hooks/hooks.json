@@ -1,24 +1,23 @@
 {
-  "description": "Soleon local agent emulation — (1) every save under .soleon/agents/<slug>/ (SOUL.md, config.json, skills/, evals/) is pushed to the platform draft instantly via patch_agent_draft; a conflict stops the session and asks (exit 2); files anywhere else are ignored. (2) Each run of a pulled agent's subagent is recorded on the platform trace as ONE turn — the prompt, every tool call, the answer — via record_agent_turn (SubagentStart mints the turn id, SubagentStop reports the transcript); other subagents are untouched. (3) Before every prompt, each pulled agent in the project is checked against the platform (one get_agent_draft read); when the draft changed elsewhere (the Soleon editor, another session) the local copy is re-pulled and re-materialized so the run uses the current agent — workspace/ untouched, a pending save conflict wins, never blocks the prompt. (4) Before every tool call inside a pulled agent's run, the message's token spend so far — the agent's own model calls plus every local helper's — is checked against the agent's Per Message Token Budget; at Soleon's wind-down point (85%) the call is refused and the agent answers from what it has, as it would on Soleon.",
+  "description": "Soleon local agent emulation — (1) every save under .soleon/agents/<slug>/ (SOUL.md, config.json, skills/, evals/) is pushed to the platform draft instantly via patch_agent_draft; a conflict stops the session and asks (exit 2); files anywhere else are ignored. (2) Each run of a pulled agent's subagent is recorded on the platform trace as ONE turn — the prompt, every tool call, the answer — via record_agent_turn (SubagentStart mints the turn id, SubagentStop reports the transcript); other subagents are untouched. (3) When the session starts a pulled agent's subagent (the Agent tool naming it or one of its helpers), that agent is checked against the platform (one get_agent_draft read); when the draft changed elsewhere (the Soleon editor, another session) the local copy is re-pulled and re-materialized before the run reads it — workspace/ untouched, a pending save conflict wins, never blocks the run; no other prompt, tool call or subagent pays for it. (4) Before every tool call inside a pulled agent's run, the message's token spend so far — the agent's own model calls plus every local helper's — is checked against the agent's Per Message Token Budget; at Soleon's wind-down point (85%) the call is refused and the agent answers from what it has, as it would on Soleon. Hooks that fire for every tool call check their input in the shell first and start Python only when it can concern a pulled agent (a subagent's tool call; a save under .soleon/).",
   "hooks": {
-    "UserPromptSubmit": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "p=python3; \"$p\" -c \"\" 2>/dev/null || p=python; \"$p\" \"${CLAUDE_PLUGIN_ROOT}/bin/soleon_pull_refresh.py\"",
-            "timeout": 300
-          }
-        ]
-      }
-    ],
     "PreToolUse": [
       {
         "hooks": [
           {
             "type": "command",
-            "command": "p=python3; \"$p\" -c \"\" 2>/dev/null || p=python; \"$p\" \"${CLAUDE_PLUGIN_ROOT}/bin/soleon_message_budget.py\" agent-pretool",
+            "command": "i=$(cat); case \"$i\" in *'\"agent_id\"'*) ;; *) exit 0 ;; esac; p=python3; \"$p\" -c \"\" 2>/dev/null || p=python; printf '%s' \"$i\" | \"$p\" \"${CLAUDE_PLUGIN_ROOT}/bin/soleon_message_budget.py\" agent-pretool",
             "timeout": 10
+          }
+        ]
+      },
+      {
+        "matcher": "Agent|Task",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "i=$(cat); case \"$i\" in *'\"subagent_type\"'*) ;; *) exit 0 ;; esac; [ -d \"${CLAUDE_PROJECT_DIR:-.}/.soleon/agents\" ] || exit 0; p=python3; \"$p\" -c \"\" 2>/dev/null || p=python; printf '%s' \"$i\" | \"$p\" \"${CLAUDE_PLUGIN_ROOT}/bin/soleon_pull_refresh.py\"",
+            "timeout": 300
           }
         ]
       }
@@ -29,7 +28,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "p=python3; \"$p\" -c \"\" 2>/dev/null || p=python; \"$p\" \"${CLAUDE_PLUGIN_ROOT}/bin/soleon_draft_sync.py\"",
+            "command": "i=$(cat); case \"$i\" in *.soleon*) ;; *) exit 0 ;; esac; p=python3; \"$p\" -c \"\" 2>/dev/null || p=python; printf '%s' \"$i\" | \"$p\" \"${CLAUDE_PLUGIN_ROOT}/bin/soleon_draft_sync.py\"",
             "timeout": 180
           }
         ]

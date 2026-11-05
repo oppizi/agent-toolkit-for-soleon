@@ -1,12 +1,13 @@
-"""bin/soleon_pull_refresh.py — the UserPromptSubmit hook that keeps a pulled
+"""bin/soleon_pull_refresh.py — the PreToolUse(Agent) hook that keeps a pulled
 agent in step with the platform.
 
-Before each prompt: one `get_agent_draft` read per pulled agent; same version
+When the session starts the pulled agent (or one of its helpers): one
+`get_agent_draft` read; any other subagent costs nothing. Same version
 → silent, no writes. A different version → the pull's reads are repeated
 (config, skills, sandbox sync, tools, system prompt), the files are rewritten
 and `materialize` re-runs with `--keep-workspace`; a pending save conflict is
 never overwritten; a failed read leaves the local copy untouched. The hook
-never blocks the prompt."""
+never blocks the run."""
 from __future__ import annotations
 
 import io
@@ -78,12 +79,17 @@ def _pulled(tmp_path: Path) -> Path:
     return agent_dir
 
 
-def _run(tmp_path: Path, factory, runner=subprocess.run):
+def _agent_call(cwd: Path, subagent: str = SLUG) -> dict:
+    """What Claude Code sends before the Agent tool starts `subagent`."""
+    return {"cwd": str(cwd), "hook_event_name": "PreToolUse", "tool_name": "Agent",
+            "tool_input": {"subagent_type": subagent, "description": "ask", "prompt": "talk to demo-agent"}}
+
+
+def _run(tmp_path: Path, factory, runner=subprocess.run, subagent: str = SLUG):
     out, err = io.StringIO(), io.StringIO()
     sys.stdout, sys.stderr = out, err
     try:
-        rc = refresh.main(stream=io.StringIO(json.dumps({"cwd": str(tmp_path), "hook_event_name": "UserPromptSubmit",
-                                                          "user_prompt": "talk to demo-agent"})),
+        rc = refresh.main(stream=io.StringIO(json.dumps(_agent_call(tmp_path, subagent))),
                           client_factory=factory, runner=runner)
     finally:
         sys.stdout, sys.stderr = sys.__stdout__, sys.__stderr__
@@ -101,6 +107,30 @@ def test_no_pulled_agent_means_no_network_and_no_output(tmp_path):
     FakeClient.instances.clear()
     rc, out, _ = _run(tmp_path, FakeClient)
     assert rc == 0 and out == "" and FakeClient.instances == []
+
+
+def test_another_subagent_or_tool_costs_nothing(tmp_path):
+    """2026-11-04: the refresh ran before every prompt of every session in a
+    project holding a pulled agent — ~1 s each, ~50 s when the draft had
+    changed — even in sessions that never called the agent."""
+    _pulled(tmp_path)
+    FakeClient.instances.clear()
+    rc, out, _ = _run(tmp_path, lambda url: FakeClient(url, draft=draft_envelope(True, NEW_ETAG)), subagent="Explore")
+    assert rc == 0 and out == "" and FakeClient.instances == []
+    for hook in ({"cwd": str(tmp_path), "hook_event_name": "PreToolUse", "tool_name": "Read", "tool_input": {"file_path": "x"}},
+                 {"cwd": str(tmp_path), "hook_event_name": "UserPromptSubmit", "prompt": "hi"}):
+        assert refresh.main(stream=io.StringIO(json.dumps(hook)), client_factory=FakeClient) == 0
+    assert FakeClient.instances == []
+
+
+def test_a_helper_of_the_agent_refreshes_the_agent(tmp_path):
+    """A configured helper (`<slug>--<name>`) runs from the same pull."""
+    agent_dir = _pulled(tmp_path)
+    FakeClient.instances.clear()
+    rc, out, _ = _run(tmp_path, lambda url: FakeClient(url, draft=draft_envelope(True, NEW_ETAG)),
+                      runner=_real_runner_with_home(tmp_path), subagent=SLUG + "--researcher")
+    assert rc == 0 and "refreshed" in json.loads(out)["systemMessage"]
+    assert json.loads((agent_dir / "pull.json").read_text())["refreshedFrom"] == "draft:" + NEW_ETAG
 
 
 def test_same_version_is_one_read_and_silent(tmp_path):
@@ -145,7 +175,7 @@ def test_changed_draft_is_re_pulled_and_re_materialized(tmp_path):
     # the person and Claude both hear about it
     payload = json.loads(out)
     assert "refreshed" in payload["systemMessage"] and "Demo Agent" in payload["systemMessage"]
-    assert payload["hookSpecificOutput"] == {"hookEventName": "UserPromptSubmit",
+    assert payload["hookSpecificOutput"] == {"hookEventName": "PreToolUse",
                                              "additionalContext": payload["systemMessage"]}
 
 
@@ -176,7 +206,7 @@ def test_refresh_writes_the_user_scope_subagent_even_when_pull_json_names_a_proj
     out, err = io.StringIO(), io.StringIO()
     sys.stdout, sys.stderr = out, err
     try:
-        rc = refresh.main(stream=io.StringIO(json.dumps({"cwd": str(project)})), client_factory=factory,
+        rc = refresh.main(stream=io.StringIO(json.dumps(_agent_call(project))), client_factory=factory,
                           runner=_real_runner_with_home(home))
     finally:
         sys.stdout, sys.stderr = sys.__stdout__, sys.__stderr__
@@ -225,7 +255,7 @@ def test_failed_read_leaves_the_local_copy_untouched(tmp_path):
     assert "refresh failed" in msg and "unchanged" in msg
 
 
-def test_platform_unreachable_never_blocks_the_prompt(tmp_path):
+def test_platform_unreachable_never_blocks_the_run(tmp_path):
     _pulled(tmp_path)
 
     def factory(url):
