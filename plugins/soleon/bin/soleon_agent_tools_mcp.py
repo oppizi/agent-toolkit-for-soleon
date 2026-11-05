@@ -593,7 +593,8 @@ class LocalWorkerRunner:
         its answer as this tool's result."""
         budget_run = None
         if message_budget.budget_of(Path(self.agent_dir)) > 0:
-            run_id = __import__("uuid").uuid4().hex[:12]
+            # The tool name leads the id, so the ledger says which helper spent what.
+            run_id = "{}-{}".format(name or "helper", __import__("uuid").uuid4().hex[:12])
             budget_run = (self._budget_message(turn, run_id), run_id)
         cmd = build(budget_run)
         if budget_run:
