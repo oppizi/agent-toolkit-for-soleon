@@ -29,12 +29,14 @@ Token: Claude Code's own MCP OAuth token for the configured server (see
 from __future__ import annotations
 
 import argparse
+import datetime
 import faulthandler
 import json
 import os
 import shutil
 import subprocess
 import sys
+import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -953,6 +955,84 @@ class LocalSpawnWorker(LocalWorkerRunner):
         return _text_result(json.dumps({"workerResult": out["content"][0]["text"]}, ensure_ascii=False))
 
 
+# ---------------------------------------------------------------------------
+# Local replay evals: an eval's declared tool responses, served here
+# ---------------------------------------------------------------------------
+
+#: Written by /run-local-eval next to tools.json for the length of one eval case.
+EVAL_REPLAY_FILE = ".eval-replay.json"
+
+
+def load_eval_replay(path: Optional[str], now: Optional[float] = None) -> Optional[Dict[str, Any]]:
+    """The replay file /run-local-eval wrote, or None. A file past its ``expiresAt`` (epoch seconds) is
+    ignored, so one left behind by an interrupted eval can never stub a normal conversation."""
+    if not path:
+        return None
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+    except (OSError, ValueError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    try:
+        expires = float(data.get("expiresAt") or 0)
+    except (TypeError, ValueError):
+        return None
+    if expires <= (time.time() if now is None else now):
+        return None
+    return data
+
+
+def _canon(value: Any) -> str:
+    try:
+        return json.dumps(value, sort_keys=True, default=str)
+    except Exception:  # noqa: BLE001 — anything unserialisable compares by repr
+        return repr(value)
+
+
+def find_declared_response(responses: Any, names: Any, inputs: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """The platform's rule (containers/shared/eval_stubs.py): a declaration answers a call when its
+    ``name`` equals one of the names the tool is known by, case-insensitively, and every key of its
+    optional ``when`` is in the inputs with an equal value. The first match wins."""
+    known = {str(n or "").strip().lower() for n in names if str(n or "").strip()}
+    for decl in responses or ():
+        if not isinstance(decl, dict) or str(decl.get("name") or "").strip().lower() not in known:
+            continue
+        when = decl.get("when")
+        if when:
+            if not isinstance(when, dict) or any(
+                    k not in (inputs or {}) or _canon((inputs or {})[k]) != _canon(v) for k, v in when.items()):
+                continue
+        return decl
+    return None
+
+
+def render_declared_result(decl: Dict[str, Any]) -> str:
+    """What the model sees, as on the platform: an ``Error:`` line for a declared error, a string
+    result verbatim, anything else as JSON."""
+    err = decl.get("error")
+    if isinstance(err, str) and err.strip():
+        return "Error: " + err.strip()
+    result = decl.get("result")
+    if isinstance(result, str):
+        return result
+    return "null" if result is None else _canon(result)
+
+
+def replay_clock_args(replay: Dict[str, Any], platform_name: str, args: Dict[str, Any]) -> Dict[str, Any]:
+    """The eval's clock for the time tool: ``convert_time(time="now")`` asks about the eval's ``now``
+    (an ISO time with a UTC offset), the way the platform answers it during an eval run."""
+    now = replay.get("now")
+    if platform_name != "convert_time" or not now or str(args.get("time") or "").strip().lower() != "now":
+        return args
+    try:
+        moment = datetime.datetime.fromisoformat(str(now)).astimezone(datetime.timezone.utc)
+    except ValueError:
+        return args
+    return dict(args, time=moment.strftime("%Y-%m-%d %H:%M"), from_timezone="UTC")
+
+
 def published_delegates(delegates: Dict[str, Dict[str, Any]], ids: List[str]) -> List[Dict[str, Any]]:
     return [{"name": i, "description": str(delegates[i].get("description") or ""),
              "inputSchema": json.loads(json.dumps(DELEGATE_TASK_SCHEMA))} for i in ids]
@@ -968,8 +1048,11 @@ class AgentToolsServer:
                  delegate_runner: Optional["LocalDelegateRunner"] = None,
                  delegate_ids: Optional[List[str]] = None,
                  spawn_worker: Optional["LocalSpawnWorker"] = None,
-                 read_only_views: Optional[Dict[str, str]] = None):
+                 read_only_views: Optional[Dict[str, str]] = None,
+                 replay_path: Optional[str] = None):
         self.slug = slug
+        #: /run-local-eval's replay file: while it exists, a call an eval declared is answered from it.
+        self.replay_path = replay_path
         self.app_env = app_env
         self.tools = tools
         self.published = published_tools(tools, include_members=include_members)
@@ -1071,6 +1154,13 @@ class AgentToolsServer:
             return self.delegate_runner.run_delegate(name, str(args.get("task") or ""), turn=self.turn.current())
         approved = bool(args.pop("approved", False)) or self.pre_approved
         platform_name = self._platform_name.get(name, name)
+        replay = load_eval_replay(self.replay_path)
+        if replay is not None:
+            decl = find_declared_response(replay.get("toolResponses"), (name, platform_name), args)
+            if decl is not None:
+                _log("{} answered by the eval's declared response (not run)".format(name))
+                return _text_result(render_declared_result(decl), bool(str(decl.get("error") or "").strip()))
+            args = replay_clock_args(replay, platform_name, args)
         entry = self._by_name.get(platform_name) or {}
         if self.local_workers is not None and local_worker_of(entry) is not None:
             # A subagent-mode wrapper (`mcp_gmail_read`): its worker runs HERE,
@@ -1305,7 +1395,8 @@ def main(argv: Optional[List[str]] = None) -> int:
                               include_members=args.only is not None,
                               delegate_runner=delegate_runner, delegate_ids=delegate_ids,
                               spawn_worker=spawner,
-                              read_only_views=WORKER_READ_ONLY_VIEWS if args.worker else None)
+                              read_only_views=WORKER_READ_ONLY_VIEWS if args.worker else None,
+                              replay_path=os.path.join(agent_dir, EVAL_REPLAY_FILE))
     _log("serving {} external tool(s) for {} via {}".format(len(server.published), args.slug, client.server_url))
     serve(server)
     return 0

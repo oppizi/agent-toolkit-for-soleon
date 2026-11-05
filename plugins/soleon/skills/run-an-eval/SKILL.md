@@ -7,6 +7,8 @@ description: "Starts an eval run on your draft or the deployed version, alone or
 
 Starts an eval run on your draft or the deployed version, alone or side by side, and waits for the scores. Costs money.
 
+**Pulled the agent? Use `run-local-eval` instead.** It runs the same evals (replay evals with declared tool results and a clock included) on the local model with the platform's own judge prompt, and only the agent's tool calls reach the platform. A platform eval starts a full agent session for every case, and the Cost tab charges each case its share of the runtime as well as its tokens: on 2026-11-05, 18 cases (4 runs, `repeats=2`) came to $18.61. Every `repeats` multiplies that.
+
 **Use when:** Before and after a change, to test a behaviour. To read results without running anything, use read-eval-results.
 
 ## Before you start
@@ -34,7 +36,7 @@ The run reads complete, with a score per eval (no pass mark).
 
 ## Never on your own
 
-Run the whole list each round: one failing check per fix, the full suite once before production. One run per agent at a time, 50 evals at most. Paste get_eval_run output (it carries a token).
+Run the whole list each round: one failing check per fix, the full suite once before production. Use `repeats` while tuning a pulled agent (run it locally instead). One run per agent at a time, 50 evals at most. Paste get_eval_run output (it carries a token).
 
 
 ## Always

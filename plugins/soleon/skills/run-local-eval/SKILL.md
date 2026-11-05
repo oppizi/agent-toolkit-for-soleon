@@ -19,6 +19,14 @@ tally, and you never word a result as "passed" or "failed". Report numbers.
 **Error-presentation rule (every step):** one plain-English sentence, the
 verbatim error in a code block, the single next action.
 
+**This is the default way to run a pulled agent's evals.** The agent reasons on
+the local model and the judge runs locally; only the agent's own tool calls
+reach the platform. The platform's `run_eval` starts a full agent session per
+eval case and the Cost tab charges each case its share of the runtime as well
+as its tokens (on 2026-11-05, 18 cases came to $18.61). Use `run_eval` only
+when a release needs the platform's own scores, and never with `repeats`
+while you are still tuning.
+
 `$DIR` = `.soleon/agents/<slug>`. Every MCP tool is on `soleon`
 with `app_env: "dev"`.
 
@@ -38,6 +46,16 @@ with `app_env: "dev"`.
 
 ### Step 1 — Run each eval against the local agent
 For each eval, in file order:
+0. **Replay evals run here too.** When the eval has `toolResponses` (declared
+   tool results) or `now` (the eval's clock), write
+   `$DIR/.eval-replay.json` = `{"evalId", "now", "toolResponses",
+   "expiresAt": <epoch seconds, 30 minutes from now>}` before the run, and
+   delete it as soon as the case finishes (in Step 4, error or not). While it
+   exists the local tool server answers every call an eval declared from it
+   (the platform's matching: exact `name`, optional `when`), never calling
+   the platform, and `convert_time(time="now")` answers for the eval's `now`.
+   Undeclared tools still run for real. This is why a replay eval never needs
+   the platform's `run_eval`.
 1. Its `inputs` is a list of `{role, content}` turns. Run the subagent
    `<slug>` (Agent tool, `subagent_type: "<slug>"`) with the FIRST user turn
    as the prompt. For a multi-turn eval, continue the SAME subagent (the
@@ -73,7 +91,9 @@ re-run the judge ONCE with "Answer with only the JSON object"; a second
 failure records the eval as `error: judge_output_unparseable`.
 
 ### Step 4 — Record
-Write `$DIR/evals/results/<UTC ts YYYYMMDDTHHMMSSZ>-<evalId>.json`:
+First delete `$DIR/.eval-replay.json` if Step 1 wrote one (also when the case
+errored), so the next conversation with the agent uses its real tools. Then
+write `$DIR/evals/results/<UTC ts YYYYMMDDTHHMMSSZ>-<evalId>.json`:
 ```json
 {"evalId": "...", "score": 0, "subScores": {}, "reasoning": "...",
  "judgeModelId": "<platform judge model id>", "localModel": "<pull.json model>",

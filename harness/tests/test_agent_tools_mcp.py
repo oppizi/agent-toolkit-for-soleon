@@ -192,6 +192,57 @@ def test_done_envelope_returns_the_tools_own_result(soleon, tmp_path):
     assert state["calls"][-1][1]["turn"] == turn
 
 
+def _replay_server(url, creds, replay_path):
+    client = client_mod.SoleonMcpClient(url, credentials_path=str(creds), token_override="", sleep=lambda s: None)
+    return shim.AgentToolsServer(SLUG, TOOLS, client, poll_interval_s=0.01, replay_path=str(replay_path))
+
+
+def test_a_replay_eval_answers_a_declared_call_without_calling_the_platform(soleon, tmp_path):
+    url, state = soleon
+    creds = tmp_path / "creds.json"
+    write_credentials(creds, url, GOOD)
+    replay = tmp_path / shim.EVAL_REPLAY_FILE
+    replay.write_text(json.dumps({"expiresAt": 9e12, "toolResponses": [
+        {"name": "custom_echo-server_read", "when": {"prompt": "other"}, "result": "not this one"},
+        {"name": "CUSTOM_ECHO-SERVER_READ", "result": {"answer": "declared"}},
+        {"name": "web_search", "error": "service unavailable"},
+    ]}))
+    server = _replay_server(url, creds, replay)
+    calls_before = len(state["calls"])
+    out = server.call("custom_echo-server_read", {"prompt": "hello"})
+    assert json.loads(out["content"][0]["text"]) == {"answer": "declared"}
+    failed = server.call("web_search", {"query": "x"})
+    assert failed["isError"] and failed["content"][0]["text"] == "Error: service unavailable"
+    assert len(state["calls"]) == calls_before  # nothing reached the platform
+    # an undeclared tool still runs for real
+    server.call("custom_echo-server_write", {"prompt": "go", "approved": True})
+    assert state["calls"][-1][1]["name"] == "custom_echo-server_write"
+
+
+def test_an_expired_or_missing_replay_file_never_stubs_a_call(soleon, tmp_path):
+    url, state = soleon
+    creds = tmp_path / "creds.json"
+    write_credentials(creds, url, GOOD)
+    replay = tmp_path / shim.EVAL_REPLAY_FILE
+    replay.write_text(json.dumps({"expiresAt": 1, "toolResponses": [
+        {"name": "custom_echo-server_read", "result": "stale"}]}))
+    out = _replay_server(url, creds, replay).call("custom_echo-server_read", {"prompt": "hello"})
+    assert json.loads(out["content"][0]["text"]) == {"echo": "hello"}
+    replay.unlink()
+    out = _replay_server(url, creds, replay).call("custom_echo-server_read", {"prompt": "hi"})
+    assert json.loads(out["content"][0]["text"]) == {"echo": "hi"}
+
+
+def test_the_replay_clock_moves_convert_time_now_to_the_evals_now():
+    replay = {"now": "2026-11-04T08:00:00-05:00"}
+    assert shim.replay_clock_args(replay, "convert_time", {"time": "now", "to_timezone": "America/New_York"}) == {
+        "time": "2026-11-04 13:00", "from_timezone": "UTC", "to_timezone": "America/New_York"}
+    explicit = {"time": "2026-11-03 10:00", "from_timezone": "UTC"}
+    assert shim.replay_clock_args(replay, "convert_time", explicit) == explicit
+    assert shim.replay_clock_args({}, "convert_time", {"time": "now"}) == {"time": "now"}
+    assert shim.replay_clock_args(replay, "web_search", {"time": "now"}) == {"time": "now"}
+
+
 def test_turn_tracker_adopts_a_fresh_hook_file_and_mints_otherwise(tmp_path):
     """The SubagentStart hook writes the turn file for THIS run; the server
     joins it. A stale file (an earlier run's) or none → the server mints its
