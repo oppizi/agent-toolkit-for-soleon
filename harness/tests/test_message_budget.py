@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import io
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -315,6 +316,8 @@ def test_a_helpers_calls_are_booked_as_they_stream_and_settled_from_its_total(tm
     assert seen == [30000, 30000, 65000, 64500 - 54000 + 875 + 500]  # settled: FINAL, cache-weighted
     state = json.loads((agent_dir / mb.LEDGER_NAME).read_text())
     assert list(state["helpers"].values()) == [11875]
+    # The ledger names the helper that spent it.
+    assert re.fullmatch(re.escape(WRAPPER["name"]) + r"-[0-9a-f]{12}", list(state["helpers"])[0])
 
 
 def test_a_helper_that_dies_keeps_the_spend_it_streamed(tmp_path):
