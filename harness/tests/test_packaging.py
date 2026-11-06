@@ -43,6 +43,7 @@ EXPECTED_SKILLS = {
     "pause-agent",
     "promote",
     "pull-agent",
+    "pull-knowledge-base",
     "read-a-conversation",
     "read-eval-results",
     "read-identity",
@@ -79,6 +80,8 @@ STDLIB_OK = {
     "asyncio", "importlib", "csv",
     # the macOS Keychain read in bin/soleon_mcp_client.py
     "getpass",
+    # pull-knowledge-base: ASCII-safe source file names
+    "unicodedata",
 }
 # The plugin's OWN modules that its scripts import from a sibling path (they ship
 # together, so they are not third-party): the deploy-agent engine seam plus every
