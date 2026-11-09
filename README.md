@@ -80,7 +80,8 @@ agent-toolkit-for-soleon/
 │       ├── contract.json    platform validation contract, generated from source
 │       ├── LICENSES/        MIT notice + binary provenance chain
 │       └── skills/          create-agent, deploy-agent, pull-agent, run-local-eval,
-│                            write-evals, write-skill-scripts + 27 starter skills
+│                            pull-knowledge-base, write-evals, write-skill-scripts
+│                            + 27 starter skills
 ├── preflight/               frozen correctness oracle (schema fixture + contract doc)
 ├── harness/                 offline validator, judge rubric, tests — never ships
 ├── samples/                 4 authored identity files (+ skill fixtures under
@@ -261,6 +262,21 @@ refreshing it through the server's `refresh_token` grant when it expires. On
 **macOS** Claude Code keeps it in the Keychain — reading it from a hook (e.g. via
 `security find-generic-password`) is **untested**; set `SOLEON_MCP_TOKEN` in the
 environment as a workaround until it is.
+
+### Pull a knowledge base's sources
+
+```
+/pull-knowledge-base <kb id or slug>
+```
+
+copies a knowledge base's **sources** (pasted text, .md and .txt documents, plus a
+record of its web-page and MCP sources) into `.soleon/knowledge-bases/<slug>/`, on
+demand only, with an `INDEX.md` that says what the folder is and lists every
+source. On the builder's explicit word it pushes one edited text source back
+(`manage_kb_source` with `expected_revision`), after refusing a moved revision and
+stopping on page edits made on Soleon since the pull. A push re-ingests the source
+(it costs money) and reaches every environment at once. Details:
+[`plugins/soleon/README.md`](plugins/soleon/README.md).
 
 ## Running the tests
 

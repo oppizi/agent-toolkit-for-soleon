@@ -6,8 +6,9 @@ change, test, deploy, promote and release them; bind channels; author custom
 MCP servers and knowledge bases. It carries the `create-agent` and
 `deploy-agent` skills (an idea or a local identity → a Soleon agent), their
 reverse arrow `pull-agent` with `run-local-eval` (Soleon agent → local Claude
-Code subagent, edited as files whose every save lands on your draft), and 27
-one-job starter skills.
+Code subagent, edited as files whose every save lands on your draft),
+`pull-knowledge-base` (a knowledge base's text sources as local files, pushed back
+one at a time on your word), and 27 one-job starter skills.
 
 > **Replaces `observer`, `builder` and `admin`.** See *Upgrading* below — there
 > is no alias, so an existing install will not update itself.
@@ -221,6 +222,45 @@ last — and refresh it through the server's `refresh_token` grant on a 401. A
 token from the file is written back (mode kept); a Keychain token is refreshed
 in memory only, because that item is Claude Code's. `SOLEON_MCP_TOKEN` in the
 environment overrides both. Tokens are never logged or printed.
+
+## Pull a knowledge base's sources
+
+```
+/pull-knowledge-base <kb id or slug>
+```
+
+**On demand only** — nothing refreshes the copy by itself. It reads the base
+(`get_knowledge_base`), finds its sources through the pages they built
+(`list_kb_pages` → `contributingSourceIds`; `get_knowledge_base` gives only a
+count), reads each one (`get_kb_source` with `include_raw`) and writes:
+
+```
+.soleon/knowledge-bases/INDEX.md          one line per base pulled into this project
+.soleon/knowledge-bases/<slug, else id>/
+  INDEX.md         the folder's one document: what it is (the sources a base is built from,
+                   a snapshot), how to use it, then one line per source (file, kind,
+                   revision, what it's for)
+  sources/<name>.md|.txt   one per pasted / .md / .txt source, byte-exact
+  manifest.json    kb id, slug, name, pulled at; per source: id, kind, title,
+                   sourceRevision, local file, and URL or connection + schedule
+                   for web-page and MCP sources
+  .pull/  .push/   the raw answers read from Soleon
+```
+
+Sources only — never pages or the knowledge graph (read those live with
+`list_kb_pages` / `get_kb_page`). A source whose text comes back cut at the 64KB
+read cap gets no file and is marked "too large to edit here". Both INDEX.md files
+are written by the script on every pull; there is no README.md.
+
+**Push** is a second mode, only on the builder's explicit word, one text file at
+a time. It re-reads the source and refuses if its `sourceRevision` (or its text)
+moved since the pull, stops and lists any page edits made on Soleon since the
+pull to pages the source built (`kb_versions`), confirms once, then calls
+`manage_kb_source` with `raw_text` (the whole file) and `expected_revision`, reads
+the source back, and records the new revision only if Soleon holds exactly the
+local file. A push **re-ingests the source** — Soleon rebuilds its pages and
+facts, which costs money — and, since knowledge bases have no draft, **reaches
+every environment at once**. Web-page, MCP and file sources are never pushed.
 
 ## Authentication
 

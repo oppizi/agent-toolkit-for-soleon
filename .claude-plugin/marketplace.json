@@ -7,7 +7,7 @@
     {
       "name": "soleon",
       "source": "./plugins/soleon",
-      "description": "Connects Claude Code to Soleon: read, build, test, deploy and release agents. Consents to the whole Soleon surface; the server shows and allows only what your Soleon permissions permit. Includes create-agent, deploy-agent (identity markdown → Allium spec → validated agent), pull-agent (a Soleon agent as a local subagent whose every save lands on your draft), run-local-eval, write-evals and write-skill-scripts."
+      "description": "Connects Claude Code to Soleon: read, build, test, deploy and release agents. Consents to the whole Soleon surface; the server shows and allows only what your Soleon permissions permit. Includes create-agent, deploy-agent (identity markdown → Allium spec → validated agent), pull-agent (a Soleon agent as a local subagent whose every save lands on your draft), run-local-eval, pull-knowledge-base (a knowledge base's text sources as local files), write-evals and write-skill-scripts."
     }
   ]
 }
