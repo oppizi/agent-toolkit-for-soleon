@@ -338,7 +338,7 @@ def _validate_evals(evals, contract: dict) -> None:
 
 
 # group_contract.EAGERNESS on the platform (lambda/shared/group_contract.py);
-# harness/validate_offline.py GROUP_EAGERNESS is the same set, pinned by a test.
+# The offline validator's GROUP_EAGERNESS is the same set, pinned by a test.
 GROUP_EAGERNESS = frozenset({"only_when_asked", "balanced", "proactive"})
 
 
