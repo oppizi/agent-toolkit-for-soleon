@@ -357,6 +357,13 @@ def validate_envelope(body: dict, contract: dict) -> list[str]:
         policy_bad = set(dynamo) - {"visibility"}
         if policy_bad:
             errors.append(f"dynamoFields carries plan-forbidden keys {sorted(policy_bad)}")
+        # The server refuses a visibility outside _VISIBILITY_VALUES with 400
+        # BAD_VISIBILITY ("private" was retired on writes; AHP-1837).
+        vis = dynamo.get("visibility")
+        if vis is not None and vis not in contract["visibility_values"]:
+            errors.append(
+                f"dynamoFields.visibility {vis!r} not in {sorted(contract['visibility_values'])}"
+            )
 
     config = body.get("configFields", {})
     if not isinstance(config, dict):

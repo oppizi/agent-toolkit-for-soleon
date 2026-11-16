@@ -135,6 +135,12 @@ def test_channel_id_present(good_body):
     assert env_errors(good_body)
 
 
+def test_retired_private_visibility_in_body(good_body):
+    """The platform refuses "private" on writes (400 BAD_VISIBILITY)."""
+    good_body["dynamoFields"]["visibility"] = "private"
+    assert any("visibility" in e for e in env_errors(good_body))
+
+
 def test_registration_open_in_dynamo_fields_plan_forbidden(good_body):
     # Server's _DYNAMO_ALLOWED admits it; plan policy says only visibility ships.
     good_body["dynamoFields"]["registrationOpen"] = "false"
@@ -195,7 +201,7 @@ def _body_with(config_extra):
     body = {
         "slug": "campaign-sla-watcher", "displayName": "Campaign SLA Watcher",
         "framework": "maverick", "appEnv": "dev",
-        "dynamoFields": {"visibility": "private"},
+        "dynamoFields": {"visibility": "restricted"},
         "configFields": {"soul": "watch carefully"},
     }
     body["configFields"].update(config_extra)

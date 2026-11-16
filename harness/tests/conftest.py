@@ -36,7 +36,7 @@ def good_body():
         "displayName": "Campaign SLA Watcher",
         "framework": "maverick",
         "appEnv": "dev",
-        "dynamoFields": {"visibility": "private"},
+        "dynamoFields": {"visibility": "restricted"},
         "configFields": {"soul": "You are a careful watcher."},
     }
 
