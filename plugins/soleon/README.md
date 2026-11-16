@@ -15,22 +15,31 @@ one at a time on your word), and 27 one-job starter skills.
 
 ## Scopes this plugin requests
 
-All 21 — every active scope family:
+All 26 — every active scope family:
 
 ```
 soleon-mcp/agent.read        soleon-mcp/agent.write     soleon-mcp/agent.deploy
-soleon-mcp/agent.delete      soleon-mcp/agent.invoke    soleon-mcp/channel.read
-soleon-mcp/channel.write
-soleon-mcp/mcp.read          soleon-mcp/mcp.write       soleon-mcp/kb.read
-soleon-mcp/kb.write          soleon-mcp/observability.read
+soleon-mcp/agent.delete      soleon-mcp/agent.invoke    soleon-mcp/agent.prod
+soleon-mcp/agent.approve
+soleon-mcp/channel.read      soleon-mcp/channel.write   soleon-mcp/channel.prod
+soleon-mcp/mcp.read          soleon-mcp/mcp.write       soleon-mcp/mcp.prod
+soleon-mcp/kb.read           soleon-mcp/kb.write        soleon-mcp/observability.read
 soleon-mcp/eval.read         soleon-mcp/eval.run        soleon-mcp/usage.read
 soleon-mcp/governance.read   soleon-mcp/governance.write
-soleon-mcp/business.read     soleon-mcp/business.write
+soleon-mcp/business.read     soleon-mcp/business.write  soleon-mcp/business.prod
 soleon-mcp/discovery.read    soleon-mcp/discovery.write
 ```
 
+The four `*.prod` scopes (`agent.prod`, `channel.prod`, `mcp.prod`,
+`business.prod`) are the production tier: the tools that change what live users
+get (staging and production promotes, bindings, releases and launches). Holding
+the scope only lets the token be offered those tools; whether you may use them is
+still your Soleon permission for that agent and environment. `agent.approve` lets
+an agent tool that needs a person's approval run as already approved.
+
 `agent.invoke` is the local-emulation scope: running one of an agent's tools on
-the platform with YOUR credentials (`call_agent_tool`), listing them, fetching the
+the platform with YOUR credentials (`call_agent_tool`; an approved call to a
+gated tool is `call_approved_agent_tool`, scope `agent.approve`), listing them, fetching the
 assembled prompt and your workspace snapshot.
 
 Requesting every scope grants **no** additional access. Scope is a ceiling on
@@ -144,7 +153,8 @@ local model; **every external tool runs on Soleon** through the bundled
 `bin/soleon_agent_tools_mcp.py` stdio shim (each tool under its platform name
 and schema, executed via `call_agent_tool` with your credentials, the agent's
 tool policy and its approval gates — the subagent asks you first, then sends
-`approved: true`; the platform refuses without it). Workspace tools run locally
+`approved: true`, which goes out as `call_approved_agent_tool`; the platform
+refuses without it). Workspace tools run locally
 via `bin/soleon_workspace_mcp.py` against the snapshot. Tool calls wait for the
 platform to finish — no client-side timeout, as on the platform.
 
@@ -193,7 +203,7 @@ model and writes `evals/results/<ts>-<evalId>.json` with `score` / `subScores` /
 does this. An eval with declared tool results (`toolResponses`) or a clock
 (`now`) runs here too: for the length of the case the local tool server answers
 the declared calls itself and gives `convert_time(time="now")` the eval's time.
-Use this, not the platform's `run_eval`, while you tune a pulled agent: a
+Use this, not the platform's `run_eval_checks` / `run_eval_suite`, while you tune a pulled agent: a
 platform eval starts a full agent session per case, and the Cost tab charges
 each case its share of the runtime on top of its tokens.
 
@@ -208,6 +218,23 @@ are refused so each answers from what it has. The next prompt starts afresh. The
 workflows follow the platform's steps (manager: assign → review → next decision
 until finish, bounded by the configured rounds; peer: bounded rounds)
 approximately, not identically.
+
+**Ask before production.** A PreToolUse hook
+(`hooks/soleon_ask_before_production.sh`) asks before every Soleon tool whose
+name ends in `_production` or `_everywhere`, and before
+`call_approved_agent_tool`. It asks only in default, accept-edits and plan
+mode; in `claude -p` that question is refused, and in every other mode
+(`bypassPermissions`, `dontAsk`, `auto`, an unknown one) it refuses the call.
+It is a second line behind your own permission rules, not a replacement for
+them. It covers only this plugin's server (`mcp__plugin_soleon_soleon__…`): a
+Soleon server you also added by hand needs its own `mcp__<name>__*_production`
+/ `*_everywhere` deny or ask rules, and a pulled agent's own tools (the local
+`soleon-agent-tools` server) are not seen by it: their approvals are the
+model's word, sent as `call_approved_agent_tool`. Turn it off with the plugin
+option `ask_before_production` = `off` (through `/config`, saved in your user
+settings; a project's settings cannot turn it off, and off never lifts a
+refusal); while it is off, each such call shows a notice. Details and paste-ready rules:
+`docs/release-notes/AHP-1477.md`.
 
 **Credentials — macOS and Linux.** The shim and the hooks run outside Claude
 Code's MCP connection, so they reuse the OAuth token Claude Code already holds
@@ -269,7 +296,7 @@ first request to the server opens the flow in your browser (or run
 `claude mcp login` explicitly); Claude Code then holds a short-lived access token
 and refreshes it for you.
 
-The plugin pins the 21 scopes listed above — every scope family — so the token
+The plugin pins the 26 scopes listed above — every scope family — so the token
 may consent to the whole surface; what it can actually reach is still decided by
 your Soleon permissions on every request.
 

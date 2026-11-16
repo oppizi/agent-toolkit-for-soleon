@@ -1,5 +1,5 @@
 {
-  "app_env_pattern": "^[a-z][a-z0-9-]{1,20}$",
+  "app_env_pattern": "^[a-z][a-z0-9-]{1,20}\\Z",
   "app_envs": [
     "dev",
     "staging",
@@ -19,25 +19,14 @@
     "description",
     "displayName",
     "framework",
-    "grantUsers",
     "iconColor",
     "iconName",
     "registrationOpen",
-    "revokeUsers",
     "slackDefaultChannelId",
     "visibility"
   ],
   "engine_version": "3.2.4",
-  "eval_judge_model_allowlist": [
-    "claude-haiku-4-5-20251001",
-    "claude-sonnet-4-6",
-    "claude-opus-4-7"
-  ],
   "eval_name_max": 80,
-  "eval_scoring_modes": [
-    "pass_fail",
-    "score"
-  ],
   "eval_turn_roles": [
     "user",
     "agent"
@@ -55,7 +44,8 @@
     "wordsEnabled",
     "piiEnabled",
     "regexEnabled",
-    "requiredTopicsEnabled"
+    "requiredTopicsEnabled",
+    "writeLimitEnabled"
   ],
   "guardrail_strengths": [
     "HIGH",
@@ -64,8 +54,8 @@
     "NONE"
   ],
   "max_config_bytes": 262144,
-  "max_skill_bytes": 65536,
-  "max_skills_per_agent": 20,
+  "max_skill_bytes": 262144,
+  "max_skills_per_agent": 50,
   "max_soul_bytes": 262144,
   "model_alias_map": {
     "_note": "point-in-time suggestions (snapshot 2026-06); the elicit step MUST confirm against the live model catalog \u2014 these are NOT validated offline",
@@ -91,22 +81,52 @@
   "projection_constants": {
     "SK": "CONFIG",
     "agentType": "slack",
-    "appId": "",
+    "channels": [
+      "soleon"
+    ],
     "endpointId": "",
     "registrationOpen": "false",
-    "runtimeArn": "",
-    "secretName": "",
-    "slackAuthorized": false,
-    "visibility": "private"
+    "version": 1,
+    "visibility": "restricted"
   },
-  "prompt_cache_ttl_values": [
-    "5m",
-    "1h"
-  ],
   "regex_actions": [
     "ANONYMIZE",
     "BLOCK"
   ],
+  "register_agent_row_keys": {
+    "always": [
+      "PK",
+      "SK",
+      "agentType",
+      "appEnv",
+      "channels",
+      "createdAt",
+      "deployId",
+      "displayName",
+      "endpointId",
+      "framework",
+      "groupChat",
+      "gsi2pk",
+      "gsi2sk",
+      "iconColor",
+      "iconName",
+      "registrationOpen",
+      "tenantId",
+      "version",
+      "visibility"
+    ],
+    "conditional": [
+      "channelBindings",
+      "createdBy",
+      "fromIdea",
+      "lifecycleState",
+      "managedByTest",
+      "owner_email",
+      "owner_sub",
+      "pipelineStage",
+      "slackDefaultChannelId"
+    ]
+  },
   "required_topic_strictness": [
     "HIGH",
     "LOW",
@@ -115,17 +135,20 @@
   "skill_fields": [
     "content",
     "description",
+    "emptyFolders",
     "enabled",
     "files",
     "id",
-    "name"
+    "name",
+    "subagentId"
   ],
-  "skill_slug_pattern": "^[a-z0-9][a-z0-9-]{0,49}$",
+  "skill_slug_pattern": "^[a-z0-9][a-z0-9-]{0,49}\\Z",
   "slug_pattern": "^[a-z0-9][a-z0-9-]{0,62}[a-z0-9]$",
   "source": {
     "files": [
-      "lambda/ui_admin/index.py",
       "lambda/ui_admin_agents/index.py",
+      "lambda/ui_admin_agents/agents_common.py",
+      "lambda/admin_shared_layer/python/admin_shared/__init__.py",
       "scripts/agent_manager/registry.py",
       "shared_keys.py"
     ],
@@ -136,7 +159,6 @@
     "write"
   ],
   "visibility_values": [
-    "private",
     "public",
     "restricted"
   ]

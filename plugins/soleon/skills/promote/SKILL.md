@@ -26,8 +26,8 @@ Moves what's on dev to staging, or staging to production (release, go live), too
 2. get_agent(slug, app_env=<from>) and get_agent(slug, app_env=<to>) — both current versions
 3. get_agent_document(slug, app_env=<from>, include="published") — every custom_<server>_read/_write id in tools names a tool server the agent uses
 4. get_custom_mcp_server(<server>, app_env=<from>) and (…, app_env=<to>) — server.currentVersion on each; skip servers already level. Not a platform admin: ask one to confirm each server on the target
-5. promote_custom_mcp(<server>, from_env, to_env, from_version=<source currentVersion>, to_version=<target currentVersion, or leave out if it isn't there yet>)
-6. promote_agent(slug, from_env, to_env, from_version, to_version=<target's current version, or leave out the first time>). PROMOTE_CONFLICT: re-read both versions and show what changed; never retry blindly
+5. Dev → staging: promote_custom_mcp_to_staging(<server>, from_version=<source currentVersion>, to_version=<target currentVersion, or leave out if it isn't there yet>). Staging → production: promote_custom_mcp_to_production(<server>, from_version, to_version). Each fixes its own source and target
+6. Dev → staging: promote_agent_to_staging(slug, from_version, to_version=<target's current version, or leave out the first time>). Staging → production: promote_agent_to_production(slug, from_version, to_version). PROMOTE_CONFLICT: re-read both versions and show what changed; never retry blindly
 7. get_agent(slug, app_env=<to>) and get_custom_mcp_server(<server>, app_env=<to>) — read back; the server read on the target is the only proof it's there
 
 ## Check it worked
@@ -49,4 +49,4 @@ Promote to production without asking.
 - Many reads are platform-admin only. If a tool refuses you, ask an admin; and an empty list of failures or conversations means "none" only for admins.
 - Name an agent by its display name and slug, with a link to it in Soleon.
 
-Tools: `get_agent`, `get_agent_document`, `get_custom_mcp_server`, `promote_custom_mcp`, `promote_agent`
+Tools: `get_agent`, `get_agent_document`, `get_custom_mcp_server`, `promote_custom_mcp_to_staging`, `promote_custom_mcp_to_production`, `promote_agent_to_staging`, `promote_agent_to_production`

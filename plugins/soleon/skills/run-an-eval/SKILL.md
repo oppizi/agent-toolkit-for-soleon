@@ -25,7 +25,7 @@ Starts an eval run on your draft or the deployed version, alone or side by side,
 ## Steps
 
 1. get_agent_document(slug, app_env="dev", include="effective" for a draft side A, "published" for deployed) — the ids are evals.standardEvals[].id
-2. run_eval(slug, app_env="dev", selected_eval_ids, side_a_version_ref={kind: "draft"} for undeployed edits or {kind: "deployed"}, mode="single") — or mode="side_by_side" with side_b_version_ref={kind: "deployed"} (costs twice as much). Right after a deploy there is no draft: use deployed
+2. run_eval_checks(slug, app_env="dev", selected_eval_ids, side_a_version_ref={kind: "draft"} for undeployed edits or {kind: "deployed"}, mode="single") — or mode="side_by_side" with side_b_version_ref={kind: "deployed"} (costs twice as much). Right after a deploy there is no draft: use deployed. run_eval_checks refuses more than 5 agent runs (evals × repeats); the full list before production is run_eval_suite with the same arguments
 3. get_eval_run(slug, run_id, app_env="dev") — repeat while running; read only each eval's name, outcome and score
 4. 409 EVAL_RUN_IN_FLIGHT (maybe someone else's run): poll that runId until it finishes, then start yours
 5. If a score looks wrong: an agent whose tools look up the customer needs its test channel; an agent with the file tool may read its own tests
@@ -49,4 +49,4 @@ Run the whole list each round: one failing check per fix, the full suite once be
 - Many reads are platform-admin only. If a tool refuses you, ask an admin; and an empty list of failures or conversations means "none" only for admins.
 - Name an agent by its display name and slug, with a link to it in Soleon.
 
-Tools: `get_agent_document`, `run_eval`, `get_eval_run`
+Tools: `get_agent_document`, `run_eval_checks`, `run_eval_suite`, `get_eval_run`

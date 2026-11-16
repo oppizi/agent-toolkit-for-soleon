@@ -51,8 +51,38 @@ def test_missing_required_variable_created_at(example_item):
     assert proj_errors(example_item)
 
 
-def test_forbidden_key_channels_even_empty(example_item):
+def test_channels_must_be_soleon_membership_only(example_item):
+    # Channelless = Soleon Chat membership only (register_agent seeds it).
     example_item["channels"] = []
+    assert proj_errors(example_item)
+    example_item["channels"] = ["soleon", "ci_0123456789abcdef01234567"]
+    assert proj_errors(example_item)
+
+
+def test_retired_slack_fields_forbidden(example_item):
+    for key, value in (("appId", ""), ("secretName", ""), ("slackAuthorized", False)):
+        item = dict(example_item, **{key: value})
+        assert proj_errors(item), key
+
+
+def test_gsi2sk_must_match_pk(example_item):
+    example_item["gsi2sk"] = "staging#campaign-sla-watcher"
+    assert proj_errors(example_item)
+
+
+def test_group_chat_shape(example_item):
+    example_item["groupChat"] = {"enabled": "false", "eagerness": "balanced"}
+    assert proj_errors(example_item)
+
+
+def test_server_assigned_keys_pass_when_well_formed(example_item):
+    example_item.update({
+        "tenantId": "acme", "gsi2pk": "TENANT#acme#AGENTCONFIG",
+        "deployId": "6f1c2a9e-1d2b-4c3d-8e4f-0a1b2c3d4e5f",
+        "iconName": "liquid:assistant", "iconColor": "#17c961",
+    })
+    assert proj_errors(example_item) == []
+    example_item["gsi2pk"] = "TENANT#other#AGENTCONFIG"
     assert proj_errors(example_item)
 
 
@@ -135,6 +165,12 @@ def test_channel_id_present(good_body):
     assert env_errors(good_body)
 
 
+def test_retired_private_visibility_in_body(good_body):
+    """The platform refuses "private" on writes (400 BAD_VISIBILITY)."""
+    good_body["dynamoFields"]["visibility"] = "private"
+    assert any("visibility" in e for e in env_errors(good_body))
+
+
 def test_registration_open_in_dynamo_fields_plan_forbidden(good_body):
     # Server's _DYNAMO_ALLOWED admits it; plan policy says only visibility ships.
     good_body["dynamoFields"]["registrationOpen"] = "false"
@@ -195,7 +231,7 @@ def _body_with(config_extra):
     body = {
         "slug": "campaign-sla-watcher", "displayName": "Campaign SLA Watcher",
         "framework": "maverick", "appEnv": "dev",
-        "dynamoFields": {"visibility": "private"},
+        "dynamoFields": {"visibility": "restricted"},
         "configFields": {"soul": "watch carefully"},
     }
     body["configFields"].update(config_extra)
@@ -204,13 +240,12 @@ def _body_with(config_extra):
 
 def test_positive_config_and_skills_schema_match():
     body = _body_with({
-        "config": {"model": "us.anthropic.claude-opus-4-8", "promptCaching": True,
-                   "promptCacheTtl": "1h",
+        "config": {"model": "us.anthropic.claude-opus-4-8",
                    "guardrails": {"piiEnabled": True, "piiEntities": {"EMAIL": "ANONYMIZE"}},
                    "evals": {"standardEvals": [{
                        "id": "x", "name": "X",
                        "inputs": [{"role": "user", "content": "hi"}],
-                       "expectedOutput": "ok", "scoringMode": "pass_fail",
+                       "expectedOutput": "ok",
                        "judgeModel": "claude-opus-4-7"}]}},
         "skills": [_good_skill()],
     })
@@ -282,12 +317,18 @@ def test_config_schedules_rejected():
     assert any("schedules" in e for e in env_errors(_body_with({"config": {"schedules": []}})))
 
 
-def test_config_bad_prompt_cache_ttl():
-    assert env_errors(_body_with({"config": {"promptCacheTtl": "30m"}}))
+@pytest.mark.parametrize("key,val", [("promptCacheTtl", "1h"), ("promptCaching", True)])
+def test_config_retired_prompt_cache_field_flagged(key, val):
+    """AHP-1478: retired; the converter strips them, so emitting one is a defect."""
+    assert any("retired" in e for e in env_errors(_body_with({"config": {key: val}})))
 
 
-def test_config_prompt_caching_non_bool():
-    assert env_errors(_body_with({"config": {"promptCaching": "yes"}}))
+@pytest.mark.parametrize("key,val", [("scoringMode", "pass_fail"), ("scoreThreshold", 70)])
+def test_config_retired_eval_field_flagged(key, val):
+    body = _body_with({"config": {"evals": {"standardEvals": [{
+        "id": "x", "name": "X", "inputs": [{"role": "user", "content": "hi"}],
+        "expectedOutput": "ok", key: val}]}}})
+    assert any("retired" in e for e in env_errors(body))
 
 
 def test_config_bad_guardrail_enum():
@@ -297,14 +338,14 @@ def test_config_bad_guardrail_enum():
 def test_config_bad_eval_judge_model():
     body = _body_with({"config": {"evals": {"standardEvals": [{
         "id": "x", "name": "X", "inputs": [{"role": "user", "content": "hi"}],
-        "expectedOutput": "ok", "scoringMode": "pass_fail", "judgeModel": "gpt-4"}]}}})
+        "expectedOutput": "ok", "judgeModel": ""}]}}})
     assert env_errors(body)
 
 
 def test_config_eval_final_turn_not_user():
     body = _body_with({"config": {"evals": {"standardEvals": [{
         "id": "x", "name": "X", "inputs": [{"role": "agent", "content": "hi"}],
-        "expectedOutput": "ok", "scoringMode": "pass_fail"}]}}})
+        "expectedOutput": "ok"}]}}})
     assert env_errors(body)
 
 

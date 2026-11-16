@@ -213,7 +213,8 @@ Soleon executes the tools**: every external tool (Gmail, web search, browser,
 custom MCPs, subagent pairs…) is published under its platform name and schema by
 a stdio MCP shim and run on the platform through `call_agent_tool` — with your
 credentials, the agent's tool policy and its approval gates (the subagent asks you
-before an approval-gated call, then sends `approved: true`). The workspace tools
+before an approval-gated call, then sends it as `call_approved_agent_tool`, which
+needs the `agent.approve` scope). The workspace tools
 (`read_file`, `write_file`, `edit_file`, `list_dir`) run locally against a
 read-only snapshot of your platform workspace. You pick the local Claude model at
 pull time (default: the closest match to the agent's Bedrock model; non-Anthropic

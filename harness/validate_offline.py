@@ -27,6 +27,14 @@ CONTRACT_PATH = BET_ROOT / "plugins/soleon/contract.json"
 
 PK_RE = re.compile(r"^APPENV#(dev|staging|prod)#AGENT#[a-z0-9-]+$")
 CREATED_AT_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
+# agent-infra lambda/shared/group_contract.py EAGERNESS.
+GROUP_EAGERNESS = frozenset({"only_when_asked", "balanced", "proactive"})
+# shared_keys._CONTROL_TENANT_ID_RE.
+TENANT_ID_RE = re.compile(r"^[a-z0-9][a-z0-9-]{1,31}$")
+UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$")
+# scripts/agent_manager/avatars.py AVATAR_ICON_NAMES / AVATAR_COLORS shapes.
+ICON_NAME_RE = re.compile(r"^(liquid:[a-z-]+|identicon:\d+)$")
+ICON_COLOR_RE = re.compile(r"^#[0-9a-f]{6}$")
 TOP_LEVEL_KEYS = {"slug", "displayName", "framework", "appEnv", "dynamoFields", "configFields"}
 
 
@@ -151,10 +159,12 @@ def _validate_config_envelope(cfg, contract: dict) -> list[str]:
                     errs.append("config.guardrails.requiredTopics must be non-empty strings")
             if "requiredTopicsStrictness" in g and g["requiredTopicsStrictness"] not in contract["required_topic_strictness"]:
                 errs.append("config.guardrails.requiredTopicsStrictness bad value")
-    if "promptCaching" in cfg and not isinstance(cfg["promptCaching"], bool):
-        errs.append("config.promptCaching must be a boolean")
-    if "promptCacheTtl" in cfg and cfg["promptCacheTtl"] not in contract["prompt_cache_ttl_values"]:
-        errs.append(f"config.promptCacheTtl must be one of {contract['prompt_cache_ttl_values']}")
+    # promptCaching / promptCacheTtl are retired (AHP-1478): the platform drops
+    # them on save and the converter never emits them, so a body still
+    # carrying one is a converter defect.
+    for retired in ("promptCaching", "promptCacheTtl"):
+        if retired in cfg:
+            errs.append(f"config.{retired} is retired and must not be emitted")
     if "user_schedules_enabled" in cfg and not isinstance(cfg["user_schedules_enabled"], bool):
         errs.append("config.user_schedules_enabled must be a boolean")
     tools = cfg.get("tools")
@@ -244,16 +254,12 @@ def _validate_config_envelope(cfg, contract: dict) -> list[str]:
                             errs.append(f"{loc} must have inputs or inputPrompt")
                         if not isinstance(ev.get("expectedOutput"), str):
                             errs.append(f"{loc}.expectedOutput must be a string")
-                        sc = ev.get("scoringMode")
-                        if sc not in contract["eval_scoring_modes"]:
-                            errs.append(f"{loc}.scoringMode bad")
-                        elif sc == "score" and "scoreThreshold" in ev:
-                            t = ev["scoreThreshold"]
-                            if not isinstance(t, (int, float)) or isinstance(t, bool) or t < 0 or t > 100:
-                                errs.append(f"{loc}.scoreThreshold must be a number in [0,100]")
+                        for retired in ("scoringMode", "scoreThreshold", "allowSideEffects"):
+                            if retired in ev:
+                                errs.append(f"{loc}.{retired} is retired and must not be emitted")
                         jm = ev.get("judgeModel")
-                        if jm is not None and jm not in contract["eval_judge_model_allowlist"]:
-                            errs.append(f"{loc}.judgeModel not in allowlist")
+                        if jm is not None and (not isinstance(jm, str) or not jm.strip()):
+                            errs.append(f"{loc}.judgeModel must be a non-empty string")
                         etc = ev.get("expectedToolCalls")
                         if etc is not None:
                             if not isinstance(etc, list):
@@ -295,12 +301,41 @@ def validate_projection(projection: dict, fixture: dict, contract: dict) -> list
         errors.append(f"displayName {display_name!r} fails 1-256 non-empty rule")
 
     framework = projection.get("framework")
-    if framework not in ("maverick", "nanobot", "openclaw"):
-        errors.append(f"framework {framework!r} not in maverick|nanobot|openclaw")
+    if framework not in set(contract["frameworks"]):
+        errors.append(f"framework {framework!r} not in {sorted(contract['frameworks'])}")
 
     created_at = projection.get("createdAt")
     if not isinstance(created_at, str) or not CREATED_AT_RE.match(created_at):
         errors.append(f"createdAt {created_at!r} fails %Y-%m-%dT%H:%M:%SZ format")
+
+    # gsi2sk = shared_keys.agent_config_gsi2_sk(app_env, slug) = "{app_env}#{slug}".
+    if isinstance(pk, str) and PK_RE.match(pk):
+        want = f"{pk.split('#')[1]}#{pk.rsplit('#', 1)[1]}"
+        if projection.get("gsi2sk") != want:
+            errors.append(f"gsi2sk {projection.get('gsi2sk')!r} != {want!r}")
+
+    # groupChat = group_contract.group_config(...): exactly {enabled, eagerness}.
+    gc = projection.get("groupChat")
+    if (not isinstance(gc, dict) or set(gc) != {"enabled", "eagerness"}
+            or type(gc.get("enabled")) is not bool or gc.get("eagerness") not in GROUP_EAGERNESS):
+        errors.append(f"groupChat {gc!r} is not {{enabled: bool, eagerness: {sorted(GROUP_EAGERNESS)}}}")
+
+    # Server-assigned per-call keys: optional, but well-formed when present.
+    tenant = projection.get("tenantId")
+    if "tenantId" in projection and not (isinstance(tenant, str) and TENANT_ID_RE.match(tenant)):
+        errors.append(f"tenantId {tenant!r} fails {TENANT_ID_RE.pattern}")
+    if "gsi2pk" in projection:
+        if not isinstance(tenant, str) or projection["gsi2pk"] != f"TENANT#{tenant}#AGENTCONFIG":
+            errors.append(f"gsi2pk {projection['gsi2pk']!r} != TENANT#{{tenantId}}#AGENTCONFIG")
+    if "deployId" in projection and not (
+            isinstance(projection["deployId"], str) and UUID_RE.match(projection["deployId"])):
+        errors.append(f"deployId {projection['deployId']!r} is not a UUID")
+    if "iconName" in projection and not (
+            isinstance(projection["iconName"], str) and ICON_NAME_RE.match(projection["iconName"])):
+        errors.append(f"iconName {projection['iconName']!r} fails {ICON_NAME_RE.pattern}")
+    if "iconColor" in projection and not (
+            isinstance(projection["iconColor"], str) and ICON_COLOR_RE.match(projection["iconColor"])):
+        errors.append(f"iconColor {projection['iconColor']!r} fails {ICON_COLOR_RE.pattern}")
 
     for key in fixture["forbidden"]:
         if key in projection:
@@ -316,7 +351,7 @@ def validate_projection(projection: dict, fixture: dict, contract: dict) -> list
             errors.append(f"unlisted key {key!r} present in projection")
 
     # Harness policy (stricter than the server): the channelless fixture pins
-    # visibility "private"; anything else is a fixture violation even though
+    # visibility "restricted"; anything else is a fixture violation even though
     # the server would accept it.
     slug_pattern = contract["slug_pattern"]
     if isinstance(pk, str) and PK_RE.match(pk):
@@ -359,6 +394,13 @@ def validate_envelope(body: dict, contract: dict) -> list[str]:
         policy_bad = set(dynamo) - {"visibility"}
         if policy_bad:
             errors.append(f"dynamoFields carries plan-forbidden keys {sorted(policy_bad)}")
+        # The server refuses a visibility outside _VISIBILITY_VALUES with 400
+        # BAD_VISIBILITY ("private" was retired on writes; AHP-1837).
+        vis = dynamo.get("visibility")
+        if vis is not None and vis not in contract["visibility_values"]:
+            errors.append(
+                f"dynamoFields.visibility {vis!r} not in {sorted(contract['visibility_values'])}"
+            )
 
     config = body.get("configFields", {})
     if not isinstance(config, dict):

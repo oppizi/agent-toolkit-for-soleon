@@ -69,6 +69,12 @@ class ValidationError(ConvertError):
 # exactly; a render-parity test guards them against the live source).
 # ---------------------------------------------------------------------------
 
+# Fields the platform retired and strips on save (it never rejects them, so a
+# stored draft still round-trips). The converter strips them the same way.
+RETIRED_CONFIG_FIELDS = ("promptCacheTtl", "promptCaching")
+RETIRED_EVAL_FIELDS = ("scoringMode", "scoreThreshold", "allowSideEffects")
+
+
 def _yaml_escape(s: str) -> str:
     if s == "":
         return '""'
@@ -309,20 +315,15 @@ def _validate_evals(evals, contract: dict) -> None:
             raise ValidationError(f"{loc} must have `inputs` (or legacy `inputPrompt`)")
         if not isinstance(ev.get("expectedOutput"), str):
             raise ValidationError(f"{loc}.expectedOutput must be a string")
-        scoring = ev.get("scoringMode")
-        if scoring not in contract["eval_scoring_modes"]:
-            raise ValidationError(
-                f"{loc}.scoringMode must be one of {sorted(contract['eval_scoring_modes'])}"
-            )
-        if scoring == "score" and "scoreThreshold" in ev:
-            t = ev["scoreThreshold"]
-            if not isinstance(t, (int, float)) or isinstance(t, bool) or t < 0 or t > 100:
-                raise ValidationError(f"{loc}.scoreThreshold must be a number in [0, 100]")
+        # Retired on the platform: dropped there, so dropped here and never
+        # emitted. Standard evals are graded 0-100, never pass/fail.
+        for retired in RETIRED_EVAL_FIELDS:
+            ev.pop(retired, None)
+        # judgeModel: any catalogue model judges. The catalogue is live and
+        # env-refreshed, so it is checked by the server, not offline.
         jm = ev.get("judgeModel")
-        if jm is not None and jm not in contract["eval_judge_model_allowlist"]:
-            raise ValidationError(
-                f"{loc}.judgeModel={jm!r} not in allowlist {contract['eval_judge_model_allowlist']}"
-            )
+        if jm is not None and (not isinstance(jm, str) or not jm.strip()):
+            raise ValidationError(f"{loc}.judgeModel must be a non-empty string")
         etc = ev.get("expectedToolCalls")
         if etc is not None:
             if not isinstance(etc, list):
@@ -334,6 +335,25 @@ def _validate_evals(evals, contract: dict) -> None:
                     raise ValidationError(f"{loc}.expectedToolCalls[{j}].name required (non-empty string)")
                 if "args" in call and not isinstance(call["args"], dict):
                     raise ValidationError(f"{loc}.expectedToolCalls[{j}].args must be an object")
+
+
+# group_contract.EAGERNESS on the platform (lambda/shared/group_contract.py);
+# The offline validator's GROUP_EAGERNESS is the same set, pinned by a test.
+GROUP_EAGERNESS = frozenset({"only_when_asked", "balanced", "proactive"})
+
+
+def _validate_group_chat(gc) -> None:
+    """Mirror of group_contract.group_config, which refuses (never normalises)
+    any other shape when register_agent stores the row."""
+    if not isinstance(gc, dict):
+        raise ValidationError("config.groupChat must be an object")
+    extra = sorted(set(gc) - {"enabled", "eagerness"})
+    if extra:
+        raise ValidationError(f"config.groupChat has unknown keys {extra}; only enabled and eagerness")
+    if "enabled" in gc and type(gc["enabled"]) is not bool:
+        raise ValidationError("config.groupChat.enabled must be a boolean")
+    if "eagerness" in gc and gc["eagerness"] not in GROUP_EAGERNESS:
+        raise ValidationError(f"config.groupChat.eagerness must be one of {sorted(GROUP_EAGERNESS)}")
 
 
 def _validate_tools(tools, contract: dict) -> None:
@@ -395,6 +415,10 @@ def validate_config(cfg: dict, contract: dict) -> None:
             "validation needs a dependency the plugin deliberately avoids. Omit "
             "schedules (a named follow-up); see the plugin README."
         )
+    # Retired on the platform (AHP-1478: caching is always on): dropped there,
+    # so dropped here and never emitted.
+    for retired in RETIRED_CONFIG_FIELDS:
+        cfg.pop(retired, None)
     if len(json.dumps(cfg).encode()) > contract["max_config_bytes"]:
         raise ValidationError(f"config exceeds {contract['max_config_bytes']} bytes")
     model_id = cfg.get("model")
@@ -409,14 +433,10 @@ def validate_config(cfg: dict, contract: dict) -> None:
             )
     if "guardrails" in cfg:
         _validate_guardrails(cfg["guardrails"], contract)
-    if "promptCaching" in cfg and not isinstance(cfg["promptCaching"], bool):
-        raise ValidationError("config.promptCaching must be a boolean")
-    if "promptCacheTtl" in cfg and cfg["promptCacheTtl"] not in contract["prompt_cache_ttl_values"]:
-        raise ValidationError(
-            f"config.promptCacheTtl must be one of {contract['prompt_cache_ttl_values']}"
-        )
     if "user_schedules_enabled" in cfg and not isinstance(cfg["user_schedules_enabled"], bool):
         raise ValidationError("config.user_schedules_enabled must be a boolean")
+    if "groupChat" in cfg:
+        _validate_group_chat(cfg["groupChat"])
     if "tools" in cfg:
         _validate_tools(cfg["tools"], contract)
     if "evals" in cfg:
@@ -571,7 +591,14 @@ def validate_params(params: dict, app_env: str, contract: dict) -> dict:
             f"framework {framework!r} must be one of {sorted(contract['frameworks'])}"
         )
 
-    visibility = params.get("visibility", "private")
+    # The platform's write values are public | restricted; its own create
+    # default is "restricted" (create_agent_route). A stored "private" row
+    # reads as restricted, but a write of "private" is refused.
+    visibility = params.get("visibility", "restricted")
+    if visibility == "private":
+        # Specs written before the platform retired "private" (USER 2026-10-29)
+        # still say it; it means restricted, so heal it rather than refuse.
+        visibility = "restricted"
     if visibility not in contract["visibility_values"]:
         raise ValidationError(
             f"visibility {visibility!r} must be one of {sorted(contract['visibility_values'])}"
@@ -650,13 +677,23 @@ def build_request_body(v: dict) -> dict:
 def build_projection(v: dict, contract: dict, created_at: str | None = None) -> dict:
     """Predicted create-time CONFIG row (what register_agent will put_item).
 
-    UNCHANGED by config/skills — soul/config/skills go to S3, never the row.
-    PK composed from the contract's template (mirrors shared_keys.agent_pk).
-    `channels` is never present for a channelless agent.
+    UNCHANGED by soul/skills and by config other than `groupChat` — they go to
+    S3, never the row; register_agent mirrors only the group-chat switch onto
+    it (group_contract.group_config: off/balanced unless config sets it).
+    PK composed from the contract's template (mirrors shared_keys.agent_pk);
+    `channels` is the contract constant ["soleon"] (Soleon Chat membership —
+    no provider channel). Server-assigned per-call keys (tenantId, gsi2pk,
+    deployId, the random avatar, owner) are not predicted offline.
     """
     pk = contract["pk_template"].format(app_env=v["app_env"], slug=v["slug"])
+    group_chat = (v.get("config") or {}).get("groupChat") or {}
     projection = {
         "PK": pk,
+        "gsi2sk": f"{v['app_env']}#{v['slug']}",
+        "groupChat": {
+            "enabled": group_chat.get("enabled", False),
+            "eagerness": group_chat.get("eagerness", "balanced"),
+        },
         "appEnv": v["app_env"],
         "displayName": v["display_name"],
         "framework": v["framework"],
@@ -664,7 +701,9 @@ def build_projection(v: dict, contract: dict, created_at: str | None = None) -> 
         or datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
     }
     projection.update(contract["projection_constants"])
-    if v["visibility"] != "private":
+    # register_agent writes "restricted" for a non-public agent (the contract's
+    # projection constant); only a public agent changes the predicted row.
+    if v["visibility"] != "restricted":
         projection["visibility"] = v["visibility"]
     return projection
 

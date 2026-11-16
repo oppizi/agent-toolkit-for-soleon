@@ -72,10 +72,10 @@ Everything under `plugins/` stays **stdlib-only and Python 3.9-compatible** — 
 
 Neither is hand-editable. Both are extracted from agent-infra platform **source text** via `ast` (read as text, never imported — so no platform deps or package layout are needed).
 
-**1. `plugins/soleon/contract.json`** (version 2) — from `lambda/ui_admin/index.py` + its byte-identical split `lambda/ui_admin_agents/index.py` (both extracted and asserted equal for dual-index parity), `scripts/agent_manager/registry.py`, `shared_keys.py`. Carries skill caps, config sub-validator enums (guardrails/evals/tools), and the `model_alias_map`. Regenerate after touching any platform validation logic:
+**1. `plugins/soleon/contract.json`** (version 2) — from `lambda/ui_admin_agents/index.py` (every agent validation constant since the admin API split), the skill-renderer twins in `lambda/ui_admin_agents/agents_common.py` and `lambda/admin_shared_layer/python/admin_shared/__init__.py`, `scripts/agent_manager/registry.py` and `shared_keys.py` (`SOURCE_FILES` in the extractor). Carries skill caps, config sub-validator enums (guardrails/evals/tools), and the `model_alias_map`. Fields the platform deleted are never shipped (`RETIRED_CONTRACT_KEYS`); the converter strips their values the way the platform does. Regenerate after touching any platform validation logic:
 
 ```bash
-python3 harness/sync_contract.py
+python3 harness/sync_contract.py --repo-root /path/to/agent-infra
 ```
 
 `harness/tests/test_contract_drift.py` re-runs the extraction and diffs it — but **only inside the agent-infra monorepo checkout**; in a standalone clone it skips, and the shipped `contract.json` is the artifact of record.

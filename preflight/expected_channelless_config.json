@@ -1,29 +1,40 @@
 {
-  "_contract": "Golden fixture for bet-1 schema_match. See SCHEMA_CONTRACT.md in this directory for derivation, variable-field rules, and code citations. An allium-to-json output MATCHES iff: (1) every key in `required_exact` is present with exactly this value, (2) every key in `required_variable` is present and satisfies its rule, (3) NO key in `forbidden` is present, (4) no other keys are present unless listed in `optional`.",
+  "_contract": "Frozen oracle for the create-time CONFIG row of a channelless agent (no provider channel bound; Soleon Chat membership only), as POST /agents writes it through register_agent. A converter projection MATCHES iff: (1) every key in `required_exact` is present with exactly this value, (2) every key in `required_variable` is present and satisfies its rule, (3) NO key in `forbidden` is present, (4) no other keys are present unless listed in `optional` (server-assigned per call: present on the live row but unknowable offline; checked when present). The key sets are checked against the platform's own writer, extracted into contract.json `register_agent_row_keys` (harness/tests/test_oracle_row_keys.py).",
+  "_source": "agent-infra scripts/agent_manager/registry.py register_agent: the `item` literal (lines 292-325), owner (326-333), createdBy (348-349), avatar (353-359), channels (378-382); called once by lambda/ui_admin_agents/index.py create_agent_route (13953-13992) with deploy_id, group_chat, identity, owner and tenant. The route's later deployStatus/deployStartedAt stamp (index.py:14218-14227) is the deploy lifecycle, not this write.",
   "required_exact": {
     "SK": "CONFIG",
     "agentType": "slack",
-    "appId": "",
-    "secretName": "",
-    "runtimeArn": "",
     "endpointId": "",
-    "slackAuthorized": false,
     "registrationOpen": "false",
-    "visibility": "private"
+    "visibility": "restricted",
+    "version": 1,
+    "channels": ["soleon"]
   },
   "required_variable": {
-    "PK": "string matching ^APPENV#(dev|staging|prod)#AGENT#[a-z0-9-]+$ — compose via shared_keys.agent_pk(app_env, slug), never a raw literal",
+    "PK": "string matching ^APPENV#(dev|staging|prod)#AGENT#[a-z0-9-]+$ — the tenant-free form shared_keys.agent_pk(app_env, slug); the live control row prefixes TENANT#{tenantId}# (shared_keys.control_agent_pk), which an offline projection cannot know",
     "appEnv": "string, one of dev|staging|prod; must equal the {app_env} segment of PK",
     "displayName": "non-empty string, 1-256 chars",
-    "framework": "string, one of maverick|nanobot|openclaw (lambda/ui_admin/index.py _FRAMEWORK_VALUES)",
-    "createdAt": "ISO-8601 UTC timestamp formatted %Y-%m-%dT%H:%M:%SZ"
+    "framework": "string, one of the contract's frameworks (maverick)",
+    "createdAt": "ISO-8601 UTC timestamp formatted %Y-%m-%dT%H:%M:%SZ",
+    "gsi2sk": "string equal to {appEnv}#{slug} (shared_keys.agent_config_gsi2_sk)",
+    "groupChat": "object with exactly enabled (bool) and eagerness (one of only_when_asked|balanced|proactive) — group_contract.group_config of the stored config; {enabled: false, eagerness: balanced} when no groupChat is set"
   },
   "optional": {
     "owner_sub": "Cognito sub of the creating caller — present when created via POST /agents with a JWT; server-controlled, never client-settable",
-    "createdBy": "caller email when resolvable from the JWT claims"
+    "owner_email": "the owner's email, denormalized when owner_sub is set and the email resolves",
+    "createdBy": "caller email when resolvable from the JWT claims",
+    "tenantId": "the caller's tenant from verified claims, matching ^[a-z0-9][a-z0-9-]{1,31}$ (shared_keys.validate_tenant_id); never a literal in a projection",
+    "gsi2pk": "TENANT#{tenantId}#AGENTCONFIG (shared_keys.control_agent_config_gsi2_pk)",
+    "deployId": "UUID the route mints per create (str(uuid.uuid4()))",
+    "iconName": "avatar shape, liquid:{archetype} or identicon:{seed} — drawn at random when none was chosen",
+    "iconColor": "avatar colour, #rrggbb — drawn at random when none was chosen"
   },
   "forbidden": [
-    "channels",
+    "appId",
+    "secretName",
+    "slackAuthorized",
+    "channelBindings",
+    "runtimeArn",
     "slackDefaultChannelId",
     "soul",
     "model",
@@ -32,10 +43,8 @@
     "tools",
     "etag",
     "slug",
-    "version",
     "updatedAt",
     "deployStatus",
-    "deployId",
     "deployMode",
     "deployStartedAt",
     "deployStages",
@@ -49,13 +58,13 @@
     "displayName": "Campaign SLA Watcher",
     "framework": "maverick",
     "agentType": "slack",
-    "appId": "",
-    "secretName": "",
-    "runtimeArn": "",
     "endpointId": "",
-    "slackAuthorized": false,
     "registrationOpen": "false",
-    "visibility": "private",
+    "visibility": "restricted",
+    "version": 1,
+    "channels": ["soleon"],
+    "gsi2sk": "dev#campaign-sla-watcher",
+    "groupChat": {"enabled": false, "eagerness": "balanced"},
     "createdAt": "2026-06-10T12:00:00Z"
   }
 }

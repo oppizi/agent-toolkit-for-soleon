@@ -16,6 +16,7 @@ from allium_to_json import (
     DecodeError,
     SpecError,
     ValidationError,
+    build_projection,
     convert,
     decode_default_expr,
     read_spec,
@@ -227,6 +228,18 @@ def contract_doc():
     return engine.load_contract(PLUGIN)
 
 
+@pytest.mark.parametrize("vis,expected", [("restricted", "restricted"), ("private", "restricted"),
+                                          ("public", "public")])
+def test_projection_predicts_the_rows_visibility(contract_doc, vis, expected):
+    """register_agent writes "restricted" for a non-public agent (and the server
+    reads a retired "private" as restricted); the predicted row says the same,
+    and carries no runtimeArn (the CONFIG row has none since AHP-390 WP-B)."""
+    projection = build_projection(validate_params(_params(visibility=vis), "dev", contract_doc),
+                                  contract_doc)
+    assert projection["visibility"] == expected
+    assert "runtimeArn" not in projection
+
+
 def test_display_name_emitted_stripped(contract_doc):
     v = validate_params(_params(display_name="  Padded Name  "), "dev", contract_doc)
     assert v["display_name"] == "Padded Name"
@@ -275,6 +288,32 @@ def test_soul_cap_boundary(contract_doc):
     validate_params(_params(soul="x" * cap), "dev", contract_doc)  # exactly cap: OK
     with pytest.raises(ValidationError):
         validate_params(_params(soul="x" * (cap + 1)), "dev", contract_doc)
+
+
+@pytest.mark.parametrize("group_chat", [
+    True, "on", None, [],
+    {"enabled": "yes"},
+    {"enabled": 1},
+    {"eagerness": "eager"},
+    {"enabled": True, "eagerness": "balanced", "extra": 1},
+])
+def test_malformed_group_chat_is_a_validation_error(contract_doc, group_chat):
+    # group_contract.group_config refuses these when the row is stored; the
+    # converter must refuse them too, not crash in build_projection.
+    with pytest.raises(ValidationError):
+        validate_params(_params(config_proposal={"groupChat": group_chat}), "dev", contract_doc)
+
+
+def test_well_formed_group_chat_is_projected(contract_doc):
+    v = validate_params(_params(config_proposal={"groupChat": {"enabled": True, "eagerness": "proactive"}}),
+                        "dev", contract_doc)
+    assert build_projection(v, contract_doc)["groupChat"] == {"enabled": True, "eagerness": "proactive"}
+
+
+def test_converter_eagerness_matches_the_offline_validator():
+    import allium_to_json
+    import validate_offline
+    assert allium_to_json.GROUP_EAGERNESS == validate_offline.GROUP_EAGERNESS
 
 
 def test_unknown_config_param_rejected(contract_doc):
@@ -327,8 +366,11 @@ def test_config_proposal_model_evals_guardrails(resolved, tmp_path, monkeypatch)
     assert validate(result["body"], result["projection"])["schema_match"]
     cfg = result["body"]["configFields"]["config"]
     assert cfg["model"] == "us.anthropic.claude-opus-4-8"
-    assert cfg["promptCacheTtl"] == "1h"
-    assert cfg["evals"]["standardEvals"][0]["id"] == "never-invent"
+    # Retired on the platform and stripped by the converter, never emitted.
+    assert "promptCaching" not in cfg and "promptCacheTtl" not in cfg
+    ev = cfg["evals"]["standardEvals"][0]
+    assert ev["id"] == "never-invent"
+    assert "scoringMode" not in ev and ev["judgeModel"] == "claude-opus-4-7"
     assert set(result["report"]["config_keys"]) == set(cfg)
 
 
@@ -349,10 +391,25 @@ def test_config_proposal_bad_eval_judge_rejected(resolved, tmp_path, monkeypatch
     monkeypatch.setenv("CLAUDE_PLUGIN_ROOT", str(PLUGIN))
     proposal = {"evals": {"standardEvals": [{
         "id": "x", "name": "X", "inputs": [{"role": "user", "content": "hi"}],
-        "expectedOutput": "ok", "scoringMode": "pass_fail", "judgeModel": "gpt-4",
+        "expectedOutput": "ok", "judgeModel": "",
     }]}}
     with pytest.raises(ValidationError):
         convert(_proposal_spec(tmp_path, proposal), "dev", tmp_path / "out")
+
+
+def test_config_proposal_eval_judge_left_to_server(resolved, tmp_path, monkeypatch):
+    """Any catalogue model judges; the catalogue is live, so a non-empty
+    judgeModel is not refused offline (the server answers BAD_JUDGE_MODEL)."""
+    monkeypatch.setenv("CLAUDE_PLUGIN_ROOT", str(PLUGIN))
+    proposal = {"evals": {"standardEvals": [{
+        "id": "x", "name": "X", "inputs": [{"role": "user", "content": "hi"}],
+        "expectedOutput": "ok", "judgeModel": "us.anthropic.claude-sonnet-4-6",
+        "scoringMode": "score", "scoreThreshold": 70,
+    }]}}
+    result = convert(_proposal_spec(tmp_path, proposal), "dev", tmp_path / "out")
+    ev = result["body"]["configFields"]["config"]["evals"]["standardEvals"][0]
+    assert ev["judgeModel"] == "us.anthropic.claude-sonnet-4-6"
+    assert "scoringMode" not in ev and "scoreThreshold" not in ev
 
 
 def test_model_param_conflicts_with_proposal(resolved, tmp_path, monkeypatch):
@@ -445,7 +502,7 @@ def test_projection_identical_with_and_without_config_skills(resolved, tmp_path,
     plain = convert(write_spec(tmp_path / "a", soul=soul), "dev", tmp_path / "a/out")
     d = _write_skill_dir(tmp_path, "cite-sources", "cite", "body\n")
     rich = convert(
-        _proposal_spec(tmp_path / "b", {"promptCaching": True}, soul=soul),
+        _proposal_spec(tmp_path / "b", {"model": "us.anthropic.claude-opus-4-8"}, soul=soul),
         "dev", tmp_path / "b/out", skill_inputs=[str(d)],
     )
     a, b = dict(plain["projection"]), dict(rich["projection"])
