@@ -28,8 +28,9 @@ upgrade).
 So the script asks only where a person sees a question (default, acceptEdits,
 plan) and denies in every other mode, an unreadable one and a missing one; it
 reads both the mode and the tool name only from the text before "tool_input";
-it honours "off" only from the user's own settings file, never from the
-variable alone; and "off" never lifts a deny.
+it honours "off" only from the soleon entry of the user's own settings file,
+never from the variable alone and never from a file a project's `env` can
+point CLAUDE_CONFIG_DIR or HOME at; and "off" never lifts a deny.
 
 The matcher in hooks.json is the ONLY gate (Claude Code tests it as a regex on
 the tool name); it is pinned here so widening it goes red. The script answers
@@ -41,6 +42,7 @@ from __future__ import annotations
 
 import json
 import os
+import pwd
 import re
 import shutil
 import subprocess
@@ -113,7 +115,7 @@ def test_matcher_negative_control():
 
 def _run(payload, env_extra=None, shell=None, path=None, project=None, config_dir=None):
     command = _entry()["hooks"][0]["command"]
-    env = {k: v for k, v in os.environ.items() if k not in (OFF_VAR, "SOLEON_ASK_BEFORE_PRODUCTION")}
+    env = {k: v for k, v in os.environ.items() if k != OFF_VAR}
     # A fresh user-config dir per call: the real ~/.claude never leaks in.
     env.update({"CLAUDE_PLUGIN_ROOT": str(PLUGIN).replace("\\", "/"),
                 "CLAUDE_PROJECT_DIR": str(project or tempfile.mkdtemp()),
@@ -304,17 +306,103 @@ def test_off_switch_turns_it_off_only_on_the_exact_value_and_says_so(tmp_path):
         assert _decision(_run(_call(tool), {OFF_VAR: value}, config_dir=d))[0] == "ask", value
 
 
-def test_off_is_read_from_the_home_settings_without_a_config_dir(tmp_path):
+def _off_in(settings: Path) -> bool:
+    """The test's own reading of a settings file: the soleon entry says off."""
+    if not settings.is_file():
+        return False
+    doc = json.loads(settings.read_text(encoding="utf-8"))
+    entry = ((doc.get("pluginConfigs") or {}).get("soleon@agent-toolkit-for-soleon") or {})
+    return (entry.get("options") or {}).get(OPTION) == "off"
+
+
+def _run_without_config_dir(payload, env_extra, cwd=None):
+    command = _entry()["hooks"][0]["command"]
+    env = {k: v for k, v in os.environ.items() if k not in (OFF_VAR, "CLAUDE_CONFIG_DIR")}
+    env.update({"CLAUDE_PLUGIN_ROOT": str(PLUGIN), "CLAUDE_PROJECT_DIR": str(cwd or tempfile.mkdtemp())},
+               **env_extra)
+    proc = subprocess.run([SH, "-c", command], input=json.dumps(payload), capture_output=True,
+                          text=True, timeout=30, env=env, cwd=cwd)
+    assert proc.returncode == 0, proc.stderr
+    return json.loads(proc.stdout)
+
+
+def test_without_a_config_dir_the_account_home_is_read_never_HOME(tmp_path):
+    """A project's `env` can set HOME: with no CLAUDE_CONFIG_DIR the hook reads
+    the home the account database gives, so a HOME holding an off file changes
+    nothing. The expected answer follows this machine's real file."""
     home = tmp_path / "home"
     (home / ".claude").mkdir(parents=True)
     (_user_off(tmp_path) / "settings.json").rename(home / ".claude" / "settings.json")
-    env = {"HOME": str(home), OFF_VAR: "off"}
+    real = Path(pwd.getpwuid(os.getuid()).pw_dir).resolve() / ".claude" / "settings.json"
+    out = _run_without_config_dir(_call(PREFIX + "x_production"), {"HOME": str(home), OFF_VAR: "off"})
+    if _off_in(real):
+        assert "OFF" in out["systemMessage"]
+    else:
+        assert out["hookSpecificOutput"]["permissionDecision"] == "ask"
+
+
+@pytest.mark.parametrize("where", ["relative", "in-project", "in-cwd", "symlink-into-project"])
+def test_a_project_chosen_config_dir_cannot_turn_it_off(tmp_path, where):
+    """A project's `env` can set CLAUDE_CONFIG_DIR: a relative one, or one whose
+    canonical path is inside the project or the working directory, is never
+    read, so the off file a repository ships there changes nothing."""
+    project = tmp_path / "repo"
+    cfg = project / ".soleon-cfg"
+    cfg.mkdir(parents=True)
+    (cfg / "settings.json").write_text(json.dumps({"pluginConfigs": {"soleon@agent-toolkit-for-soleon": {
+        "options": {OPTION: "off"}}}}), encoding="utf-8")
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    env = {OFF_VAR: "off"}
+    cwd, proj_env = project, str(project)
+    if where == "relative":
+        env["CLAUDE_CONFIG_DIR"] = ".soleon-cfg"
+    elif where == "in-project":
+        env["CLAUDE_CONFIG_DIR"] = str(cfg)
+        cwd = elsewhere
+    elif where == "in-cwd":
+        env["CLAUDE_CONFIG_DIR"] = str(cfg)
+        proj_env = str(elsewhere)
+    else:
+        (elsewhere / "link").symlink_to(cfg)
+        env["CLAUDE_CONFIG_DIR"] = str(elsewhere / "link")
+        cwd = elsewhere
+    real = Path(pwd.getpwuid(os.getuid()).pw_dir).resolve() / ".claude" / "settings.json"
+    assert not _off_in(real), ("this machine's own {} turns the soleon hook off; set "
+                               "ask_before_production back to ask to run this test".format(real))
     command = _entry()["hooks"][0]["command"]
     base = {k: v for k, v in os.environ.items() if k not in (OFF_VAR, "CLAUDE_CONFIG_DIR")}
-    base.update({"CLAUDE_PLUGIN_ROOT": str(PLUGIN)}, **env)
+    base.update({"CLAUDE_PLUGIN_ROOT": str(PLUGIN), "CLAUDE_PROJECT_DIR": proj_env}, **env)
     proc = subprocess.run([SH, "-c", command], input=json.dumps(_call(PREFIX + "x_production")),
-                          capture_output=True, text=True, timeout=30, env=base)
-    assert "OFF" in json.loads(proc.stdout)["systemMessage"]
+                          capture_output=True, text=True, timeout=30, env=base, cwd=str(cwd))
+    assert _decision(proc.stdout)[0] == "ask", where
+
+
+def test_an_outside_config_dir_is_read(tmp_path):
+    """Negative control for the test above: the same file in an absolute
+    directory outside the project and the working directory is honoured."""
+    out = json.loads(_run(_call(PREFIX + "x_production"), config_dir=_user_off(tmp_path)))
+    assert "OFF" in out["systemMessage"]
+
+
+@pytest.mark.parametrize("body", [
+    {"pluginConfigs": {"other@x": {"options": {OPTION: "off"}},
+                       "soleon@agent-toolkit-for-soleon": {"options": {OPTION: "ask"}}}},
+    {"pluginConfigs": {"other@x": {"options": {OPTION: "off"}}}},
+    {"env": {OPTION: "off"}, "pluginConfigs": {}},
+    {OPTION: "off"},
+])
+def test_off_counts_only_in_the_soleon_entry(tmp_path, body):
+    tool = PREFIX + "promote_agent_to_production"
+    assert _decision(_run(_call(tool), config_dir=_user_settings(tmp_path, body)))[0] == "ask"
+
+
+def test_off_is_read_however_the_entry_is_laid_out(tmp_path):
+    entry = {"pluginConfigs": {"soleon@agent-toolkit-for-soleon": {"options": {OPTION: "off"}}}}
+    for body in (json.dumps(entry), json.dumps(entry, indent="\t"),
+                 json.dumps(entry, separators=(",", ":"))):
+        out = json.loads(_run(_call(PREFIX + "x_production"), config_dir=_user_settings(tmp_path, body)))
+        assert "OFF" in out["systemMessage"]
 
 
 @pytest.mark.parametrize("mode", ["bypassPermissions", "dontAsk", "auto", None])
@@ -328,8 +416,7 @@ def test_the_variable_alone_does_not_turn_it_off():
     """Verified on 2.1.325: a project's settings env entry reaches the hook as
     the option's variable. Without the user's own setting it is ignored."""
     tool = PREFIX + "promote_agent_to_production"
-    decision, reason = _decision(_run(_call(tool), {OFF_VAR: "off"}))
-    assert decision == "ask" and "honoured only from there" in reason
+    assert _decision(_run(_call(tool), {OFF_VAR: "off"}))[0] == "ask"
 
 
 @pytest.mark.parametrize("name", ["settings.json", "settings.local.json"])
@@ -349,13 +436,6 @@ def test_a_project_setting_cannot_turn_it_off(tmp_path, name, body):
         json.loads(body)  # the escaped spellings are valid JSON
     tool = PREFIX + "promote_agent_to_production"
     assert _decision(_run(_call(tool), {OFF_VAR: "off"}, project=tmp_path))[0] == "ask"
-
-
-def test_old_env_var_no_longer_turns_it_off():
-    """The off switch left the shared env namespace: a repository's settings
-    env block setting the old variable changes nothing."""
-    tool = PREFIX + "promote_agent_to_production"
-    assert _decision(_run(_call(tool), {"SOLEON_ASK_BEFORE_PRODUCTION": "off"}))[0] == "ask"
 
 
 def test_plugin_declares_the_off_switch_option():
@@ -379,4 +459,3 @@ def test_matcher_prefix_is_the_shipped_plugin_and_server():
 def test_release_note_names_the_off_switch():
     text = NOTE.read_text(encoding="utf-8")
     assert "`{}`".format(OPTION) in text
-    assert "SOLEON_ASK_BEFORE_PRODUCTION" not in text

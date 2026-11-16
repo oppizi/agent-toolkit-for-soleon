@@ -24,13 +24,18 @@
 # permission rules. It never answers "allow".
 #
 # Off switch: the plugin option `ask_before_production` set to `off` through
-# /config, which saves it in the user's own settings file
-# (${CLAUDE_CONFIG_DIR:-~/.claude}/settings.json, under pluginConfigs). The
-# hook reads that file itself and honours "off" only from it: the variable
-# Claude Code hands the hook (CLAUDE_PLUGIN_OPTION_ASK_BEFORE_PRODUCTION) can
-# also come from a project's settings `env` block, so it alone never turns the
-# question off. "off" only removes the question in a person mode: the other
-# modes still deny. While it is off, every gated call prints a notice.
+# /config, which saves it in the user's own settings file under
+# pluginConfigs."soleon@agent-toolkit-for-soleon".options. The hook reads that
+# entry itself and never the option's variable, which a project's settings
+# `env` block can set. A project's `env` can also set CLAUDE_CONFIG_DIR and
+# HOME, so neither picks the file on its own: the file is
+# $CLAUDE_CONFIG_DIR/settings.json only when that directory is absolute and lies
+# outside both the project and the working directory (canonical paths), else
+# .claude/settings.json under the home directory the account database gives
+# for `id -un` ($HOME is never read). No usable file: the hook stays on. Only
+# the soleon entry counts: the same pair under another key does nothing. "off"
+# only removes the question in a person mode (the other modes still deny), and
+# while it is off every gated call prints a notice.
 
 input=$(cat)
 head=${input%%\"tool_input\"*}
@@ -65,15 +70,38 @@ esac
 
 off_hint="To turn this off, set the soleon plugin option ask_before_production to off (in /config; it is saved in your user settings)."
 
-off=no
-note=
-user_settings=${CLAUDE_CONFIG_DIR:-${HOME:-/nonexistent}/.claude}/settings.json
-# Exactly "off", key and value on one line as /config writes them.
-if [ -f "$user_settings" ] && [ -n "$(sed -n '/"ask_before_production"[[:space:]]*:[[:space:]]*"off"/p' "$user_settings" 2>/dev/null)" ]; then
-    off=yes
+# The user's settings file, never one a project points at (see the header).
+settings=
+here=$(pwd -P 2>/dev/null)
+project=$( [ -n "${CLAUDE_PROJECT_DIR-}" ] && cd "$CLAUDE_PROJECT_DIR" 2>/dev/null && pwd -P )
+case "${CLAUDE_CONFIG_DIR-}" in
+    /*)
+        dir=$(cd "$CLAUDE_CONFIG_DIR" 2>/dev/null && pwd -P)
+        for chosen in "$here" "$project"; do
+            [ -n "$chosen" ] || continue
+            case "$dir/" in "$chosen"/*|"$chosen"/) dir= ;; esac
+        done
+        [ -n "$dir" ] && settings=$dir/settings.json ;;
+esac
+if [ -z "$settings" ]; then
+    user=$(id -un 2>/dev/null)
+    case "$user" in
+        ''|-*|*[!A-Za-z0-9._-]*) ;;
+        *) home=$(eval "cd ~$user" 2>/dev/null && pwd -P) && [ -n "$home" ] && settings=$home/.claude/settings.json ;;
+    esac
 fi
-if [ "$off" = no ] && [ "${CLAUDE_PLUGIN_OPTION_ASK_BEFORE_PRODUCTION-}" = "off" ]; then
-    note=" Its off switch is ignored: ask_before_production is off in this session but not in your user settings, and the switch is honoured only from there."
+
+off=no
+if [ -n "$settings" ] && [ -f "$settings" ]; then
+    # Newlines and tabs to spaces, and no space around a key's colon, so the
+    # entry reads the same however /config or a person laid it out.
+    flat=$(tr '\n\r\t' '   ' < "$settings" 2>/dev/null | sed 's/"[[:space:]]*:[[:space:]]*/":/g' 2>/dev/null)
+    case "$flat" in
+        *'"soleon@agent-toolkit-for-soleon":{'*)
+            entry=${flat#*'"soleon@agent-toolkit-for-soleon":{'}
+            entry=${entry%%\}*}
+            case "$entry" in *'"ask_before_production":"off"'*) off=yes ;; esac ;;
+    esac
 fi
 
 if [ "$person" = yes ] && [ "$off" = yes ]; then
@@ -83,10 +111,10 @@ fi
 
 if [ "$person" = yes ]; then
     decision=ask
-    reason="Soleon: $what, so the soleon plugin asks before running it.$note $off_hint"
+    reason="Soleon: $what, so the soleon plugin asks before running it. $off_hint"
 else
     decision=deny
-    reason="Soleon: $what. This session runs in $shown permission mode, where no person sees a question, so the soleon plugin refuses it; the off switch does not change that. Run it in default mode to be asked.$note"
+    reason="Soleon: $what. This session runs in $shown permission mode, where no person sees a question, so the soleon plugin refuses it; the off switch does not change that. Run it in default mode to be asked."
 fi
 
 printf '%s\n' "{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"$decision\",\"permissionDecisionReason\":\"$reason\"}}"
