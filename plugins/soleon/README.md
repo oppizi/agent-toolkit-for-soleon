@@ -15,19 +15,27 @@ one at a time on your word), and 27 one-job starter skills.
 
 ## Scopes this plugin requests
 
-All 21 — every active scope family:
+All 26 — every active scope family:
 
 ```
 soleon-mcp/agent.read        soleon-mcp/agent.write     soleon-mcp/agent.deploy
-soleon-mcp/agent.delete      soleon-mcp/agent.invoke    soleon-mcp/channel.read
-soleon-mcp/channel.write
-soleon-mcp/mcp.read          soleon-mcp/mcp.write       soleon-mcp/kb.read
-soleon-mcp/kb.write          soleon-mcp/observability.read
+soleon-mcp/agent.delete      soleon-mcp/agent.invoke    soleon-mcp/agent.prod
+soleon-mcp/agent.approve
+soleon-mcp/channel.read      soleon-mcp/channel.write   soleon-mcp/channel.prod
+soleon-mcp/mcp.read          soleon-mcp/mcp.write       soleon-mcp/mcp.prod
+soleon-mcp/kb.read           soleon-mcp/kb.write        soleon-mcp/observability.read
 soleon-mcp/eval.read         soleon-mcp/eval.run        soleon-mcp/usage.read
 soleon-mcp/governance.read   soleon-mcp/governance.write
-soleon-mcp/business.read     soleon-mcp/business.write
+soleon-mcp/business.read     soleon-mcp/business.write  soleon-mcp/business.prod
 soleon-mcp/discovery.read    soleon-mcp/discovery.write
 ```
+
+The four `*.prod` scopes (`agent.prod`, `channel.prod`, `mcp.prod`,
+`business.prod`) are the production tier: the tools that change what live users
+get (staging and production promotes, bindings, releases and launches). Holding
+the scope only lets the token be offered those tools; whether you may use them is
+still your Soleon permission for that agent and environment. `agent.approve` lets
+an agent tool that needs a person's approval run as already approved.
 
 `agent.invoke` is the local-emulation scope: running one of an agent's tools on
 the platform with YOUR credentials (`call_agent_tool`), listing them, fetching the
