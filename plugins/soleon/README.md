@@ -231,9 +231,9 @@ Soleon server you also added by hand needs its own `mcp__<name>__*_production`
 / `*_everywhere` deny or ask rules, and a pulled agent's own tools (the local
 `soleon-agent-tools` server) are not seen by it: their approvals are the
 model's word, sent as `call_approved_agent_tool`. Turn it off with the plugin
-option `ask_before_production` = `off`, in your user settings only (off is
-ignored when the project's `.claude` settings name the option, and never lifts
-a refusal); while it is off, each such call shows a notice. Details and paste-ready rules:
+option `ask_before_production` = `off` (through `/config`; the hook honours
+off only from your own user settings file, which it reads itself, and off
+never lifts a refusal); while it is off, each such call shows a notice. Details and paste-ready rules:
 `docs/release-notes/AHP-1477.md`.
 
 **Credentials — macOS and Linux.** The shim and the hooks run outside Claude

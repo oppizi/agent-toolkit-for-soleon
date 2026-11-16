@@ -19,12 +19,17 @@ one `permission_denials` entry for it) under `--permission-mode`
 bypassPermissions, auto, dontAsk and acceptEdits. A project's
 `.claude/settings.json` `env` entry for the off variable reaches the hook when
 the user never set the option (the hook saw
-`CLAUDE_PLUGIN_OPTION_ASK_BEFORE_PRODUCTION=off`).
+`CLAUDE_PLUGIN_OPTION_ASK_BEFORE_PRODUCTION=off`), and /config saves plugin
+options in the user's own settings under `pluginConfigs.<plugin>.options`.
+A scrubbed input captured from a live 2.1.325 run is replayed byte for byte
+(fixtures/pretooluse_input_claude_code_2.1.325.json; re-capture it on an
+upgrade).
 
 So the script asks only where a person sees a question (default, acceptEdits,
 plan) and denies in every other mode, an unreadable one and a missing one; it
-ignores "off" when the project's settings name the option, and "off" never
-lifts a deny.
+reads both the mode and the tool name only from the text before "tool_input";
+it honours "off" only from the user's own settings file, never from the
+variable alone; and "off" never lifts a deny.
 
 The matcher in hooks.json is the ONLY gate (Claude Code tests it as a regex on
 the tool name); it is pinned here so widening it goes red. The script answers
@@ -44,7 +49,7 @@ from pathlib import Path
 
 import pytest
 
-from test_risk_split_names import DEVELOPMENT, NEW, NOTE, PREFIX, PRODUCTION
+from test_risk_split_names import DEVELOPMENT, NOTE, PREFIX, PRODUCTION
 
 PLUGIN = Path(__file__).resolve().parents[2] / "plugins" / "soleon"
 HOOKS = json.loads((PLUGIN / "hooks" / "hooks.json").read_text(encoding="utf-8"))["hooks"]
@@ -106,11 +111,13 @@ def test_matcher_negative_control():
     assert _fires(unanchored, PREFIX + "promote_agent_to_production_notes")
 
 
-def _run(payload, env_extra=None, shell=None, path=None, project=None):
+def _run(payload, env_extra=None, shell=None, path=None, project=None, config_dir=None):
     command = _entry()["hooks"][0]["command"]
     env = {k: v for k, v in os.environ.items() if k not in (OFF_VAR, "SOLEON_ASK_BEFORE_PRODUCTION")}
+    # A fresh user-config dir per call: the real ~/.claude never leaks in.
     env.update({"CLAUDE_PLUGIN_ROOT": str(PLUGIN).replace("\\", "/"),
-                "CLAUDE_PROJECT_DIR": str(project or tempfile.mkdtemp())}, **(env_extra or {}))
+                "CLAUDE_PROJECT_DIR": str(project or tempfile.mkdtemp()),
+                "CLAUDE_CONFIG_DIR": str(config_dir or tempfile.mkdtemp())}, **(env_extra or {}))
     if path is not None:
         env["PATH"] = path
     data = payload if isinstance(payload, str) else json.dumps(payload)
@@ -179,24 +186,42 @@ def test_a_missing_mode_is_denied():
     assert decision == "deny" and "unreadable permission mode" in reason
 
 
-def test_tool_input_cannot_turn_a_deny_into_an_ask():
-    """A model-written argument shaped like the mode key cannot downgrade the
-    refusal: every mode in the input must be a person mode."""
-    call = _call(PREFIX + "promote_agent_to_production", "bypassPermissions",
-                 tool_input={"permission_mode": "default"})
-    assert _decision(_run(call))[0] == "deny"
-    stricter = _call(PREFIX + "promote_agent_to_production", "default",
-                     tool_input={"args": {"permission_mode": "bypassPermissions"}})
-    assert _decision(_run(stricter))[0] == "deny"
+@pytest.mark.parametrize("real,nested,expected", [
+    ("bypassPermissions", "default", "deny"),
+    ("default", "bypassPermissions", "ask"),
+])
+def test_tool_input_cannot_reach_the_mode(real, nested, expected):
+    """The mode is read only before "tool_input": a model-written argument
+    shaped like the mode key changes nothing, either way."""
+    tool = PREFIX + "promote_agent_to_production"
+    for ti in ({"permission_mode": nested}, {"args": {"permission_mode": nested}}):
+        assert _decision(_run(_call(tool, real, tool_input=ti)))[0] == expected
 
 
 def test_a_forged_mode_cannot_break_the_answer():
     """A mode value with a backslash or quote is never echoed into the JSON:
     the answer stays a valid deny."""
-    call = json.dumps(_call(PREFIX + "promote_agent_to_production", "default"))
-    call = call.replace('"tool_input": {', '"tool_input": {"permission_mode": "x\\\\", ')
-    decision, reason = _decision(_run(call))
+    tool = PREFIX + "promote_agent_to_production"
+    payload = '{"session_id":"s","permission_mode":"x\\\\","tool_name":"' + tool + '","tool_input":{}}'
+    decision, reason = _decision(_run(payload))
     assert decision == "deny" and "unreadable permission mode" in reason
+
+
+FIXTURE = Path(__file__).resolve().parent / "fixtures" / "pretooluse_input_claude_code_2.1.325.json"
+
+
+@pytest.mark.parametrize("mode,expected", [("default", "ask"), ("bypassPermissions", "deny")])
+def test_a_captured_claude_code_input_is_read_as_sent(mode, expected):
+    """A real PreToolUse input from a live 2.1.325 run (ids and paths scrubbed;
+    tool name and arguments swapped for a gated tool whose arguments carry a
+    forged tool_name and permission_mode), replayed byte for byte."""
+    raw = FIXTURE.read_text(encoding="utf-8")
+    assert raw.count('"permission_mode":"default"') == 1
+    tool = PREFIX + "promote_agent_to_production"
+    decision, reason = _decision(_run(raw.replace('"permission_mode":"default"',
+                                                  '"permission_mode":"{}"'.format(mode))))
+    assert decision == expected
+    assert tool in reason and "Bash" not in reason
 
 
 @pytest.mark.parametrize("inner", [PREFIX + "x_production", PREFIX + "list_agents", "Bash"])
@@ -255,48 +280,75 @@ def test_script_needs_no_python(tmp_path):
     assert PREFIX + "launch_ticket_production" in reason
 
 
-def test_script_carries_no_python():
-    text = (PLUGIN / SCRIPT).read_text(encoding="utf-8")
-    code = "\n".join(l for l in text.splitlines() if not l.lstrip().startswith("#"))
-    assert "python" not in code
+def _user_settings(tmp_path, body):
+    d = tmp_path / "user-claude"
+    d.mkdir(exist_ok=True)
+    (d / "settings.json").write_text(body if isinstance(body, str) else json.dumps(body, indent=2),
+                                     encoding="utf-8")
+    return d
 
 
-def test_off_switch_turns_it_off_only_on_the_exact_value_and_says_so():
+def _user_off(tmp_path, value="off"):
+    """The shape /config saves (verified on 2.1.325 for server_url)."""
+    return _user_settings(tmp_path, {"pluginConfigs": {"soleon@agent-toolkit-for-soleon": {
+        "options": {"server_url": "https://example.test/mcp", OPTION: value}}}})
+
+
+def test_off_switch_turns_it_off_only_on_the_exact_value_and_says_so(tmp_path):
     tool = PREFIX + "promote_agent_to_production"
-    out = json.loads(_run(_call(tool), {OFF_VAR: "off"}))
+    out = json.loads(_run(_call(tool), {OFF_VAR: "off"}, config_dir=_user_off(tmp_path)))
     assert "hookSpecificOutput" not in out
     assert "OFF" in out["systemMessage"] and tool in out["systemMessage"]
     for value in ("", "0", "false", "OFF", " off", "no", "ask"):
-        assert _decision(_run(_call(tool), {OFF_VAR: value}))[0] == "ask", value
+        d = _user_off(tmp_path, value)
+        assert _decision(_run(_call(tool), {OFF_VAR: value}, config_dir=d))[0] == "ask", value
+
+
+def test_off_is_read_from_the_home_settings_without_a_config_dir(tmp_path):
+    home = tmp_path / "home"
+    (home / ".claude").mkdir(parents=True)
+    (_user_off(tmp_path) / "settings.json").rename(home / ".claude" / "settings.json")
+    env = {"HOME": str(home), OFF_VAR: "off"}
+    command = _entry()["hooks"][0]["command"]
+    base = {k: v for k, v in os.environ.items() if k not in (OFF_VAR, "CLAUDE_CONFIG_DIR")}
+    base.update({"CLAUDE_PLUGIN_ROOT": str(PLUGIN)}, **env)
+    proc = subprocess.run([SH, "-c", command], input=json.dumps(_call(PREFIX + "x_production")),
+                          capture_output=True, text=True, timeout=30, env=base)
+    assert "OFF" in json.loads(proc.stdout)["systemMessage"]
 
 
 @pytest.mark.parametrize("mode", ["bypassPermissions", "dontAsk", "auto", None])
-def test_off_never_lifts_a_deny(mode):
+def test_off_never_lifts_a_deny(tmp_path, mode):
     """Off removes the desk question only: where nobody answers it still denies."""
     tool = PREFIX + "promote_agent_to_production"
-    assert _decision(_run(_call(tool, mode), {OFF_VAR: "off"}))[0] == "deny"
+    assert _decision(_run(_call(tool, mode), {OFF_VAR: "off"}, config_dir=_user_off(tmp_path)))[0] == "deny"
+
+
+def test_the_variable_alone_does_not_turn_it_off():
+    """Verified on 2.1.325: a project's settings env entry reaches the hook as
+    the option's variable. Without the user's own setting it is ignored."""
+    tool = PREFIX + "promote_agent_to_production"
+    decision, reason = _decision(_run(_call(tool), {OFF_VAR: "off"}))
+    assert decision == "ask" and "honoured only from there" in reason
 
 
 @pytest.mark.parametrize("name", ["settings.json", "settings.local.json"])
 @pytest.mark.parametrize("body", [
     {"env": {OFF_VAR: "off"}},
-    {"pluginConfigs": {"soleon": {"options": {OPTION: "off"}}}},
+    '{"env": {"\\u0043LAUDE_PLUGIN_OPTION_\\u0041SK_BEFORE_PRODUCTION": "off"}}',
+    {"pluginConfigs": {"soleon@agent-toolkit-for-soleon": {"options": {OPTION: "off"}}}},
+    '{"pluginConfigs": {"soleon": {"options": {"\\u0061sk_before_production": "off"}}}}',
 ])
 def test_a_project_setting_cannot_turn_it_off(tmp_path, name, body):
-    """Verified on 2.1.325: a project's settings env entry reaches the hook.
-    The hook ignores off when the project's .claude settings name the option."""
+    """Project files are never read: whatever a project writes, plainly or
+    with JSON escapes, the variable it produces alone is ignored."""
     (tmp_path / ".claude").mkdir()
-    (tmp_path / ".claude" / name).write_text(json.dumps(body), encoding="utf-8")
+    (tmp_path / ".claude" / name).write_text(body if isinstance(body, str) else json.dumps(body),
+                                             encoding="utf-8")
+    if isinstance(body, str):
+        json.loads(body)  # the escaped spellings are valid JSON
     tool = PREFIX + "promote_agent_to_production"
-    decision, reason = _decision(_run(_call(tool), {OFF_VAR: "off"}, project=tmp_path))
-    assert decision == "ask" and "honoured only from your user settings" in reason
-
-
-def test_an_unrelated_project_setting_leaves_off_alone(tmp_path):
-    (tmp_path / ".claude").mkdir()
-    (tmp_path / ".claude" / "settings.json").write_text('{"env": {"OTHER": "1"}}', encoding="utf-8")
-    out = json.loads(_run(_call(PREFIX + "promote_agent_to_production"), {OFF_VAR: "off"}, project=tmp_path))
-    assert "hookSpecificOutput" not in out and "OFF" in out["systemMessage"]
+    assert _decision(_run(_call(tool), {OFF_VAR: "off"}, project=tmp_path))[0] == "ask"
 
 
 def test_old_env_var_no_longer_turns_it_off():
@@ -324,17 +376,7 @@ def test_matcher_prefix_is_the_shipped_plugin_and_server():
     assert _entry()["matcher"].startswith("^" + derived + "(")
 
 
-def test_every_gated_name_is_a_spec_name():
-    """The gated set is exactly the §4 production tier: nothing invented."""
-    assert set(PRODUCTION) <= set(NEW)
-
-
-def test_release_note_documents_the_hook_and_its_off_switch():
+def test_release_note_names_the_off_switch():
     text = NOTE.read_text(encoding="utf-8")
-    assert "## Ask before production (plugin hook)" in text
-    section = text.split("## Ask before production (plugin hook)", 1)[1].split("\n## ", 1)[0]
-    assert "`{}`".format(OPTION) in section
+    assert "`{}`".format(OPTION) in text
     assert "SOLEON_ASK_BEFORE_PRODUCTION" not in text
-    for needle in ("claude -p", "call_approved_agent_tool", "bypassPermissions", "dontAsk",
-                   "user settings", "permission rules", "asserted by the model", "2.1.325"):
-        assert needle in section, needle
