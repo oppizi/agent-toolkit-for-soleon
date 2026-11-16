@@ -63,11 +63,17 @@ SERVER_INFO = {"name": "soleon-agent-tools", "version": "0.4.15"}
 APPROVAL_NOTE = "Requires human approval: ask the person first, then call with approved=true."
 
 
+APPROVED_TOOL = "call_approved_agent_tool"
+APPROVED_TOOL_MISSING = (
+    "Soleon has no {} yet: this plugin needs the AHP-1477 server release. The call did not run; "
+    "sign in again after that release ships.".format(APPROVED_TOOL))
+
+
 def platform_tool_for(approved: bool) -> str:
     """The platform tool a local call goes through (AHP-1477 G4): an approved
     call is `call_approved_agent_tool` (scope `agent.approve`), every other
     call `call_agent_tool`, which carries no approval at all."""
-    return "call_approved_agent_tool" if approved else "call_agent_tool"
+    return APPROVED_TOOL if approved else "call_agent_tool"
 POLL_INTERVAL_S = 1.5
 #: A platform call still unanswered after this long dumps every thread's stack to stderr (and again each
 #: interval), so a silent stall shows where it is blocked.
@@ -1164,7 +1170,8 @@ class AgentToolsServer:
             args.pop(view, None)
         if name in self.delegate_ids:
             return self.delegate_runner.run_delegate(name, str(args.get("task") or ""), turn=self.turn.current())
-        approved = bool(args.pop("approved", False)) or self.pre_approved
+        # Only the JSON boolean true is an approval: a string such as "false" never is.
+        approved = args.pop("approved", False) is True or self.pre_approved
         platform_name = self._platform_name.get(name, name)
         replay = load_eval_replay(self.replay_path)
         if replay is not None:
@@ -1174,6 +1181,10 @@ class AgentToolsServer:
                 return _text_result(render_declared_result(decl), bool(str(decl.get("error") or "").strip()))
             args = replay_clock_args(replay, platform_name, args)
         entry = self._by_name.get(platform_name) or {}
+        # An approval counts only for a tool marked requires-approval: a
+        # pre-approved worker's reads, and approved=true on an ungated tool,
+        # still go out as call_agent_tool.
+        approved = approved and bool(entry.get("approval"))
         if self.local_workers is not None and local_worker_of(entry) is not None:
             # A subagent-mode wrapper (`mcp_gmail_read`): its worker runs HERE,
             # as a headless Claude Code session over the integration's own
@@ -1208,6 +1219,8 @@ class AgentToolsServer:
         except ToolError as exc:
             payload = exc.payload or {}
             text = describe_error(payload) if payload.get("error") else str(exc)
+            if approved and APPROVED_TOOL in text:
+                return _text_result(APPROVED_TOOL_MISSING + " (" + text + ")", True)
             return _text_result("Soleon refused the call — " + text, True)
         except TransportError as exc:
             return _text_result("Could not reach Soleon: {}. Retry once the platform is reachable.".format(exc), True)

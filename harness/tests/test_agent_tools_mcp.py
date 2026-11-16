@@ -9,6 +9,7 @@ grant → credentials file rewritten (mode 0600) → retry; missing token → th
 reconnect message; 429 backoff."""
 from __future__ import annotations
 
+import ast
 import json
 import os
 import re
@@ -638,17 +639,65 @@ def test_a_pre_approved_worker_server_sends_its_gated_calls_approved(pre_approve
     assert name == ("call_approved_agent_tool" if pre_approved else "call_agent_tool")
 
 
+@pytest.mark.parametrize("pre_approved,tool,args", [
+    (True, "search_emails", {"query": "x"}),                       # a pre-approved worker's read
+    (False, "search_emails", {"query": "x", "approved": True}),    # approved=true on an ungated tool
+    (False, "send_email", {"to": "s@example.com", "approved": "true"}),   # a string is no approval
+    (False, "send_email", {"to": "s@example.com", "approved": "false"}),
+    (False, "send_email", {"to": "s@example.com", "approved": 1}),
+])
+def test_only_a_gated_tool_with_a_real_approval_goes_out_approved(pre_approved, tool, args):
+    """An approval counts only for a tool marked requires-approval, and only
+    as the JSON boolean true: everything else stays on call_agent_tool."""
+    client = _CapturingClient()
+    server = shim.AgentToolsServer(SLUG, MEMBERS, client=client, pre_approved=pre_approved,
+                                   include_members=True)
+    server.call(tool, args)
+    if client.calls:
+        name, sent = client.calls[0]
+        assert name == "call_agent_tool" and "approved" not in sent["args"]
+    else:  # a gated tool with no real approval is refused locally, before any call
+        assert tool == "send_email"
+
+
+def test_an_unregistered_approved_tool_says_the_server_release_is_missing():
+    """Before the platform registers call_approved_agent_tool, an approved
+    call names the missing server release instead of a generic refusal."""
+    class _OldPlatform(_CapturingClient):
+        def call_tool(self, name, args):
+            self.calls.append((name, args))
+            raise shim.ToolError("Unknown tool: " + name, {"text": "Unknown tool: " + name})
+
+    server = shim.AgentToolsServer(SLUG, MEMBERS, client=_OldPlatform(), pre_approved=True,
+                                   include_members=True)
+    out = server.call("send_email", {"to": "s@example.com"})
+    assert out["isError"] and "needs the AHP-1477 server release" in out["content"][0]["text"]
+
+
+_APPROVED_KEY = re.compile(r"""['"]approved['"]\s*[]:]""")
+
+
 def test_no_plugin_script_sends_an_approval_through_call_agent_tool():
     """AHP-1477 G4: `call_agent_tool` refuses a tool marked requires-approval
     once the platform splits it; an approved call must name
     `call_approved_agent_tool`. Pinned on the one chooser and on the sources:
-    no plugin script spells an `approved` argument into a platform call."""
+    no plugin script spells an `approved` key anywhere (any quote, dict or
+    subscript) except the published schema property, and no platform
+    `call_tool(...)` argument mentions it at all."""
     assert shim.platform_tool_for(True) == "call_approved_agent_tool"
     assert shim.platform_tool_for(False) == "call_agent_tool"
+    for sample in ('"approved": approved,', "{'approved': bool(x)}", 'args["approved"] = pre'):
+        assert _APPROVED_KEY.search(sample), sample  # negative control: each spelling is caught
     bin_dir = Path(shim.__file__).resolve().parent
     for script in sorted(bin_dir.glob("*.py")):
         text = script.read_text(encoding="utf-8")
-        assert not re.search(r'"approved"\s*:\s*(approved|True|true|self\.)', text), script.name
+        hits = [l.strip() for l in text.splitlines() if _APPROVED_KEY.search(l)]
+        assert hits in ([], ['props["approved"] = {']), (script.name, hits)
+        for node in ast.walk(ast.parse(text)):
+            if isinstance(node, ast.Call) and getattr(node.func, "attr", None) == "call_tool":
+                for arg in list(node.args) + [k.value for k in node.keywords]:
+                    consts = [c.value for c in ast.walk(arg) if isinstance(c, ast.Constant)]
+                    assert "approved" not in consts, (script.name, node.lineno)
 
 
 def test_a_wrapper_without_a_worker_description_still_runs_on_soleon():
