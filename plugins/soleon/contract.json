@@ -81,17 +81,52 @@
   "projection_constants": {
     "SK": "CONFIG",
     "agentType": "slack",
-    "appId": "",
+    "channels": [
+      "soleon"
+    ],
     "endpointId": "",
     "registrationOpen": "false",
-    "secretName": "",
-    "slackAuthorized": false,
+    "version": 1,
     "visibility": "restricted"
   },
   "regex_actions": [
     "ANONYMIZE",
     "BLOCK"
   ],
+  "register_agent_row_keys": {
+    "always": [
+      "PK",
+      "SK",
+      "agentType",
+      "appEnv",
+      "channels",
+      "createdAt",
+      "deployId",
+      "displayName",
+      "endpointId",
+      "framework",
+      "groupChat",
+      "gsi2pk",
+      "gsi2sk",
+      "iconColor",
+      "iconName",
+      "registrationOpen",
+      "tenantId",
+      "version",
+      "visibility"
+    ],
+    "conditional": [
+      "channelBindings",
+      "createdBy",
+      "fromIdea",
+      "lifecycleState",
+      "managedByTest",
+      "owner_email",
+      "owner_sub",
+      "pipelineStage",
+      "slackDefaultChannelId"
+    ]
+  },
   "required_topic_strictness": [
     "HIGH",
     "LOW",

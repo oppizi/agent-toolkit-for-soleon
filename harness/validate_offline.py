@@ -27,6 +27,14 @@ CONTRACT_PATH = BET_ROOT / "plugins/soleon/contract.json"
 
 PK_RE = re.compile(r"^APPENV#(dev|staging|prod)#AGENT#[a-z0-9-]+$")
 CREATED_AT_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
+# agent-infra lambda/shared/group_contract.py EAGERNESS.
+GROUP_EAGERNESS = frozenset({"only_when_asked", "balanced", "proactive"})
+# shared_keys._CONTROL_TENANT_ID_RE.
+TENANT_ID_RE = re.compile(r"^[a-z0-9][a-z0-9-]{1,31}$")
+UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$")
+# scripts/agent_manager/avatars.py AVATAR_ICON_NAMES / AVATAR_COLORS shapes.
+ICON_NAME_RE = re.compile(r"^(liquid:[a-z-]+|identicon:\d+)$")
+ICON_COLOR_RE = re.compile(r"^#[0-9a-f]{6}$")
 TOP_LEVEL_KEYS = {"slug", "displayName", "framework", "appEnv", "dynamoFields", "configFields"}
 
 
@@ -293,12 +301,41 @@ def validate_projection(projection: dict, fixture: dict, contract: dict) -> list
         errors.append(f"displayName {display_name!r} fails 1-256 non-empty rule")
 
     framework = projection.get("framework")
-    if framework not in ("maverick", "nanobot", "openclaw"):
-        errors.append(f"framework {framework!r} not in maverick|nanobot|openclaw")
+    if framework not in set(contract["frameworks"]):
+        errors.append(f"framework {framework!r} not in {sorted(contract['frameworks'])}")
 
     created_at = projection.get("createdAt")
     if not isinstance(created_at, str) or not CREATED_AT_RE.match(created_at):
         errors.append(f"createdAt {created_at!r} fails %Y-%m-%dT%H:%M:%SZ format")
+
+    # gsi2sk = shared_keys.agent_config_gsi2_sk(app_env, slug) = "{app_env}#{slug}".
+    if isinstance(pk, str) and PK_RE.match(pk):
+        want = f"{pk.split('#')[1]}#{pk.rsplit('#', 1)[1]}"
+        if projection.get("gsi2sk") != want:
+            errors.append(f"gsi2sk {projection.get('gsi2sk')!r} != {want!r}")
+
+    # groupChat = group_contract.group_config(...): exactly {enabled, eagerness}.
+    gc = projection.get("groupChat")
+    if (not isinstance(gc, dict) or set(gc) != {"enabled", "eagerness"}
+            or type(gc.get("enabled")) is not bool or gc.get("eagerness") not in GROUP_EAGERNESS):
+        errors.append(f"groupChat {gc!r} is not {{enabled: bool, eagerness: {sorted(GROUP_EAGERNESS)}}}")
+
+    # Server-assigned per-call keys: optional, but well-formed when present.
+    tenant = projection.get("tenantId")
+    if "tenantId" in projection and not (isinstance(tenant, str) and TENANT_ID_RE.match(tenant)):
+        errors.append(f"tenantId {tenant!r} fails {TENANT_ID_RE.pattern}")
+    if "gsi2pk" in projection:
+        if not isinstance(tenant, str) or projection["gsi2pk"] != f"TENANT#{tenant}#AGENTCONFIG":
+            errors.append(f"gsi2pk {projection['gsi2pk']!r} != TENANT#{{tenantId}}#AGENTCONFIG")
+    if "deployId" in projection and not (
+            isinstance(projection["deployId"], str) and UUID_RE.match(projection["deployId"])):
+        errors.append(f"deployId {projection['deployId']!r} is not a UUID")
+    if "iconName" in projection and not (
+            isinstance(projection["iconName"], str) and ICON_NAME_RE.match(projection["iconName"])):
+        errors.append(f"iconName {projection['iconName']!r} fails {ICON_NAME_RE.pattern}")
+    if "iconColor" in projection and not (
+            isinstance(projection["iconColor"], str) and ICON_COLOR_RE.match(projection["iconColor"])):
+        errors.append(f"iconColor {projection['iconColor']!r} fails {ICON_COLOR_RE.pattern}")
 
     for key in fixture["forbidden"]:
         if key in projection:

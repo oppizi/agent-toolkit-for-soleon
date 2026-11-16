@@ -51,8 +51,38 @@ def test_missing_required_variable_created_at(example_item):
     assert proj_errors(example_item)
 
 
-def test_forbidden_key_channels_even_empty(example_item):
+def test_channels_must_be_soleon_membership_only(example_item):
+    # Channelless = Soleon Chat membership only (register_agent seeds it).
     example_item["channels"] = []
+    assert proj_errors(example_item)
+    example_item["channels"] = ["soleon", "ci_0123456789abcdef01234567"]
+    assert proj_errors(example_item)
+
+
+def test_retired_slack_fields_forbidden(example_item):
+    for key, value in (("appId", ""), ("secretName", ""), ("slackAuthorized", False)):
+        item = dict(example_item, **{key: value})
+        assert proj_errors(item), key
+
+
+def test_gsi2sk_must_match_pk(example_item):
+    example_item["gsi2sk"] = "staging#campaign-sla-watcher"
+    assert proj_errors(example_item)
+
+
+def test_group_chat_shape(example_item):
+    example_item["groupChat"] = {"enabled": "false", "eagerness": "balanced"}
+    assert proj_errors(example_item)
+
+
+def test_server_assigned_keys_pass_when_well_formed(example_item):
+    example_item.update({
+        "tenantId": "acme", "gsi2pk": "TENANT#acme#AGENTCONFIG",
+        "deployId": "6f1c2a9e-1d2b-4c3d-8e4f-0a1b2c3d4e5f",
+        "iconName": "liquid:assistant", "iconColor": "#17c961",
+    })
+    assert proj_errors(example_item) == []
+    example_item["gsi2pk"] = "TENANT#other#AGENTCONFIG"
     assert proj_errors(example_item)
 
 

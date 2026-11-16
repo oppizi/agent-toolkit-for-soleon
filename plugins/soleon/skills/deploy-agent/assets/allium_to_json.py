@@ -656,13 +656,23 @@ def build_request_body(v: dict) -> dict:
 def build_projection(v: dict, contract: dict, created_at: str | None = None) -> dict:
     """Predicted create-time CONFIG row (what register_agent will put_item).
 
-    UNCHANGED by config/skills — soul/config/skills go to S3, never the row.
-    PK composed from the contract's template (mirrors shared_keys.agent_pk).
-    `channels` is never present for a channelless agent.
+    UNCHANGED by soul/skills and by config other than `groupChat` — they go to
+    S3, never the row; register_agent mirrors only the group-chat switch onto
+    it (group_contract.group_config: off/balanced unless config sets it).
+    PK composed from the contract's template (mirrors shared_keys.agent_pk);
+    `channels` is the contract constant ["soleon"] (Soleon Chat membership —
+    no provider channel). Server-assigned per-call keys (tenantId, gsi2pk,
+    deployId, the random avatar, owner) are not predicted offline.
     """
     pk = contract["pk_template"].format(app_env=v["app_env"], slug=v["slug"])
+    group_chat = (v.get("config") or {}).get("groupChat") or {}
     projection = {
         "PK": pk,
+        "gsi2sk": f"{v['app_env']}#{v['slug']}",
+        "groupChat": {
+            "enabled": group_chat.get("enabled", False),
+            "eagerness": group_chat.get("eagerness", "balanced"),
+        },
         "appEnv": v["app_env"],
         "displayName": v["display_name"],
         "framework": v["framework"],

@@ -127,6 +127,60 @@ def _require(text: str, needle: str, source: str, what: str) -> None:
         raise SystemExit(f"sync_contract: {what} ({needle}) not found in {source}")
 
 
+def _register_agent_row_keys(registry_py: str) -> dict:
+    """The CONFIG-row attribute names ``register_agent`` writes, read from its
+    AST: ``always`` = the ``item = {...}`` literal's keys plus every
+    ``item["k"] = ...`` at the function's top level; ``conditional`` = the
+    ``item["k"] = ...`` writes nested under an ``if``. The avatar is always
+    written too (``item.update(random_avatar())`` when no icon was chosen), so
+    its two keys join ``always`` behind a text guard. The frozen oracle is
+    checked against this set offline (tests/test_oracle_row_keys.py), so a key
+    the platform adds or retires fails a test instead of drifting silently."""
+    fn = next(
+        (n for n in ast.walk(ast.parse(registry_py))
+         if isinstance(n, ast.FunctionDef) and n.name == "register_agent"),
+        None,
+    )
+    if fn is None:
+        raise SystemExit(f"sync_contract: register_agent not found in {REGISTRY}")
+
+    def item_subscript_key(node: ast.AST) -> str | None:
+        if (isinstance(node, ast.Assign) and len(node.targets) == 1
+                and isinstance(node.targets[0], ast.Subscript)
+                and isinstance(node.targets[0].value, ast.Name)
+                and node.targets[0].value.id == "item"
+                and isinstance(node.targets[0].slice, ast.Constant)
+                and isinstance(node.targets[0].slice.value, str)):
+            return node.targets[0].slice.value
+        return None
+
+    always: set[str] = set()
+    literal_found = False
+    for stmt in fn.body:
+        if (isinstance(stmt, ast.Assign) and len(stmt.targets) == 1
+                and isinstance(stmt.targets[0], ast.Name) and stmt.targets[0].id == "item"
+                and isinstance(stmt.value, ast.Dict)):
+            literal_found = True
+            for k in stmt.value.keys:
+                if not (isinstance(k, ast.Constant) and isinstance(k.value, str)):
+                    raise SystemExit("sync_contract: register_agent item literal has a non-string key")
+                always.add(k.value)
+        key = item_subscript_key(stmt)
+        if key:
+            always.add(key)
+    if not literal_found:
+        raise SystemExit("sync_contract: register_agent no longer builds `item = {...}`")
+    conditional: set[str] = set()
+    for node in ast.walk(fn):
+        key = item_subscript_key(node)
+        if key and key not in always:
+            conditional.add(key)
+    _require(registry_py, 'if not item.get("iconName"):\n        item.update(random_avatar())',
+             REGISTRY, "always-written random avatar")
+    always |= {"iconName", "iconColor"}
+    return {"always": sorted(always), "conditional": sorted(conditional - always)}
+
+
 def _agent_values(index_py: str) -> dict:
     """All fields derived from `lambda/ui_admin_agents/index.py` source text."""
     src = AGENTS_INDEX
@@ -198,6 +252,14 @@ def extract(repo_root: Path) -> dict:
     _require(registry_py, '"visibility": visibility or ("public" if registration_open else "restricted")',
              REGISTRY, "create-time visibility default")
 
+    # The other create-time constants projection_constants carries.
+    _require(registry_py, '"endpointId": "",', REGISTRY, "create-time endpointId")
+    _require(registry_py, '"version": 1,', REGISTRY, "create-time config version")
+    _require(registry_py,
+             'channels: list[str] = [] if lifecycle_state == "in_build" else ["soleon"]',
+             REGISTRY, "create-time Soleon Chat membership")
+    row_keys = _register_agent_row_keys(registry_py)
+
     idx = _agent_values(index_py)
     platform_frameworks = idx.pop("platform_frameworks")
 
@@ -237,17 +299,21 @@ def extract(repo_root: Path) -> dict:
         "model_alias_map": MODEL_ALIAS_MAP,
         # Create-time CONFIG-row constants for a channelless agent
         # (mirrors preflight/expected_channelless_config.json required_exact).
-        # No runtimeArn: since AHP-390 WP-B the CONFIG row carries none.
+        # No runtimeArn: since AHP-390 WP-B the CONFIG row carries none. No
+        # appId / secretName / slackAuthorized: AHP-1117 moved Slack state onto
+        # the binding, and register_agent writes none of them (AHP-1837).
+        # `version` starts at 1 and `channels` is the Soleon Chat membership
+        # every live create gets — each guarded against the source above.
         "projection_constants": {
             "SK": "CONFIG",
             "agentType": "slack",
-            "appId": "",
-            "secretName": "",
             "endpointId": "",
-            "slackAuthorized": False,
             "registrationOpen": "false",
             "visibility": "restricted",
+            "version": 1,
+            "channels": ["soleon"],
         },
+        "register_agent_row_keys": row_keys,
         **idx,
     }
 
