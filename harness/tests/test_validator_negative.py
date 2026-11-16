@@ -204,13 +204,12 @@ def _body_with(config_extra):
 
 def test_positive_config_and_skills_schema_match():
     body = _body_with({
-        "config": {"model": "us.anthropic.claude-opus-4-8", "promptCaching": True,
-                   "promptCacheTtl": "1h",
+        "config": {"model": "us.anthropic.claude-opus-4-8",
                    "guardrails": {"piiEnabled": True, "piiEntities": {"EMAIL": "ANONYMIZE"}},
                    "evals": {"standardEvals": [{
                        "id": "x", "name": "X",
                        "inputs": [{"role": "user", "content": "hi"}],
-                       "expectedOutput": "ok", "scoringMode": "pass_fail",
+                       "expectedOutput": "ok",
                        "judgeModel": "claude-opus-4-7"}]}},
         "skills": [_good_skill()],
     })
@@ -282,12 +281,18 @@ def test_config_schedules_rejected():
     assert any("schedules" in e for e in env_errors(_body_with({"config": {"schedules": []}})))
 
 
-def test_config_bad_prompt_cache_ttl():
-    assert env_errors(_body_with({"config": {"promptCacheTtl": "30m"}}))
+@pytest.mark.parametrize("key,val", [("promptCacheTtl", "1h"), ("promptCaching", True)])
+def test_config_retired_prompt_cache_field_flagged(key, val):
+    """AHP-1478: retired; the converter strips them, so emitting one is a defect."""
+    assert any("retired" in e for e in env_errors(_body_with({"config": {key: val}})))
 
 
-def test_config_prompt_caching_non_bool():
-    assert env_errors(_body_with({"config": {"promptCaching": "yes"}}))
+@pytest.mark.parametrize("key,val", [("scoringMode", "pass_fail"), ("scoreThreshold", 70)])
+def test_config_retired_eval_field_flagged(key, val):
+    body = _body_with({"config": {"evals": {"standardEvals": [{
+        "id": "x", "name": "X", "inputs": [{"role": "user", "content": "hi"}],
+        "expectedOutput": "ok", key: val}]}}})
+    assert any("retired" in e for e in env_errors(body))
 
 
 def test_config_bad_guardrail_enum():
@@ -297,14 +302,14 @@ def test_config_bad_guardrail_enum():
 def test_config_bad_eval_judge_model():
     body = _body_with({"config": {"evals": {"standardEvals": [{
         "id": "x", "name": "X", "inputs": [{"role": "user", "content": "hi"}],
-        "expectedOutput": "ok", "scoringMode": "pass_fail", "judgeModel": "gpt-4"}]}}})
+        "expectedOutput": "ok", "judgeModel": ""}]}}})
     assert env_errors(body)
 
 
 def test_config_eval_final_turn_not_user():
     body = _body_with({"config": {"evals": {"standardEvals": [{
         "id": "x", "name": "X", "inputs": [{"role": "agent", "content": "hi"}],
-        "expectedOutput": "ok", "scoringMode": "pass_fail"}]}}})
+        "expectedOutput": "ok"}]}}})
     assert env_errors(body)
 
 

@@ -58,7 +58,8 @@ Produce `<slug>.agent_identity.allium` next to the identity file:
      declaration (the body is a placeholder predicate; the NAME is the
      machine-readable handle), and
    - a `@guidance` line `-- <PascalCaseName>: <the constraint, verbatim>`.
-5. **visibility**: `"private"` (v0.1 emits private only).
+5. **visibility**: `"restricted"` (the platform's create default; it accepts
+   only `public` | `restricted` on writes — `"private"` is refused).
 6. **model**: NEVER copy frontmatter `model:` aliases (`fable`, `opus`,
    `sonnet`, `haiku`, `inherit`, `default`) — record the dropped alias as a
    spec comment `-- dropped model alias: <alias>`. Include
@@ -79,15 +80,16 @@ Produce `<slug>.agent_identity.allium` next to the identity file:
    - **evals**: for each hard-constraint invariant (step 4), synthesize one
      `standardEvals` entry: `id` = slug of the invariant name, `name` ≤ 80 chars,
      `inputs` = a single `{role:"user", content:"<a prompt that tempts the
-     violation>"}`, `expectedOutput` = the compliant behavior, `scoringMode` =
-     `"pass_fail"`, `judgeModel` = the first entry of `eval_judge_model_allowlist`.
+     violation>"}`, `expectedOutput` = the compliant behavior. Evals are graded 0-100, never
+     pass/fail: never emit `scoringMode` or `scoreThreshold` (the platform
+     retired them and the converter strips them). Omit `judgeModel` unless the
+     operator names a catalogue model.
    - **guardrails**: only when the identity's safety language clearly supports
      it — "never reveal/leak PII" → `{"piiEnabled": true, "piiEntities": {...:
      "ANONYMIZE"|"BLOCK"}}`; "stay on topic X" → `requiredTopics`; a "no
      <category>" rule → `contentFilters` strength. Be conservative: propose
      nothing the text doesn't clearly state. Strength/action enums come from
      `contract.json` (`guardrail_strengths`, `pii_actions`, …).
-   - **promptCaching**: NOT distilled — offered as a default in Step 3.
    - **tools / schedules**: NOT supported here (Claude Code `tools:` are
      built-ins, not platform MCP refs; schedules need a dep the plugin avoids).
    Summarize every proposed config item in plain words inside the
@@ -108,9 +110,9 @@ config {
     slug: String = "<slug>"
     display_name: String = "<Display Name>"
     framework: Framework = <answered-or-stated>
-    visibility: String = "private"
+    visibility: String = "restricted"
     soul: String = "<json-escaped full body>"
-    config_proposal: String = "<json-escaped {model?, evals?, guardrails?, promptCaching?}>"
+    config_proposal: String = "<json-escaped {model?, evals?, guardrails?}>"
 }
 
 entity AgentIdentity {
@@ -163,9 +165,6 @@ config, not restating the file:
 - **evals** (gap-id `config-evals`): list the proposed checks by name ("Never
   Invent Data; Always Cite Sources"). Confirm / drop individual ones / edit.
   Apply to `config_proposal.evals.standardEvals`.
-- **promptCaching** (gap-id `config-prompt-caching`): "enable prompt caching to
-  cut cost?"; if yes, "5-minute or 1-hour cache window?". Apply
-  `promptCaching` + `promptCacheTtl`.
 
 Update the spec (soul, invariants, and `config_proposal`) with each answer.
 

@@ -151,10 +151,12 @@ def _validate_config_envelope(cfg, contract: dict) -> list[str]:
                     errs.append("config.guardrails.requiredTopics must be non-empty strings")
             if "requiredTopicsStrictness" in g and g["requiredTopicsStrictness"] not in contract["required_topic_strictness"]:
                 errs.append("config.guardrails.requiredTopicsStrictness bad value")
-    if "promptCaching" in cfg and not isinstance(cfg["promptCaching"], bool):
-        errs.append("config.promptCaching must be a boolean")
-    if "promptCacheTtl" in cfg and cfg["promptCacheTtl"] not in contract["prompt_cache_ttl_values"]:
-        errs.append(f"config.promptCacheTtl must be one of {contract['prompt_cache_ttl_values']}")
+    # promptCaching / promptCacheTtl are retired (AHP-1478): the platform drops
+    # them on save and the converter never emits them, so a body still
+    # carrying one is a converter defect.
+    for retired in ("promptCaching", "promptCacheTtl"):
+        if retired in cfg:
+            errs.append(f"config.{retired} is retired and must not be emitted")
     if "user_schedules_enabled" in cfg and not isinstance(cfg["user_schedules_enabled"], bool):
         errs.append("config.user_schedules_enabled must be a boolean")
     tools = cfg.get("tools")
@@ -244,16 +246,12 @@ def _validate_config_envelope(cfg, contract: dict) -> list[str]:
                             errs.append(f"{loc} must have inputs or inputPrompt")
                         if not isinstance(ev.get("expectedOutput"), str):
                             errs.append(f"{loc}.expectedOutput must be a string")
-                        sc = ev.get("scoringMode")
-                        if sc not in contract["eval_scoring_modes"]:
-                            errs.append(f"{loc}.scoringMode bad")
-                        elif sc == "score" and "scoreThreshold" in ev:
-                            t = ev["scoreThreshold"]
-                            if not isinstance(t, (int, float)) or isinstance(t, bool) or t < 0 or t > 100:
-                                errs.append(f"{loc}.scoreThreshold must be a number in [0,100]")
+                        for retired in ("scoringMode", "scoreThreshold", "allowSideEffects"):
+                            if retired in ev:
+                                errs.append(f"{loc}.{retired} is retired and must not be emitted")
                         jm = ev.get("judgeModel")
-                        if jm is not None and jm not in contract["eval_judge_model_allowlist"]:
-                            errs.append(f"{loc}.judgeModel not in allowlist")
+                        if jm is not None and (not isinstance(jm, str) or not jm.strip()):
+                            errs.append(f"{loc}.judgeModel must be a non-empty string")
                         etc = ev.get("expectedToolCalls")
                         if etc is not None:
                             if not isinstance(etc, list):

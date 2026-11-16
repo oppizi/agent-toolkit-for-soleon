@@ -69,6 +69,12 @@ class ValidationError(ConvertError):
 # exactly; a render-parity test guards them against the live source).
 # ---------------------------------------------------------------------------
 
+# Fields the platform retired and strips on save (it never rejects them, so a
+# stored draft still round-trips). The converter strips them the same way.
+RETIRED_CONFIG_FIELDS = ("promptCacheTtl", "promptCaching")
+RETIRED_EVAL_FIELDS = ("scoringMode", "scoreThreshold", "allowSideEffects")
+
+
 def _yaml_escape(s: str) -> str:
     if s == "":
         return '""'
@@ -309,20 +315,15 @@ def _validate_evals(evals, contract: dict) -> None:
             raise ValidationError(f"{loc} must have `inputs` (or legacy `inputPrompt`)")
         if not isinstance(ev.get("expectedOutput"), str):
             raise ValidationError(f"{loc}.expectedOutput must be a string")
-        scoring = ev.get("scoringMode")
-        if scoring not in contract["eval_scoring_modes"]:
-            raise ValidationError(
-                f"{loc}.scoringMode must be one of {sorted(contract['eval_scoring_modes'])}"
-            )
-        if scoring == "score" and "scoreThreshold" in ev:
-            t = ev["scoreThreshold"]
-            if not isinstance(t, (int, float)) or isinstance(t, bool) or t < 0 or t > 100:
-                raise ValidationError(f"{loc}.scoreThreshold must be a number in [0, 100]")
+        # Retired on the platform: dropped there, so dropped here and never
+        # emitted. Standard evals are graded 0-100, never pass/fail.
+        for retired in RETIRED_EVAL_FIELDS:
+            ev.pop(retired, None)
+        # judgeModel: any catalogue model judges. The catalogue is live and
+        # env-refreshed, so it is checked by the server, not offline.
         jm = ev.get("judgeModel")
-        if jm is not None and jm not in contract["eval_judge_model_allowlist"]:
-            raise ValidationError(
-                f"{loc}.judgeModel={jm!r} not in allowlist {contract['eval_judge_model_allowlist']}"
-            )
+        if jm is not None and (not isinstance(jm, str) or not jm.strip()):
+            raise ValidationError(f"{loc}.judgeModel must be a non-empty string")
         etc = ev.get("expectedToolCalls")
         if etc is not None:
             if not isinstance(etc, list):
@@ -395,6 +396,10 @@ def validate_config(cfg: dict, contract: dict) -> None:
             "validation needs a dependency the plugin deliberately avoids. Omit "
             "schedules (a named follow-up); see the plugin README."
         )
+    # Retired on the platform (AHP-1478: caching is always on): dropped there,
+    # so dropped here and never emitted.
+    for retired in RETIRED_CONFIG_FIELDS:
+        cfg.pop(retired, None)
     if len(json.dumps(cfg).encode()) > contract["max_config_bytes"]:
         raise ValidationError(f"config exceeds {contract['max_config_bytes']} bytes")
     model_id = cfg.get("model")
@@ -409,12 +414,6 @@ def validate_config(cfg: dict, contract: dict) -> None:
             )
     if "guardrails" in cfg:
         _validate_guardrails(cfg["guardrails"], contract)
-    if "promptCaching" in cfg and not isinstance(cfg["promptCaching"], bool):
-        raise ValidationError("config.promptCaching must be a boolean")
-    if "promptCacheTtl" in cfg and cfg["promptCacheTtl"] not in contract["prompt_cache_ttl_values"]:
-        raise ValidationError(
-            f"config.promptCacheTtl must be one of {contract['prompt_cache_ttl_values']}"
-        )
     if "user_schedules_enabled" in cfg and not isinstance(cfg["user_schedules_enabled"], bool):
         raise ValidationError("config.user_schedules_enabled must be a boolean")
     if "tools" in cfg:
@@ -571,7 +570,14 @@ def validate_params(params: dict, app_env: str, contract: dict) -> dict:
             f"framework {framework!r} must be one of {sorted(contract['frameworks'])}"
         )
 
-    visibility = params.get("visibility", "private")
+    # The platform's write values are public | restricted; its own create
+    # default is "restricted" (create_agent_route). A stored "private" row
+    # reads as restricted, but a write of "private" is refused.
+    visibility = params.get("visibility", "restricted")
+    if visibility == "private":
+        # Specs written before the platform retired "private" (USER 2026-10-29)
+        # still say it; it means restricted, so heal it rather than refuse.
+        visibility = "restricted"
     if visibility not in contract["visibility_values"]:
         raise ValidationError(
             f"visibility {visibility!r} must be one of {sorted(contract['visibility_values'])}"
@@ -664,7 +670,9 @@ def build_projection(v: dict, contract: dict, created_at: str | None = None) -> 
         or datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
     }
     projection.update(contract["projection_constants"])
-    if v["visibility"] != "private":
+    # The frozen create-time row carries "private", which the platform reads
+    # as restricted; only a public agent changes the predicted row.
+    if v["visibility"] not in ("private", "restricted"):
         projection["visibility"] = v["visibility"]
     return projection
 

@@ -327,8 +327,11 @@ def test_config_proposal_model_evals_guardrails(resolved, tmp_path, monkeypatch)
     assert validate(result["body"], result["projection"])["schema_match"]
     cfg = result["body"]["configFields"]["config"]
     assert cfg["model"] == "us.anthropic.claude-opus-4-8"
-    assert cfg["promptCacheTtl"] == "1h"
-    assert cfg["evals"]["standardEvals"][0]["id"] == "never-invent"
+    # Retired on the platform and stripped by the converter, never emitted.
+    assert "promptCaching" not in cfg and "promptCacheTtl" not in cfg
+    ev = cfg["evals"]["standardEvals"][0]
+    assert ev["id"] == "never-invent"
+    assert "scoringMode" not in ev and ev["judgeModel"] == "claude-opus-4-7"
     assert set(result["report"]["config_keys"]) == set(cfg)
 
 
@@ -349,10 +352,25 @@ def test_config_proposal_bad_eval_judge_rejected(resolved, tmp_path, monkeypatch
     monkeypatch.setenv("CLAUDE_PLUGIN_ROOT", str(PLUGIN))
     proposal = {"evals": {"standardEvals": [{
         "id": "x", "name": "X", "inputs": [{"role": "user", "content": "hi"}],
-        "expectedOutput": "ok", "scoringMode": "pass_fail", "judgeModel": "gpt-4",
+        "expectedOutput": "ok", "judgeModel": "",
     }]}}
     with pytest.raises(ValidationError):
         convert(_proposal_spec(tmp_path, proposal), "dev", tmp_path / "out")
+
+
+def test_config_proposal_eval_judge_left_to_server(resolved, tmp_path, monkeypatch):
+    """Any catalogue model judges; the catalogue is live, so a non-empty
+    judgeModel is not refused offline (the server answers BAD_JUDGE_MODEL)."""
+    monkeypatch.setenv("CLAUDE_PLUGIN_ROOT", str(PLUGIN))
+    proposal = {"evals": {"standardEvals": [{
+        "id": "x", "name": "X", "inputs": [{"role": "user", "content": "hi"}],
+        "expectedOutput": "ok", "judgeModel": "us.anthropic.claude-sonnet-4-6",
+        "scoringMode": "score", "scoreThreshold": 70,
+    }]}}
+    result = convert(_proposal_spec(tmp_path, proposal), "dev", tmp_path / "out")
+    ev = result["body"]["configFields"]["config"]["evals"]["standardEvals"][0]
+    assert ev["judgeModel"] == "us.anthropic.claude-sonnet-4-6"
+    assert "scoringMode" not in ev and "scoreThreshold" not in ev
 
 
 def test_model_param_conflicts_with_proposal(resolved, tmp_path, monkeypatch):
@@ -445,7 +463,7 @@ def test_projection_identical_with_and_without_config_skills(resolved, tmp_path,
     plain = convert(write_spec(tmp_path / "a", soul=soul), "dev", tmp_path / "a/out")
     d = _write_skill_dir(tmp_path, "cite-sources", "cite", "body\n")
     rich = convert(
-        _proposal_spec(tmp_path / "b", {"promptCaching": True}, soul=soul),
+        _proposal_spec(tmp_path / "b", {"model": "us.anthropic.claude-opus-4-8"}, soul=soul),
         "dev", tmp_path / "b/out", skill_inputs=[str(d)],
     )
     a, b = dict(plain["projection"]), dict(rich["projection"])
