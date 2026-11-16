@@ -670,9 +670,9 @@ def build_projection(v: dict, contract: dict, created_at: str | None = None) -> 
         or datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
     }
     projection.update(contract["projection_constants"])
-    # The frozen create-time row carries "private", which the platform reads
-    # as restricted; only a public agent changes the predicted row.
-    if v["visibility"] not in ("private", "restricted"):
+    # register_agent writes "restricted" for a non-public agent (the contract's
+    # projection constant); only a public agent changes the predicted row.
+    if v["visibility"] != "restricted":
         projection["visibility"] = v["visibility"]
     return projection
 

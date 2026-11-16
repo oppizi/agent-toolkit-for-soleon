@@ -16,6 +16,7 @@ from allium_to_json import (
     DecodeError,
     SpecError,
     ValidationError,
+    build_projection,
     convert,
     decode_default_expr,
     read_spec,
@@ -225,6 +226,18 @@ def _params(**over):
 @pytest.fixture(scope="module")
 def contract_doc():
     return engine.load_contract(PLUGIN)
+
+
+@pytest.mark.parametrize("vis,expected", [("restricted", "restricted"), ("private", "restricted"),
+                                          ("public", "public")])
+def test_projection_predicts_the_rows_visibility(contract_doc, vis, expected):
+    """register_agent writes "restricted" for a non-public agent (and the server
+    reads a retired "private" as restricted); the predicted row says the same,
+    and carries no runtimeArn (the CONFIG row has none since AHP-390 WP-B)."""
+    projection = build_projection(validate_params(_params(visibility=vis), "dev", contract_doc),
+                                  contract_doc)
+    assert projection["visibility"] == expected
+    assert "runtimeArn" not in projection
 
 
 def test_display_name_emitted_stripped(contract_doc):

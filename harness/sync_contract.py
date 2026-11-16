@@ -136,10 +136,16 @@ def _agent_values(index_py: str) -> dict:
     _require(index_py, 't not in ("read", "write")', src, "tools upstreamOverride type enum")
     # The retired fields must still be RETIRED on the platform (stripped, not
     # validated); if one comes back, this contract has to grow it back too.
-    _require(index_py, 'RETIRED_AGENT_FIELDS = ("promptCacheTtl", "promptCaching")', src,
-             "promptCacheTtl retirement")
-    _require(index_py, 'for retired in ("scoringMode", "scoreThreshold", "allowSideEffects")',
-             src, "eval scoringMode retirement")
+    # Presence of each name on its retirement line, not an exact spelling, so a
+    # reformat (reordered tuple, trailing comma) does not stop extraction.
+    for line_re, names, what in (
+        (r"^RETIRED_AGENT_FIELDS\s*=.*$", ("promptCacheTtl", "promptCaching"), "promptCacheTtl retirement"),
+        (r"^\s*for \w+ in \(.*\"scoringMode\".*$", ("scoringMode", "scoreThreshold", "allowSideEffects"),
+         "eval scoringMode retirement"),
+    ):
+        m = re.search(line_re, index_py, re.M)
+        if not m or not all('"{}"'.format(n) in m.group(0) for n in names):
+            raise SystemExit(f"sync_contract: {what} ({', '.join(names)}) not found in {src}")
     for gone in ("_EVAL_SCORING_MODES", "_EVAL_JUDGE_MODEL_ALLOWLIST"):
         if re.search(rf"^{gone}\s*=", index_py, re.M):
             raise SystemExit(f"sync_contract: {gone} is back in {src}; un-retire its contract key")
@@ -186,6 +192,12 @@ def extract(repo_root: Path) -> dict:
     for rel in (AGENTS_COMMON, SHARED_LAYER):
         _require(read(rel), "def _skill_to_markdown(", rel, "skill renderer")
 
+    # The create-time CONFIG row's visibility default (register_agent): a
+    # non-public agent is written "restricted". projection_constants carries
+    # that value, so a server change here must break extraction loudly.
+    _require(registry_py, '"visibility": visibility or ("public" if registration_open else "restricted")',
+             REGISTRY, "create-time visibility default")
+
     idx = _agent_values(index_py)
     platform_frameworks = idx.pop("platform_frameworks")
 
@@ -225,16 +237,16 @@ def extract(repo_root: Path) -> dict:
         "model_alias_map": MODEL_ALIAS_MAP,
         # Create-time CONFIG-row constants for a channelless agent
         # (mirrors preflight/expected_channelless_config.json required_exact).
+        # No runtimeArn: since AHP-390 WP-B the CONFIG row carries none.
         "projection_constants": {
             "SK": "CONFIG",
             "agentType": "slack",
             "appId": "",
             "secretName": "",
-            "runtimeArn": "",
             "endpointId": "",
             "slackAuthorized": False,
             "registrationOpen": "false",
-            "visibility": "private",
+            "visibility": "restricted",
         },
         **idx,
     }

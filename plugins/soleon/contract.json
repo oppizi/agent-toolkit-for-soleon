@@ -84,10 +84,9 @@
     "appId": "",
     "endpointId": "",
     "registrationOpen": "false",
-    "runtimeArn": "",
     "secretName": "",
     "slackAuthorized": false,
-    "visibility": "private"
+    "visibility": "restricted"
   },
   "regex_actions": [
     "ANONYMIZE",

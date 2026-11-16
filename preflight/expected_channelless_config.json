@@ -5,11 +5,10 @@
     "agentType": "slack",
     "appId": "",
     "secretName": "",
-    "runtimeArn": "",
     "endpointId": "",
     "slackAuthorized": false,
     "registrationOpen": "false",
-    "visibility": "private"
+    "visibility": "restricted"
   },
   "required_variable": {
     "PK": "string matching ^APPENV#(dev|staging|prod)#AGENT#[a-z0-9-]+$ — compose via shared_keys.agent_pk(app_env, slug), never a raw literal",
@@ -23,6 +22,7 @@
     "createdBy": "caller email when resolvable from the JWT claims"
   },
   "forbidden": [
+    "runtimeArn",
     "channels",
     "slackDefaultChannelId",
     "soul",
@@ -51,11 +51,10 @@
     "agentType": "slack",
     "appId": "",
     "secretName": "",
-    "runtimeArn": "",
     "endpointId": "",
     "slackAuthorized": false,
     "registrationOpen": "false",
-    "visibility": "private",
+    "visibility": "restricted",
     "createdAt": "2026-06-10T12:00:00Z"
   }
 }

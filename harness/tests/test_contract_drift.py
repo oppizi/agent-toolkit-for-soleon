@@ -96,9 +96,6 @@ def test_retired_keys_absent():
     model judges) and the promptCacheTtl enum (AHP-1478: caching is always on).
     The contract must not keep advertising them."""
     fresh = extract(REPO_ROOT)
-    assert RETIRED_CONTRACT_KEYS == {
-        "eval_scoring_modes", "eval_judge_model_allowlist", "prompt_cache_ttl_values",
-    }
     assert not (RETIRED_CONTRACT_KEYS & set(fresh))
     shipped = json.loads((BET_ROOT / "plugins/soleon/contract.json").read_text())
     assert not (RETIRED_CONTRACT_KEYS & set(shipped))

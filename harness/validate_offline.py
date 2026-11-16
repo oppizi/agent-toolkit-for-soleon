@@ -314,7 +314,7 @@ def validate_projection(projection: dict, fixture: dict, contract: dict) -> list
             errors.append(f"unlisted key {key!r} present in projection")
 
     # Harness policy (stricter than the server): the channelless fixture pins
-    # visibility "private"; anything else is a fixture violation even though
+    # visibility "restricted"; anything else is a fixture violation even though
     # the server would accept it.
     slug_pattern = contract["slug_pattern"]
     if isinstance(pk, str) and PK_RE.match(pk):
