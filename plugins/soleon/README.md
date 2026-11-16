@@ -38,7 +38,8 @@ still your Soleon permission for that agent and environment. `agent.approve` let
 an agent tool that needs a person's approval run as already approved.
 
 `agent.invoke` is the local-emulation scope: running one of an agent's tools on
-the platform with YOUR credentials (`call_agent_tool`), listing them, fetching the
+the platform with YOUR credentials (`call_agent_tool`; an approved call to a
+gated tool is `call_approved_agent_tool`, scope `agent.approve`), listing them, fetching the
 assembled prompt and your workspace snapshot.
 
 Requesting every scope grants **no** additional access. Scope is a ceiling on
@@ -152,7 +153,8 @@ local model; **every external tool runs on Soleon** through the bundled
 `bin/soleon_agent_tools_mcp.py` stdio shim (each tool under its platform name
 and schema, executed via `call_agent_tool` with your credentials, the agent's
 tool policy and its approval gates — the subagent asks you first, then sends
-`approved: true`; the platform refuses without it). Workspace tools run locally
+`approved: true`, which goes out as `call_approved_agent_tool`; the platform
+refuses without it). Workspace tools run locally
 via `bin/soleon_workspace_mcp.py` against the snapshot. Tool calls wait for the
 platform to finish — no client-side timeout, as on the platform.
 
@@ -220,14 +222,18 @@ approximately, not identically.
 **Ask before production.** A PreToolUse hook
 (`hooks/soleon_ask_before_production.sh`) asks before every Soleon tool whose
 name ends in `_production` or `_everywhere`, and before
-`call_approved_agent_tool`; in `claude -p`, and in a mode where nobody sees a
-question (`bypassPermissions`, `dontAsk`, `auto`), it refuses the call. It is a
-second line behind your own permission rules, not a replacement for them. It
-covers only this plugin's server (`mcp__plugin_soleon_soleon__…`): a Soleon
-server you also added by hand needs its own `mcp__<name>__*_production` /
-`*_everywhere` deny or ask rules. Turn it off with the plugin option
-`ask_before_production` = `off`, in your user settings only; while it is off,
-each such call shows a notice. Details and paste-ready rules:
+`call_approved_agent_tool`. It asks only in default, accept-edits and plan
+mode; in `claude -p` that question is refused, and in every other mode
+(`bypassPermissions`, `dontAsk`, `auto`, an unknown one) it refuses the call.
+It is a second line behind your own permission rules, not a replacement for
+them. It covers only this plugin's server (`mcp__plugin_soleon_soleon__…`): a
+Soleon server you also added by hand needs its own `mcp__<name>__*_production`
+/ `*_everywhere` deny or ask rules, and a pulled agent's own tools (the local
+`soleon-agent-tools` server) are not seen by it: their approvals are the
+model's word, sent as `call_approved_agent_tool`. Turn it off with the plugin
+option `ask_before_production` = `off`, in your user settings only (off is
+ignored when the project's `.claude` settings name the option, and never lifts
+a refusal); while it is off, each such call shows a notice. Details and paste-ready rules:
 `docs/release-notes/AHP-1477.md`.
 
 **Credentials — macOS and Linux.** The shim and the hooks run outside Claude

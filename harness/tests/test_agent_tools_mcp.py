@@ -96,7 +96,10 @@ class FakeSoleon(BaseHTTPRequestHandler):
         self._json(200, result)
 
     def dispatch(self, name, args):
-        if name == "call_agent_tool":
+        if name in ("call_agent_tool", "call_approved_agent_tool"):
+            # AHP-1477 G4: the approval is WHICH tool was called, never an argument
+            assert "approved" not in args
+            approved = name == "call_approved_agent_tool"
             assert args["slug"] == SLUG and args["app_env"] == "dev"
             tool = args["name"]
             if tool == "custom_echo-server_read":
@@ -106,7 +109,7 @@ class FakeSoleon(BaseHTTPRequestHandler):
                 return {"status": 202, "state": "pending", "call_id": "lc_" + "2" * 24, "op": "tool_call",
                         "next_action": "poll"}
             if tool == "custom_echo-server_write":
-                if not args.get("approved"):
+                if not approved:
                     return {"status": 200, "state": "error", "call_id": "lc_" + "3" * 24, "op": "tool_call",
                             "error": "approval_required", "tool": tool,
                             "detail": "'custom_echo-server_write' requires human approval before it runs.",
@@ -185,7 +188,7 @@ def test_done_envelope_returns_the_tools_own_result(soleon, tmp_path):
     turn = args.pop("turn")
     assert re.fullmatch(r"[0-9a-f]{12}", turn)  # one platform turn per subagent run
     assert args == {"slug": SLUG, "app_env": "dev", "name": "custom_echo-server_read",
-                    "args": {"prompt": "hello"}, "approved": False}
+                    "args": {"prompt": "hello"}}
     # every call of this process carries the SAME ids
     server.call("custom_echo-server_read", {"prompt": "again"})
     assert state["calls"][-1][1]["conversation"] == conversation
@@ -337,8 +340,9 @@ def test_approval_required_is_an_error_result_that_asks_then_retries_with_approv
     assert text.startswith("approval_required:") and "approved=true" in text and "Ask them" in text
     ok = server.call("custom_echo-server_write", {"prompt": "send it", "approved": True})
     assert "isError" not in ok and ok["content"][0]["text"] == "wrote: send it"
-    _, args = state["calls"][-1]
-    assert args["approved"] is True and args["args"] == {"prompt": "send it"}  # approved is lifted out of args
+    name, args = state["calls"][-1]
+    assert name == "call_approved_agent_tool" and "approved" not in args
+    assert args["args"] == {"prompt": "send it"}  # approved is lifted out of args
 
 
 def test_401_triggers_one_refresh_and_a_retry_and_rewrites_the_credentials_file(soleon, tmp_path):
@@ -411,7 +415,7 @@ def test_token_env_override_wins(soleon, tmp_path, monkeypatch):
     monkeypatch.setenv(client_mod.TOKEN_ENV_VAR, GOOD)
     client = client_mod.SoleonMcpClient(url, credentials_path=str(tmp_path / "absent.json"))
     env = client.call_tool("call_agent_tool", {"slug": SLUG, "app_env": "dev", "name": "custom_echo-server_read",
-                                               "args": {"prompt": "env"}, "approved": False})
+                                               "args": {"prompt": "env"}})
     assert env["state"] == "done"
 
 
@@ -630,8 +634,21 @@ def test_a_pre_approved_worker_server_sends_its_gated_calls_approved(pre_approve
     server.call("send_email", {"to": "sam@example.com"})
     name, args = client.calls[0]
     # published as `send_email`, sent to the platform under its qualified name
-    assert name == "call_agent_tool" and args["name"] == "mcp_gmail_write::send_email"
-    assert args["approved"] is pre_approved
+    assert args["name"] == "mcp_gmail_write::send_email" and "approved" not in args
+    assert name == ("call_approved_agent_tool" if pre_approved else "call_agent_tool")
+
+
+def test_no_plugin_script_sends_an_approval_through_call_agent_tool():
+    """AHP-1477 G4: `call_agent_tool` refuses a tool marked requires-approval
+    once the platform splits it; an approved call must name
+    `call_approved_agent_tool`. Pinned on the one chooser and on the sources:
+    no plugin script spells an `approved` argument into a platform call."""
+    assert shim.platform_tool_for(True) == "call_approved_agent_tool"
+    assert shim.platform_tool_for(False) == "call_agent_tool"
+    bin_dir = Path(shim.__file__).resolve().parent
+    for script in sorted(bin_dir.glob("*.py")):
+        text = script.read_text(encoding="utf-8")
+        assert not re.search(r'"approved"\s*:\s*(approved|True|true|self\.)', text), script.name
 
 
 def test_a_wrapper_without_a_worker_description_still_runs_on_soleon():
@@ -938,7 +955,7 @@ def test_keychain_token_is_used_on_macos(soleon, tmp_path, monkeypatch):
     monkeypatch.setattr(client_mod, "DEFAULT_CREDENTIALS_PATH", str(tmp_path / "absent.json"))
     client = client_mod.SoleonMcpClient(url)
     env = client.call_tool("call_agent_tool", {"slug": SLUG, "app_env": "dev", "name": "custom_echo-server_read",
-                                               "args": {"prompt": "kc"}, "approved": False})
+                                               "args": {"prompt": "kc"}})
     assert env["state"] == "done"
     assert client._entry["_source"] == "keychain"
 
@@ -972,7 +989,7 @@ def test_env_override_beats_the_keychain(soleon, monkeypatch):
     monkeypatch.setattr(client_mod, "read_keychain", lambda: _doc(url, STALE))
     client = client_mod.SoleonMcpClient(url)
     env = client.call_tool("call_agent_tool", {"slug": SLUG, "app_env": "dev", "name": "custom_echo-server_read",
-                                               "args": {"prompt": "env"}, "approved": False})
+                                               "args": {"prompt": "env"}})
     assert env["state"] == "done"
 
 
@@ -1006,7 +1023,7 @@ def test_a_keychain_token_is_refreshed_in_memory_and_nothing_is_written(soleon, 
     client.store = client_mod.CredentialStore(str(creds), keychain=lambda: _doc(
         url, STALE, refreshToken=REFRESH, clientId="cli-1"))
     env = client.call_tool("call_agent_tool", {"slug": SLUG, "app_env": "dev", "name": "custom_echo-server_read",
-                                               "args": {"prompt": "r"}, "approved": False})
+                                               "args": {"prompt": "r"}})
     assert env["state"] == "done"
     assert [c for c in state["calls"] if c[0] == "token"], "the refresh grant never ran"
     assert creds.read_bytes() == before  # the file was not the source, so it is not rewritten

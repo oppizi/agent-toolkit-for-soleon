@@ -16,7 +16,11 @@ Approval (D8): a tool whose `approval` flag is true gets an optional boolean
 `approved` property and a note in its description; the model must ask the
 person BEFORE calling and then pass `approved=true`. The server refuses an
 un-approved call with `approval_required` server-side, which is relayed as an
-error result worded so the model asks and retries.
+error result worded so the model asks and retries. An approved call goes to
+the platform as `call_approved_agent_tool` (scope `agent.approve`, AHP-1477
+G4); `call_agent_tool` never carries an approval. The approval itself is the
+model's word that the person said yes: this local server is not a Claude Code
+tool the soleon plugin's ask-before-production hook sees.
 
 Waiting (D14): `call_agent_tool` answers `pending + call_id` when the platform
 is still working at the wire's time limit; this shim polls
@@ -57,6 +61,13 @@ from soleon_mcp_client import (  # noqa: E402
 PROTOCOL_VERSION = "2025-03-26"
 SERVER_INFO = {"name": "soleon-agent-tools", "version": "0.4.15"}
 APPROVAL_NOTE = "Requires human approval: ask the person first, then call with approved=true."
+
+
+def platform_tool_for(approved: bool) -> str:
+    """The platform tool a local call goes through (AHP-1477 G4): an approved
+    call is `call_approved_agent_tool` (scope `agent.approve`), every other
+    call `call_agent_tool`, which carries no approval at all."""
+    return "call_approved_agent_tool" if approved else "call_agent_tool"
 POLL_INTERVAL_S = 1.5
 #: A platform call still unanswered after this long dumps every thread's stack to stderr (and again each
 #: interval), so a silent stall shows where it is blocked.
@@ -1176,9 +1187,11 @@ class AgentToolsServer:
         # SLOW_CALL_DUMP_S every thread's stack goes to stderr, which Claude Code keeps in its MCP log.
         faulthandler.dump_traceback_later(SLOW_CALL_DUMP_S, repeat=True)
         try:
-            envelope = self.client.call_tool("call_agent_tool", {
+            # AHP-1477 G4: an approved call goes to its own tool (scope agent.approve);
+            # call_agent_tool carries no approval and refuses a tool marked "requires approval".
+            envelope = self.client.call_tool(platform_tool_for(approved), {
                 "slug": self.slug, "app_env": self.app_env,
-                "name": platform_name, "args": args, "approved": approved,
+                "name": platform_name, "args": args,
                 "conversation": self.conversation.current(),
                 "turn": self.turn.current(),
             })
