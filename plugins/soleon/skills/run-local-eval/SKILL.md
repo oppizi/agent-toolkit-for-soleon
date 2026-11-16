@@ -21,9 +21,9 @@ verbatim error in a code block, the single next action.
 
 **This is the default way to run a pulled agent's evals.** The agent reasons on
 the local model and the judge runs locally; only the agent's own tool calls
-reach the platform. The platform's `run_eval` starts a full agent session per
+reach the platform. The platform's `run_eval_checks` / `run_eval_suite` start a full agent session per
 eval case and the Cost tab charges each case its share of the runtime as well
-as its tokens (on 2026-11-05, 18 cases came to $18.61). Use `run_eval` only
+as its tokens (on 2026-11-05, 18 cases came to $18.61). Use them only
 when a release needs the platform's own scores, and never with `repeats`
 while you are still tuning.
 
@@ -55,7 +55,7 @@ For each eval, in file order:
    (the platform's matching: exact `name`, optional `when`), never calling
    the platform, and `convert_time(time="now")` answers for the eval's `now`.
    Undeclared tools still run for real. This is why a replay eval never needs
-   the platform's `run_eval`.
+   the platform's `run_eval_checks` / `run_eval_suite`.
 1. Its `inputs` is a list of `{role, content}` turns. Run the subagent
    `<slug>` (Agent tool, `subagent_type: "<slug>"`) with the FIRST user turn
    as the prompt. For a multi-turn eval, continue the SAME subagent (the

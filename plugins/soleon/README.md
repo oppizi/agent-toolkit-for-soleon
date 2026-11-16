@@ -201,7 +201,7 @@ model and writes `evals/results/<ts>-<evalId>.json` with `score` / `subScores` /
 does this. An eval with declared tool results (`toolResponses`) or a clock
 (`now`) runs here too: for the length of the case the local tool server answers
 the declared calls itself and gives `convert_time(time="now")` the eval's time.
-Use this, not the platform's `run_eval`, while you tune a pulled agent: a
+Use this, not the platform's `run_eval_checks` / `run_eval_suite`, while you tune a pulled agent: a
 platform eval starts a full agent session per case, and the Cost tab charges
 each case its share of the runtime on top of its tokens.
 

@@ -17,9 +17,9 @@ Switches an agent off in one environment (users see a message you set) or back o
 
 ## Steps
 
-1. set_agent_active(slug, active=false, app_env, inactive_message) — takes effect at once and stops running conversations
+1. Dev: set_agent_active_development(slug, active=false, inactive_message) — no environment argument. Staging or production: set_agent_active_production(slug, active=false, app_env="staging" or "prod", inactive_message). Either takes effect at once and stops running conversations
 2. get_agent(slug, app_env) — read back
-3. To resume: run release-check, then set_agent_active(slug, active=true, app_env)
+3. To resume: run release-check, then the same tool with active=true (set_agent_active_development(slug, active=true), or set_agent_active_production(slug, active=true, app_env))
 
 ## Check it worked
 
@@ -40,4 +40,4 @@ Pause or resume without asking: it takes effect at once.
 - Many reads are platform-admin only. If a tool refuses you, ask an admin; and an empty list of failures or conversations means "none" only for admins.
 - Name an agent by its display name and slug, with a link to it in Soleon.
 
-Tools: `set_agent_active`, `get_agent`
+Tools: `set_agent_active_development`, `set_agent_active_production`, `get_agent`

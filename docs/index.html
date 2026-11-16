@@ -91,7 +91,8 @@
     <div class="tool"><code>delete_agent_draft</code><span>Discard your edit draft — the deployed config is untouched.</span></div>
     <div class="tool"><code>deploy_agent_draft</code><span>Deploy your staged draft to the dev tier via the full deploy pipeline.</span></div>
     <div class="tool"><code>sync_draft_test_chat</code><span>Materialize your draft into the test-chat sandbox and reset its session.</span></div>
-    <div class="tool"><code>promote_agent</code><span>Promote an agent's config one tier — sequential, version-bound.</span></div>
+    <div class="tool"><code>promote_agent_to_staging</code><span>Promote an agent's config from dev to staging.</span></div>
+    <div class="tool"><code>promote_agent_to_production</code><span>Promote an agent's config from staging to production.</span></div>
     <div class="tool"><code>update_agent_profile</code><span>Update avatar, description, and visibility — metadata only, no deploy.</span></div>
     <div class="tool"><code>delete_agent</code><span>Delete an agent (cascades across promoted tiers).</span></div>
     <div class="tool"><code>list_agent_collaborators</code><span>Who holds a role on an agent.</span></div>
@@ -102,8 +103,10 @@
     <div class="tool"><code>list_channel_catalogue</code><span>The channel types the platform supports.</span></div>
     <div class="tool"><code>list_channel_instances</code><span>Channel instances (Slack workspaces, TalkJS apps, …).</span></div>
     <div class="tool"><code>get_channel_instance</code><span>One instance by its <code>ci_…</code> id.</span></div>
-    <div class="tool"><code>bind_agent_channel</code><span>Bind an agent to a channel instance.</span></div>
-    <div class="tool"><code>unbind_agent_channel</code><span>Unbind an agent from a channel instance.</span></div>
+    <div class="tool"><code>bind_agent_channel_development</code><span>Bind an agent to a channel instance on dev.</span></div>
+    <div class="tool"><code>bind_agent_channel_production</code><span>Bind an agent to a channel instance on staging or production.</span></div>
+    <div class="tool"><code>unbind_agent_channel_development</code><span>Unbind an agent from a channel instance on dev.</span></div>
+    <div class="tool"><code>unbind_agent_channel_production</code><span>Unbind an agent from a channel instance on staging or production.</span></div>
   </div>
 
   <h3>Custom MCPs</h3>
@@ -117,9 +120,12 @@
     <div class="tool"><code>generate_tool_code</code><span>Generate a tool's Python execute() body from a natural-language prompt.</span></div>
     <div class="tool"><code>test_custom_mcp_tool</code><span>Execute one tool against the live test runtime, draft tools included.</span></div>
     <div class="tool"><code>diagnose_custom_mcp_failure</code><span>Diagnose a failing tool test from the errored response envelope.</span></div>
-    <div class="tool"><code>publish_custom_mcp</code><span>Publish a server's draft as the next version via the platform pipeline.</span></div>
-    <div class="tool"><code>promote_custom_mcp</code><span>Promote a server one tier — sequential, version-bound.</span></div>
-    <div class="tool"><code>set_custom_mcp_lifecycle</code><span>Activate or deactivate a server in one environment.</span></div>
+    <div class="tool"><code>publish_custom_mcp_development</code><span>Publish a server's draft as the next version on dev.</span></div>
+    <div class="tool"><code>publish_custom_mcp_production</code><span>Publish a server's draft on staging or production.</span></div>
+    <div class="tool"><code>promote_custom_mcp_to_staging</code><span>Promote a server from dev to staging.</span></div>
+    <div class="tool"><code>promote_custom_mcp_to_production</code><span>Promote a server from staging to production.</span></div>
+    <div class="tool"><code>set_custom_mcp_lifecycle_development</code><span>Activate or deactivate a server on dev.</span></div>
+    <div class="tool"><code>set_custom_mcp_lifecycle_production</code><span>Activate or deactivate a server on staging or production.</span></div>
   </div>
 
   <h3>Knowledge</h3>
@@ -147,7 +153,8 @@
     <div class="tool"><code>list_scored_sessions</code><span>Sessions scored by the online eval pipeline.</span></div>
     <div class="tool"><code>get_session_eval_detail</code><span>Per-criterion detail for one scored session.</span></div>
     <div class="tool"><code>get_eval_scoreboard</code><span>An agent's eval scoreboard.</span></div>
-    <div class="tool"><code>run_eval</code><span>Start an eval run — single or side-by-side — against version refs.</span></div>
+    <div class="tool"><code>run_eval_checks</code><span>Start a small eval run (at most 5 agent runs) against version refs.</span></div>
+    <div class="tool"><code>run_eval_suite</code><span>Start a full eval run, without the cap.</span></div>
     <div class="tool"><code>get_eval_run</code><span>One eval run's full detail; poll while running.</span></div>
     <div class="tool"><code>list_eval_runs</code><span>An agent's eval runs with side tallies and trend.</span></div>
     <div class="tool"><code>get_agent_skills</code><span>An agent's deployed skills and their enabled state.</span></div>

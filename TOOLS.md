@@ -9,7 +9,7 @@ tool the server publishes, automatically.
 server. Access follows platform roles (platform admins see everything; members see the
 agents they hold a role on).
 
-## Current tools (84)
+## Current tools (92)
 
 ### Agents
 
@@ -24,12 +24,14 @@ agents they hold a role on).
 | `delete_agent_draft` | Discard your edit draft — yours only; the deployed config is untouched. |
 | `deploy_agent_draft` | Deploy your staged draft to the dev tier through the full deploy pipeline; clears the draft on success. |
 | `sync_draft_test_chat` | Materialize your draft into the test-chat sandbox and reset its session, so the next test message runs it. |
-| `promote_agent` | Promote an agent's config one tier (dev→staging or staging→prod) — sequential-only, version-bound. |
+| `promote_agent_to_staging` | Promote an agent's config from dev to staging — version-bound. |
+| `promote_agent_to_production` | Promote an agent's config from staging to production — version-bound (scope `agent.prod`). |
 | `update_agent_profile` | Update presentation metadata — avatar icon/color, description, visibility — with no deploy (dev tier, If-Match CAS). |
 | `delete_agent` | Delete an agent (cascades to promoted tiers; removes Slack app, secrets, config, registry rows). Idempotent. |
 | `list_agent_collaborators` | The Cognito role grants on an agent: sub, email, role, grantedBy, grantedAt. |
 | `list_agent_tools` | List the tools this agent's session actually registers — name, description, input schema, whether a human must approve it before it runs, and whether it acts on the agent workspace (`kind: workspace`) or an external system (`kind: external`). Runs on your dev draft test-chat session; answers `pending + call_id` while the container is cold-starting. The result also carries `tracesUrl`: the Soleon Traces view pre-filtered to "Draft Agents" (where every local run is filed — the tab's default "Live Agents" filter hides them). |
 | `call_agent_tool` | Run ONE of the agent's registered tools on the platform with your own credentials and the agent's tool policy — exactly as a model-initiated call in the Test Chat would. Approval-gated tools refuse until `approved=true`; blocks until the tool finishes or answers `pending + call_id`. `conversation` picks the platform session (one Traces entry per local conversation); `turn` groups every call of ONE prompt under the same trace turn, which `record_agent_turn` then finishes. |
+| `call_approved_agent_tool` | The same call for a tool marked "requires approval", sent as approved: use it only after the person said yes to this exact call (scope `agent.approve`). `call_agent_tool` refuses those tools. |
 | `get_agent_tool_result` | Poll a pending local-control op (from `list_agent_tools` / `call_agent_tool` / `get_agent_system_prompt` / `record_agent_turn`) by `call_id` until its state is `done` or `error`. Only your own calls are visible. |
 | `record_agent_turn` | Finish ONE local turn on the platform trace so it reads like a conversation: the prompt the local agent received, its final answer, its status and timing, the tool calls it ran locally (as steps) and every tool name it used — under the `conversation` and `turn` ids its `call_agent_tool` calls were sent with (their steps are already there). The plugin's SubagentStop hook sends it; idempotent on `turn`. |
 | `get_agent_system_prompt` | The system prompt the platform assembles for YOU on this agent — soul, user metadata, invocation context, memory, skills and the closing platform contract — built by the agent's own runtime from your draft (else the deployed dev config). |
@@ -43,8 +45,10 @@ agents they hold a role on).
 | `list_channel_catalogue` | The channel-type catalogue (slack, talkjs, …) with credential schemas and webhook URL templates. |
 | `list_channel_instances` | The platform's channel instances with probe status (credential values never returned). |
 | `get_channel_instance` | One channel instance by its `ci_…` id: name, type, probe status, workspace/app identity. |
-| `bind_agent_channel` | Bind an agent to a channel instance (deploy_mode passive or instant). |
-| `unbind_agent_channel` | Unbind an agent from a channel instance (deploy_mode passive or instant). |
+| `bind_agent_channel_development` | Bind an agent to a channel instance on dev (deploy_mode passive or instant). |
+| `bind_agent_channel_production` | Bind an agent to a channel instance on staging or production (scope `channel.prod`). |
+| `unbind_agent_channel_development` | Unbind an agent from a channel instance on dev. |
+| `unbind_agent_channel_production` | Unbind an agent from a channel instance on staging or production (scope `channel.prod`). |
 
 ### Custom MCPs
 
@@ -55,13 +59,16 @@ agents they hold a role on).
 | `list_custom_mcp_connections` | The data-source connections in an environment (credentials never returned — auth type only). |
 | `create_custom_mcp_server` | Create a new empty, inactive tool server (slug is the permanent identity). |
 | `clone_custom_mcp_server` | Duplicate a server into a new unpublished one — tools AND governance travel with the clone. |
-| `update_custom_mcp_draft` | Save changes to a server's draft **without publishing** (complement to `publish_custom_mcp`). |
+| `update_custom_mcp_draft` | Save changes to a server's draft **without publishing** (complement to the `publish_custom_mcp_*` tools). |
 | `generate_tool_code` | Generate a tool's Python `execute()` body from a natural-language prompt (modes: regenerate / update). |
 | `test_custom_mcp_tool` | Execute one tool against the live test runtime (draft tools included); write-capable tools require `confirmed_writes=true`. |
 | `diagnose_custom_mcp_failure` | Diagnose a failing tool test — pass the errored `test_custom_mcp_tool` response body verbatim. |
-| `publish_custom_mcp` | Publish a server's draft as the next version (interface gate, GitHub commit, cache bump). |
-| `promote_custom_mcp` | Promote a server one tier (dev→staging or staging→prod) — sequential-only, version-bound. |
-| `set_custom_mcp_lifecycle` | Activate or deactivate a server in one environment (deactivation deletes nothing; deletion stays UI-only). |
+| `publish_custom_mcp_development` | Publish a server's draft as the next version on dev (interface gate, GitHub commit, cache bump). |
+| `publish_custom_mcp_production` | The same publish for staging or production (scope `mcp.prod`). |
+| `promote_custom_mcp_to_staging` | Promote a server from dev to staging — version-bound. |
+| `promote_custom_mcp_to_production` | Promote a server from staging to production — version-bound (scope `mcp.prod`). |
+| `set_custom_mcp_lifecycle_development` | Activate or deactivate a server on dev (deactivation deletes nothing; deletion stays UI-only). |
+| `set_custom_mcp_lifecycle_production` | The same on staging or production (scope `mcp.prod`). |
 
 ### Knowledge
 
@@ -91,7 +98,8 @@ agents they hold a role on).
 | `list_scored_sessions` | An agent's LLM-judge eval scores grouped by session (newest first, cursor-paginated). |
 | `get_session_eval_detail` | The eval score rows for one trace session, grouped by (level, item). |
 | `get_eval_scoreboard` | An agent's aggregate eval scoreboard over the last N days: headline score, counts, issue tags, judge budget. |
-| `run_eval` | Start an eval run — mode single or side_by_side — against draft / deployed / history version refs. |
+| `run_eval_checks` | Start a small eval run (at most 5 agent runs = evals × repeats) — mode single or side_by_side — against draft / deployed / history version refs. |
+| `run_eval_suite` | The same run without the cap — the full list before a release. |
 | `get_eval_run` | One eval run's full detail by runId; poll while status is `running`. |
 | `list_eval_runs` | An agent's eval runs, newest first, with side tallies and the trend block. |
 | `get_agent_skills` | One agent's deployed skills: id, enabled state, package files (optionally full SKILL.md content). |

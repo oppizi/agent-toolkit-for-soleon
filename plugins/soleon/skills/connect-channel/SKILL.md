@@ -24,7 +24,7 @@ Binds or unbinds an agent to Slack, website chat, email or another channel, in o
 
 1. Run release-check first when real people will reach it
 2. Admins: get_channel_instance(instance_id) — which connection point it is, and its health
-3. bind_agent_channel(slug, instance_id, app_env, deploy_mode) / unbind_agent_channel(slug, instance_id, app_env)
+3. Dev: bind_agent_channel_development(slug, instance_id, deploy_mode) / unbind_agent_channel_development(slug, instance_id) — no environment argument, dev only. Staging or production: bind_agent_channel_production(slug, instance_id, app_env="staging" or "prod", deploy_mode) / unbind_agent_channel_production(slug, instance_id, app_env) — ask the person first, every time
 4. get_agent(slug, app_env) — the channel reads back on that environment
 
 ## Check it worked
@@ -46,4 +46,4 @@ Bind or unbind without asking: real people start or stop reaching the agent. Cha
 - Many reads are platform-admin only. If a tool refuses you, ask an admin; and an empty list of failures or conversations means "none" only for admins.
 - Name an agent by its display name and slug, with a link to it in Soleon.
 
-Tools: `get_channel_instance`, `bind_agent_channel`, `unbind_agent_channel`, `get_agent`
+Tools: `get_channel_instance`, `bind_agent_channel_development`, `unbind_agent_channel_development`, `bind_agent_channel_production`, `unbind_agent_channel_production`, `get_agent`
