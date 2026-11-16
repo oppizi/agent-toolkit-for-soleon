@@ -277,7 +277,7 @@ first request to the server opens the flow in your browser (or run
 `claude mcp login` explicitly); Claude Code then holds a short-lived access token
 and refreshes it for you.
 
-The plugin pins the 21 scopes listed above — every scope family — so the token
+The plugin pins the 26 scopes listed above — every scope family — so the token
 may consent to the whole surface; what it can actually reach is still decided by
 your Soleon permissions on every request.
 
