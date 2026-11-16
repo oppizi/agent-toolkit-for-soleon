@@ -290,6 +290,32 @@ def test_soul_cap_boundary(contract_doc):
         validate_params(_params(soul="x" * (cap + 1)), "dev", contract_doc)
 
 
+@pytest.mark.parametrize("group_chat", [
+    True, "on", None, [],
+    {"enabled": "yes"},
+    {"enabled": 1},
+    {"eagerness": "eager"},
+    {"enabled": True, "eagerness": "balanced", "extra": 1},
+])
+def test_malformed_group_chat_is_a_validation_error(contract_doc, group_chat):
+    # group_contract.group_config refuses these when the row is stored; the
+    # converter must refuse them too, not crash in build_projection.
+    with pytest.raises(ValidationError):
+        validate_params(_params(config_proposal={"groupChat": group_chat}), "dev", contract_doc)
+
+
+def test_well_formed_group_chat_is_projected(contract_doc):
+    v = validate_params(_params(config_proposal={"groupChat": {"enabled": True, "eagerness": "proactive"}}),
+                        "dev", contract_doc)
+    assert build_projection(v, contract_doc)["groupChat"] == {"enabled": True, "eagerness": "proactive"}
+
+
+def test_converter_eagerness_matches_the_offline_validator():
+    import allium_to_json
+    import validate_offline
+    assert allium_to_json.GROUP_EAGERNESS == validate_offline.GROUP_EAGERNESS
+
+
 def test_unknown_config_param_rejected(contract_doc):
     with pytest.raises(ValidationError):
         validate_params(_params(channels="oops"), "dev", contract_doc)

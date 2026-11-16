@@ -1219,7 +1219,10 @@ class AgentToolsServer:
         except ToolError as exc:
             payload = exc.payload or {}
             text = describe_error(payload) if payload.get("error") else str(exc)
-            if approved and APPROVED_TOOL in text:
+            # Only the SDK's own answer for an unregistered tool means the
+            # server release is missing; a scope or policy refusal that merely
+            # names the tool keeps the platform's text (and its next_action).
+            if approved and ("Unknown tool: " + APPROVED_TOOL) in text:
                 return _text_result(APPROVED_TOOL_MISSING + " (" + text + ")", True)
             return _text_result("Soleon refused the call — " + text, True)
         except TransportError as exc:

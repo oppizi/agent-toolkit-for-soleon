@@ -337,6 +337,25 @@ def _validate_evals(evals, contract: dict) -> None:
                     raise ValidationError(f"{loc}.expectedToolCalls[{j}].args must be an object")
 
 
+# group_contract.EAGERNESS on the platform (lambda/shared/group_contract.py);
+# harness/validate_offline.py GROUP_EAGERNESS is the same set, pinned by a test.
+GROUP_EAGERNESS = frozenset({"only_when_asked", "balanced", "proactive"})
+
+
+def _validate_group_chat(gc) -> None:
+    """Mirror of group_contract.group_config, which refuses (never normalises)
+    any other shape when register_agent stores the row."""
+    if not isinstance(gc, dict):
+        raise ValidationError("config.groupChat must be an object")
+    extra = sorted(set(gc) - {"enabled", "eagerness"})
+    if extra:
+        raise ValidationError(f"config.groupChat has unknown keys {extra}; only enabled and eagerness")
+    if "enabled" in gc and type(gc["enabled"]) is not bool:
+        raise ValidationError("config.groupChat.enabled must be a boolean")
+    if "eagerness" in gc and gc["eagerness"] not in GROUP_EAGERNESS:
+        raise ValidationError(f"config.groupChat.eagerness must be one of {sorted(GROUP_EAGERNESS)}")
+
+
 def _validate_tools(tools, contract: dict) -> None:
     if isinstance(tools, list):
         for entry in tools:
@@ -416,6 +435,8 @@ def validate_config(cfg: dict, contract: dict) -> None:
         _validate_guardrails(cfg["guardrails"], contract)
     if "user_schedules_enabled" in cfg and not isinstance(cfg["user_schedules_enabled"], bool):
         raise ValidationError("config.user_schedules_enabled must be a boolean")
+    if "groupChat" in cfg:
+        _validate_group_chat(cfg["groupChat"])
     if "tools" in cfg:
         _validate_tools(cfg["tools"], contract)
     if "evals" in cfg:

@@ -674,6 +674,27 @@ def test_an_unregistered_approved_tool_says_the_server_release_is_missing():
     assert out["isError"] and "needs the AHP-1477 server release" in out["content"][0]["text"]
 
 
+@pytest.mark.parametrize("refusal", [
+    "scope soleon-mcp/agent.approve required for call_approved_agent_tool",
+    "policy denied call_approved_agent_tool on campaign-sla-watcher",
+    "call_approved_agent_tool: args.to must be a string",
+])
+def test_other_refusals_naming_the_approved_tool_keep_the_platforms_text(refusal):
+    """Once the release is live, a scope, policy or validation refusal that
+    names call_approved_agent_tool is not 'the release is missing'."""
+    class _Refusing(_CapturingClient):
+        def call_tool(self, name, args):
+            self.calls.append((name, args))
+            raise shim.ToolError(refusal, {"text": refusal})
+
+    server = shim.AgentToolsServer(SLUG, MEMBERS, client=_Refusing(), pre_approved=True,
+                                   include_members=True)
+    out = server.call("send_email", {"to": "s@example.com"})
+    text = out["content"][0]["text"]
+    assert out["isError"] and text.startswith("Soleon refused the call — ") and refusal in text
+    assert "AHP-1477 server release" not in text
+
+
 _APPROVED_KEY = re.compile(r"""['"]approved['"]\s*[]:]""")
 
 
