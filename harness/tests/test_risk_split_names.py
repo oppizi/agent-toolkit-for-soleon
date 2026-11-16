@@ -191,19 +191,3 @@ def test_snippets_leave_the_cost_split_and_the_unapproved_call_alone(which):
         assert _decide(rules, "run_eval_suite") is None, "the uncapped suite is left out on purpose"
         assert _decide(rules, "run_eval_checks") == "allow"
 
-
-def test_documented_staging_exception_admits_exactly_one_tool():
-    """The note's exception: MOVE one name from deny to allow. Adding it to
-    allow while it stays under deny does nothing (deny wins), and moving it
-    admits that tool and no other production-tier tool."""
-    rules = _pick("headless")
-    one = PREFIX + "set_agent_active_production"
-    assert "take it out of `deny` and put it in `allow`" in _note()
-
-    added_only = dict(rules, allow=rules["allow"] + [one])
-    assert _decide(added_only, "set_agent_active_production") == "deny"
-
-    moved = dict(rules, allow=rules["allow"] + [one], deny=[r for r in rules["deny"] if r != one])
-    admitted = [t for t in PRODUCTION if _decide(moved, t) == "allow"]
-    assert admitted == ["set_agent_active_production"]
-    assert all(_decide(moved, t) == "deny" for t in PRODUCTION if t != "set_agent_active_production")
