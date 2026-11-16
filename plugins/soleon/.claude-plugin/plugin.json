@@ -24,6 +24,17 @@
       "description": "Which Soleon system to connect to. Defaults to the dev system; point at another environment for development or testing.",
       "required": false,
       "default": "https://mcp-dev.oppizi.com/mcp"
+    },
+    "ask_before_production": {
+      "type": "string",
+      "title": "Ask before production-tier Soleon tools",
+      "description": "ask (default): Claude Code asks before every Soleon tool that changes staging, production or every environment, and refuses it where nobody can answer. off: no question (a notice is shown on every such call). Set it in your user settings only.",
+      "required": false,
+      "options": [
+        "ask",
+        "off"
+      ],
+      "default": "ask"
     }
   }
 }

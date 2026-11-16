@@ -13,8 +13,13 @@ replaces each with tools of one risk level each: development-tier names end in
    Code rules use (`mcp__plugin_soleon_soleon__<tool>`), to every tool that
    replaces it;
 3. its two paste-ready snippets (headless `claude -p`, and the desk) put every
-   production-tier tool behind `deny` / `ask` and allow the development tier,
-   proven by matching the snippets' own globs against the §4 names.
+   production-tier tool behind `deny` / `ask` and allow the development tier.
+   The headless `deny` lists the production tier by EXACT name (set equality
+   below), so a job's hard refusal never depends on a glob; the desk snippet's
+   globs sit in the tool position after the literal server prefix, which
+   Claude Code 2.1.325's rule validator accepts in allow, ask and deny rules
+   (it gives `mcp__github__get_*` as its example). `fnmatch` stands in for
+   Claude Code's matcher only for those globs.
 
 The §4 closed set is copied here on purpose: the server repo is not vendored,
 and a drift between this map and the server's is exactly what the release
@@ -160,3 +165,45 @@ def test_snippet_glob_negative_control():
     assert not _matches([PREFIX + "*_production"], "promote_agent_to_staging")
     assert not _matches([PREFIX + "*_production"], "patch_tool_policy_everywhere")
     assert not _matches(["mcp__plugin_soleon_other__*"], "run_eval_checks")
+
+
+def _decide(rules, tool):
+    """Claude Code's precedence: deny, then ask, then allow; else not allowed."""
+    for verdict in ("deny", "ask", "allow"):
+        if _matches(rules[verdict], tool):
+            return verdict
+    return None
+
+
+def test_headless_deny_is_the_production_tier_by_exact_name():
+    rules = _pick("headless")
+    assert set(rules["deny"]) == {PREFIX + t for t in PRODUCTION}
+    assert not any("*" in r for r in rules["deny"])
+    assert set(DEVELOPMENT) <= {r[len(PREFIX):] for r in rules["allow"]}
+
+
+@pytest.mark.parametrize("which", ["headless", "desk"])
+def test_snippets_leave_the_cost_split_and_the_unapproved_call_alone(which):
+    rules = _pick(which)
+    for tool in NEITHER + ["call_agent_tool"]:
+        assert not _matches(rules["deny"] + rules["ask"], tool), "{}: {} gated".format(which, tool)
+    if which == "headless":
+        assert _decide(rules, "run_eval_suite") is None, "the uncapped suite is left out on purpose"
+        assert _decide(rules, "run_eval_checks") == "allow"
+
+
+def test_documented_staging_exception_admits_exactly_one_tool():
+    """The note's exception: MOVE one name from deny to allow. Adding it to
+    allow while it stays under deny does nothing (deny wins), and moving it
+    admits that tool and no other production-tier tool."""
+    rules = _pick("headless")
+    one = PREFIX + "set_agent_active_production"
+    assert "take it out of `deny` and put it in `allow`" in _note()
+
+    added_only = dict(rules, allow=rules["allow"] + [one])
+    assert _decide(added_only, "set_agent_active_production") == "deny"
+
+    moved = dict(rules, allow=rules["allow"] + [one], deny=[r for r in rules["deny"] if r != one])
+    admitted = [t for t in PRODUCTION if _decide(moved, t) == "allow"]
+    assert admitted == ["set_agent_active_production"]
+    assert all(_decide(moved, t) == "deny" for t in PRODUCTION if t != "set_agent_active_production")

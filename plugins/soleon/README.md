@@ -217,6 +217,19 @@ workflows follow the platform's steps (manager: assign → review → next decis
 until finish, bounded by the configured rounds; peer: bounded rounds)
 approximately, not identically.
 
+**Ask before production.** A PreToolUse hook
+(`hooks/soleon_ask_before_production.sh`) asks before every Soleon tool whose
+name ends in `_production` or `_everywhere`, and before
+`call_approved_agent_tool`; in `claude -p`, and in a mode where nobody sees a
+question (`bypassPermissions`, `dontAsk`, `auto`), it refuses the call. It is a
+second line behind your own permission rules, not a replacement for them. It
+covers only this plugin's server (`mcp__plugin_soleon_soleon__…`): a Soleon
+server you also added by hand needs its own `mcp__<name>__*_production` /
+`*_everywhere` deny or ask rules. Turn it off with the plugin option
+`ask_before_production` = `off`, in your user settings only; while it is off,
+each such call shows a notice. Details and paste-ready rules:
+`docs/release-notes/AHP-1477.md`.
+
 **Credentials — macOS and Linux.** The shim and the hooks run outside Claude
 Code's MCP connection, so they reuse the OAuth token Claude Code already holds
 for the `soleon` server. On macOS it is in the login Keychain (generic
