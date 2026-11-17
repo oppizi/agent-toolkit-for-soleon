@@ -367,3 +367,45 @@ def test_an_older_plugin_is_left_behind_even_when_the_platform_is_unreachable(tm
     message = json.loads(out)["systemMessage"]
     assert "now runs the installed plugin" in message and "using the local copy" in message
     assert Path(json.loads((agent_dir / "pull.json").read_text())["pluginRoot"]).resolve() == PLUGIN.resolve()
+
+
+def test_the_refresh_reads_each_skill_files_text(tmp_path):
+    """materialize needs each kept or oversize skill file's text (1.0.20), which only
+    get_agent_skills(content_mode="files") returns."""
+    agent_dir = _pulled(tmp_path)
+    FakeClient.instances.clear()
+    factory = lambda url: FakeClient(url, draft=draft_envelope(True, NEW_ETAG))
+    rc, out, _ = _run(tmp_path, factory, runner=_real_runner_with_home(tmp_path))
+    assert rc == 0, out
+    skills_calls = [c[1] for c in FakeClient.instances[0].calls if c[0] == "get_agent_skills"]
+    assert skills_calls == [{"slug": SLUG, "app_env": "dev", "content_mode": "files"}]
+
+
+class _KeptFileClient(FakeClient):
+    """The platform as of 1.0.20: the skills read in "files" mode carries each file's text."""
+
+    def call_tool(self, name, arguments):
+        answer = super().call_tool(name, arguments)
+        if name == "get_agent_skills" and arguments.get("content_mode") == "files":
+            for skill in answer["skills"]:
+                skill["fileContents"] = {"refs/kept.md": "kept text"}
+        return answer
+
+
+def test_moving_an_older_pull_fetches_the_skill_texts_it_never_saved(tmp_path):
+    """2026-11-17: flyer-builder-app, pulled before 1.0.20, could not move onto 1.0.21 — its saved skills
+    answer had no text for a file the draft keeps, and materialize refuses a file without text."""
+    agent_dir = _pulled(tmp_path)
+    _pin_to_an_old_plugin(agent_dir)
+    draft_path = agent_dir / ".pull" / "draft.json"
+    draft = json.loads(draft_path.read_text(encoding="utf-8"))
+    body = draft.get("body", draft)
+    body["agent"]["skills"][0]["files"].append({"path": "refs/kept.md", "enabled": True})  # kept: path only
+    draft_path.write_text(json.dumps(draft), encoding="utf-8")
+    FakeClient.instances.clear()
+    rc, out, _ = _run(tmp_path, _KeptFileClient, runner=_real_runner_with_home(tmp_path))
+    assert rc == 0 and "now runs the installed plugin" in json.loads(out)["systemMessage"], out
+    calls = FakeClient.instances[0].calls
+    assert [c[0] for c in calls] == ["get_agent_draft", "get_agent_skills"]
+    assert calls[1][1]["content_mode"] == "files"
+    assert (agent_dir / "skills" / "cite-sources" / "refs" / "kept.md").read_text(encoding="utf-8") == "kept text"

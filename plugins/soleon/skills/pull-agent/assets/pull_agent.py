@@ -160,7 +160,7 @@ def _live_file_texts(skills_env: Any) -> Optional[Dict[str, Dict[str, Any]]]:
     records = env.get("skills") if isinstance(env, dict) else None
     if not isinstance(records, list):
         return None
-    out = {str(r.get("name") or r.get("id")): r["fileContents"] for r in records
+    out = {str(r.get("id") or r.get("name")): r["fileContents"] for r in records
            if isinstance(r, dict) and isinstance(r.get("fileContents"), dict)}
     return out if out or not records else None
 
