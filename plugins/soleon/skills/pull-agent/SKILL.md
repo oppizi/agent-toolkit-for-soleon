@@ -230,9 +230,14 @@ From the script's JSON summary tell the user, in plain words:
    EXCEPT when the summary says `agentsDirCreated: true` (the folder did
    not exist when this session started, so the watcher is not covering
    it): then, and only then, tell the user to start a new Claude Code
-   session before talking to `<slug>`. The Agent tool refusing with
-   "unknown subagent_type" a few seconds after the pull means the same
-   thing — restart, do not improvise.
+   session before talking to `<slug>`. When `agentsDirCreated` is false,
+   NEVER tell the user to restart, whatever the Agent tool says. "Unknown
+   subagent_type" right after the pull only means the watcher has not
+   reached the new file yet: keep working on something else and retry once
+   the session announces the new agent type (it arrives on its own, minutes
+   at most; 2026-11-17 it came about 5 minutes after the pull of
+   `oppizi-data`). Telling the user a restart is needed there is false, and
+   they have had to correct it every time.
    Never substitute a headless `claude -p` process for the Agent tool: it
    has no user in front of it, so approval-gated tools cannot be approved
    and the run silently diverges from the platform behaviour it is meant to
