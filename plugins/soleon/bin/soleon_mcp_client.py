@@ -524,12 +524,30 @@ def await_control(
     interval_s: float = 1.5,
     sleep: Optional[Callable[[float], None]] = None,
     on_wait: Optional[Callable[[Dict[str, Any]], None]] = None,
+    answer_models: Optional[Callable[[List[Dict[str, Any]]], List[Dict[str, Any]]]] = None,
 ) -> Dict[str, Any]:
     """Follow a `{state: pending, call_id}` envelope until it is `done` or
     `error`, polling `get_agent_tool_result`. Never gives up — a cold container
-    can take minutes and the platform behaviour is to wait for the tool."""
+    can take minutes and the platform behaviour is to wait for the tool.
+
+    A pending envelope may carry `model_requests`: model calls a code run of
+    this call is waiting on, which the platform never answers with its own
+    model for a local caller. `answer_models` answers them (headless Claude
+    Code, `soleon_local_model.py`) and the answers ride the next poll. Without
+    it each one is answered with an error, so the run fails at once instead
+    of waiting out its timeout."""
     do_sleep = sleep or client._sleep
     while isinstance(envelope, dict) and envelope.get("state") == "pending":
+        requests = envelope.get("model_requests") or []
+        if requests:
+            answers = answer_models(requests) if answer_models else [
+                {"request_id": r.get("request_id"),
+                 "error": "this local caller cannot answer model calls"} for r in requests]
+            envelope = client.call_tool("get_agent_tool_result", {
+                "slug": slug, "app_env": app_env, "call_id": envelope["call_id"],
+                "model_answers": answers,
+            })
+            continue
         if on_wait:
             on_wait(envelope)
         do_sleep(interval_s)

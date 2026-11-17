@@ -43,6 +43,7 @@ from typing import Any, Dict, List, Optional, Tuple
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import soleon_message_budget as message_budget  # noqa: E402
+from soleon_local_model import LocalModelAnswerer  # noqa: E402
 from soleon_mcp_client import (  # noqa: E402
     AuthError,
     MissingTokenError,
@@ -1050,8 +1051,12 @@ class AgentToolsServer:
                  delegate_ids: Optional[List[str]] = None,
                  spawn_worker: Optional["LocalSpawnWorker"] = None,
                  read_only_views: Optional[Dict[str, str]] = None,
-                 replay_path: Optional[str] = None):
+                 replay_path: Optional[str] = None,
+                 local_model: Optional["LocalModelAnswerer"] = None):
         self.slug = slug
+        #: Answers the model calls a code run of one of this server's calls is
+        #: waiting on, with the agent's LOCAL model (never the platform's).
+        self.local_model = local_model
         #: /run-local-eval's replay file: while it exists, a call an eval declared is answered from it.
         self.replay_path = replay_path
         self.app_env = app_env
@@ -1187,6 +1192,7 @@ class AgentToolsServer:
                 interval_s=self.poll_interval_s,
                 on_wait=lambda env: _log("{} still running on the platform (call_id {})".format(
                     name, env.get("call_id"))),
+                answer_models=self.local_model.answer if self.local_model is not None else None,
             )
         except MissingTokenError as exc:
             return _text_result(str(exc), True)
@@ -1361,11 +1367,14 @@ def main(argv: Optional[List[str]] = None) -> int:
     # run, read by the SubagentStop hook when it records the prompt + answer.
     turn = TurnTracker(None, fixed=args.turn) if args.turn else TurnTracker(os.path.join(agent_dir, TURN_FILE_NAME))
     workers = None
+    model = args.model or _pulled_model(agent_dir)
+    # Every server answers its code runs' model calls locally — the agent's
+    # and each worker's — on the agent's local model.
+    local_model = LocalModelAnswerer(model, claude_binary, log=_log)
     if args.only is None:
         # Only the AGENT'S server runs wrappers' workers. A worker's own server
         # (`--only`) holds an integration's individual tools and never a
         # wrapper, so a worker can never start another worker.
-        model = args.model or _pulled_model(agent_dir)
         workers = LocalWorkerRunner(slug=args.slug, tools_path=args.tools, server_url=args.server_url,
                                     model=model, app_env=args.app_env, credentials=args.credentials)
     delegates = load_delegates(agent_dir)
@@ -1397,7 +1406,8 @@ def main(argv: Optional[List[str]] = None) -> int:
                               delegate_runner=delegate_runner, delegate_ids=delegate_ids,
                               spawn_worker=spawner,
                               read_only_views=WORKER_READ_ONLY_VIEWS if args.worker else None,
-                              replay_path=os.path.join(agent_dir, EVAL_REPLAY_FILE))
+                              replay_path=os.path.join(agent_dir, EVAL_REPLAY_FILE),
+                              local_model=local_model)
     _log("serving {} external tool(s) for {} via {}".format(len(server.published), args.slug, client.server_url))
     serve(server)
     return 0
