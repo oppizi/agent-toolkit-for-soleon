@@ -33,6 +33,7 @@ import datetime
 import faulthandler
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -1040,6 +1041,41 @@ def published_delegates(delegates: Dict[str, Dict[str, Any]], ids: List[str]) ->
              "inputSchema": json.loads(json.dumps(DELEGATE_TASK_SCHEMA))} for i in ids]
 
 
+#: Claude Code keeps running a subagent's OLD definition for a few minutes after /pull-agent rewrites
+#: ~/.claude/agents/<slug>.md: the old definition starts the old tool servers, on the old pull's files and
+#: plugin version, and nothing says so. Receipt (2026-11-17): a flyer-builder re-pulled into a second
+#: project ran its first test on the previous pull (another folder, plugin 1.0.9 without result paging):
+#: read_skill overflowed, the agent read skills from the old folder, and the test files were "missing".
+_TOOLS_ARG_RE = re.compile(r'"--tools",\s*("(?:[^"\\]|\\.)*")')
+
+
+def replaced_definition(slug: str, tools_path: str, agents_dir: Optional[str] = None) -> Optional[str]:
+    """The tools.json the CURRENT ~/.claude/agents/<slug>.md serves, when it is not this server's; else None
+    (no file, or a file this check can't read: never block on a guess)."""
+    path = os.path.join(agents_dir or os.path.join(os.path.expanduser("~"), ".claude", "agents"), slug + ".md")
+    try:
+        with open(path, encoding="utf-8") as f:
+            text = f.read()
+    except OSError:
+        return None
+    m = _TOOLS_ARG_RE.search(text)
+    if not m:
+        return None
+    try:
+        current = json.loads(m.group(1))
+    except ValueError:
+        return None
+    norm = lambda q: os.path.normcase(os.path.abspath(q))
+    return None if norm(current) == norm(tools_path) else current
+
+
+def stale_definition_note(slug: str, current_tools: str) -> str:
+    return ("Nothing was run: this copy of the agent {} is out of date. A newer pull replaced its definition "
+            "(it now runs from {}), and Claude Code is still running the old one, with the old files and tools. "
+            "Stop here and tell the person to start the agent again in a minute or two, once Claude Code has "
+            "loaded the new definition.".format(slug, os.path.dirname(current_tools)))
+
+
 class AgentToolsServer:
     def __init__(self, slug: str, tools: List[Dict[str, Any]], client: SoleonMcpClient,
                  app_env: str = "dev", poll_interval_s: float = POLL_INTERVAL_S,
@@ -1052,8 +1088,11 @@ class AgentToolsServer:
                  spawn_worker: Optional["LocalSpawnWorker"] = None,
                  read_only_views: Optional[Dict[str, str]] = None,
                  replay_path: Optional[str] = None,
-                 local_model: Optional["LocalModelAnswerer"] = None):
+                 local_model: Optional["LocalModelAnswerer"] = None,
+                 stale_note: Optional[str] = None):
         self.slug = slug
+        #: Set when this server was started from a definition a newer pull replaced: every call refuses.
+        self.stale_note = stale_note
         #: Answers the model calls a code run of one of this server's calls is
         #: waiting on, with the agent's LOCAL model (never the platform's).
         self.local_model = local_model
@@ -1106,6 +1145,8 @@ class AgentToolsServer:
         self.pre_approved = pre_approved
 
     def call(self, name: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
+        if self.stale_note:
+            return _text_result(self.stale_note, True)
         if name == READ_RESULT_PAGE_TOOL["name"] and name not in self._platform_name:
             return self._read_page(arguments or {})
         return self._paged(name, self._call(name, arguments))
@@ -1399,6 +1440,14 @@ def main(argv: Optional[List[str]] = None) -> int:
         spawner = LocalSpawnWorker(slug=args.slug, tools_path=args.tools, server_url=args.server_url,
                                    model=args.model or _pulled_model(agent_dir), app_env=args.app_env,
                                    credentials=args.credentials, timeout_s=SPAWN_WORKER_TIMEOUT_S)
+    # Only the agent's own server is started from ~/.claude/agents/<slug>.md; a helper's, worker's or
+    # member's server is started by this one (--only, --turn, --worker) and follows it.
+    stale_note = None
+    if args.only is None and args.turn is None and not args.worker:
+        current = replaced_definition(args.slug, args.tools)
+        if current:
+            stale_note = stale_definition_note(args.slug, current)
+            _log("started from a replaced definition: {} now runs from {}".format(args.slug, current))
     server = AgentToolsServer(args.slug, tools, client, app_env=args.app_env,
                               poll_interval_s=args.poll_interval, conversation=tracker, turn=turn,
                               local_workers=workers, pre_approved=args.pre_approved,
@@ -1407,7 +1456,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                               spawn_worker=spawner,
                               read_only_views=WORKER_READ_ONLY_VIEWS if args.worker else None,
                               replay_path=os.path.join(agent_dir, EVAL_REPLAY_FILE),
-                              local_model=local_model)
+                              local_model=local_model, stale_note=stale_note)
     _log("serving {} external tool(s) for {} via {}".format(len(server.published), args.slug, client.server_url))
     serve(server)
     return 0
