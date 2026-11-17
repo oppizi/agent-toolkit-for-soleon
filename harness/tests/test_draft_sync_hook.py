@@ -350,7 +350,8 @@ def test_hooks_json_wires_the_script_on_write_edit_multiedit():
     assert cmd["type"] == "command"
     # Python starts only for a save under .soleon/ (the shell checks first).
     assert cmd["command"].startswith('i=$(cat); case "$i" in *.soleon*) ;; *) exit 0 ;; esac; ')
-    assert cmd["command"].endswith('printf \'%s\' "$i" | "$p" "${CLAUDE_PLUGIN_ROOT}/bin/soleon_draft_sync.py"')
+    assert cmd["command"].endswith('printf \'%s\' "$i" | "$p" "${CLAUDE_PLUGIN_ROOT}/bin/soleon_newest.py" '
+                                   '"${CLAUDE_PLUGIN_ROOT}/bin/soleon_draft_sync.py"')
 
 
 def test_save_rebuilds_the_subagent_definition_the_next_run_spawns_from(agent_dir, tmp_path, capsys):

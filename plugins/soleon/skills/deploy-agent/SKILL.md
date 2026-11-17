@@ -29,7 +29,7 @@ plugin root (two levels above `skills/deploy-agent/`). Pass
 ## State machine — execute in order, follow failure branches exactly
 
 ### Step 0 — Selfcheck (2 seconds, before any analysis)
-Run: `python3 $ASSETS/engine.py --selfcheck`
+Run: `python3 "$PLUGIN/bin/soleon_newest.py" $ASSETS/engine.py --selfcheck`
 - **PASS** → note the resolved engine version; continue.
 - **FAIL** → STOP. Apply the error-presentation rule; the error text contains
   the recovery command (install recipe or reinstall instruction). Do not
@@ -194,7 +194,7 @@ warnings-only output, which is normal for distilled specs.
   (error-presentation rule) and ask the user how to proceed.
 
 ### Step 5 — Convert
-Run: `python3 $ASSETS/allium_to_json.py <spec> --app-env <env> --out-dir <dir> [--skill <path> ...]`
+Run: `python3 "$PLUGIN/bin/soleon_newest.py" $ASSETS/allium_to_json.py <spec> --app-env <env> --out-dir <dir> [--skill <path> ...]`
 where `<env>` is the user's stated target (default `dev`) and each `--skill`
 is a confirmed bundled skill from Step 3.5.
 - Non-zero exit → apply the error-presentation rule. ValidationErrors name the

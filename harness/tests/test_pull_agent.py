@@ -109,8 +109,9 @@ def test_subagent_frontmatter_and_body(pulled):
     ws_args = re.search(r"soleon-workspace:\n\s+type: stdio\n\s+command: \S.*\n\s+args: (\[.*?\])\n", fm)
     assert ws_args, fm
     ws = json.loads(ws_args.group(1))
-    assert ws[0] == str(PLUGIN / "bin" / "soleon_workspace_mcp.py")
-    assert ws[1] == str(agent_dir.resolve() / "workspace")
+    assert ws[0] == str(PLUGIN / "bin" / "soleon_newest.py")  # the newest installed version runs
+    assert ws[1] == str(PLUGIN / "bin" / "soleon_workspace_mcp.py")
+    assert ws[2] == str(agent_dir.resolve() / "workspace")
     # Claude Code's project data folder is a READ-ONLY root, so the agent can
     # read the overflow copy of a large tool result (…/tool-results/*.txt)
     # that Claude Code writes there instead of returning it inline.
@@ -121,7 +122,7 @@ def test_subagent_frontmatter_and_body(pulled):
     tools_args = re.search(r"soleon-agent-tools:\n\s+type: stdio\n\s+command: \S.*\n\s+args: (\[.*?\])(?:\n|$)", fm)
     assert tools_args, fm
     ta = json.loads(tools_args.group(1))
-    assert ta == [str(PLUGIN / "bin" / "soleon_agent_tools_mcp.py"), "--slug", SLUG,
+    assert ta == [str(PLUGIN / "bin" / "soleon_newest.py"), str(PLUGIN / "bin" / "soleon_agent_tools_mcp.py"), "--slug", SLUG,
                   "--tools", str(agent_dir.resolve() / "tools.json"), "--server-url", SERVER_URL]
     body = text[len(fm) + 8:]
     # the platform prompt survives byte-identical except for the path rewrites

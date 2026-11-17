@@ -49,7 +49,7 @@ new agents start on dev, and reach staging/prod later by promotion.
    rule; the fix is "run `/mcp`, connect soleon, then re-run
    `/create-agent`".
 2. `list_agents(app_env="dev")` → save the raw answer to `$WORK/list_agents.json`.
-3. `python3 $ASSETS/create_agent.py defaults --agents $WORK/list_agents.json`
+3. `python3 "$PLUGIN/bin/soleon_newest.py" $ASSETS/create_agent.py defaults --agents $WORK/list_agents.json`
    → `{takenSlugs, defaultModel, defaultModelReason, modelsInUse, knownIntegrations}`.
 
 Use this; don't narrate it. The person asked for an agent, not an inventory —
@@ -373,7 +373,7 @@ Write `$WORK/brief.json`:
   — exactly like `list_knowledge_bases`. Then, and only then, ask them for the
   id from Soleon → Channels (it starts `ci_`) and what to call it, in ONE
   question; if they'd rather not, build for Soleon chat.
-- **`slug`** — `python3 $ASSETS/create_agent.py suggest-slug --name "<displayName>"
+- **`slug`** — `python3 "$PLUGIN/bin/soleon_newest.py" $ASSETS/create_agent.py suggest-slug --name "<displayName>"
   --agents $WORK/list_agents.json` returns a free one.
 
 Once the slug is settled, move the work files into `.soleon/new-agents/<slug>/`.
@@ -383,7 +383,7 @@ Once the slug is settled, move the work files into `.soleon/new-agents/<slug>/`.
 ## Step 5 — Show what you will build (gate 1)
 
 ```
-python3 $ASSETS/create_agent.py plan --brief $WORK/brief.json --agents $WORK/list_agents.json \
+python3 "$PLUGIN/bin/soleon_newest.py" $ASSETS/create_agent.py plan --brief $WORK/brief.json --agents $WORK/list_agents.json \
   --server-url "$SOLEON_MCP_URL"
 ```
 

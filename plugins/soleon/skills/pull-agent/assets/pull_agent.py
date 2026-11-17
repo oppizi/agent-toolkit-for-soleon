@@ -553,6 +553,8 @@ def subagent_frontmatter(name: str, description: str, model: str, effort: Option
     servers, which is spec D2 (every tool runs on Soleon). Omitting `tools:`
     instead would hand the agent the whole parent pool, admin tools included.
     """
+    # Both servers start through the launcher, so a running session runs the newest installed version.
+    newest = str(plugin_root / "bin" / "soleon_newest.py")
     ws_py = str(plugin_root / "bin" / "soleon_workspace_mcp.py")
     tools_py = str(plugin_root / "bin" / "soleon_agent_tools_mcp.py")
     ws_dir = str(agent_dir.resolve() / "workspace")
@@ -575,14 +577,14 @@ def subagent_frontmatter(name: str, description: str, model: str, effort: Option
         "      type: stdio",
         "      command: {}".format(json.dumps(sys.executable)),
         "      args: {}".format(json.dumps(
-            [ws_py, ws_dir, "--readable", str(agent_dir.resolve())]
+            [newest, ws_py, ws_dir, "--readable", str(agent_dir.resolve())]
             + [a for d in (readable_extra or []) for a in ("--readable", str(d))]
             # The file tools share the agent's Soleon workspace with its code
             # execution, as on the platform; the snapshot is the fallback.
             + ["--slug", slug, "--server-url", server_url])),
     ]
     if external_only is None or external_only:
-        tools_args = [tools_py, "--slug", slug, "--tools", tools_json, "--server-url", server_url]
+        tools_args = [newest, tools_py, "--slug", slug, "--tools", tools_json, "--server-url", server_url]
         if external_only:
             tools_args += ["--only", ",".join(external_only)]
         lines += [

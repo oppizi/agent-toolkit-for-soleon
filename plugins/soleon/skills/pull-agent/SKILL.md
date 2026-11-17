@@ -84,7 +84,7 @@ Save each RAW tool result to disk with the Write tool exactly as returned
      made by hand can lose characters, and Claude Code may have saved the
      answer to a file instead of showing it (then read the file's first lines:
      `result_url` comes before `result`). Run
-     `python3 $ASSETS/pull_agent.py fetch-result --url "<result_url>" --out $DIR/tools.json`.
+     `python3 "$PLUGIN/bin/soleon_newest.py" $ASSETS/pull_agent.py fetch-result --url "<result_url>" --out $DIR/tools.json`.
      The link lasts `result_url_expires_in_seconds`; on an expired-link error,
      call `get_agent_tool_result(slug, app_env="dev", call_id)` for a fresh one
      and run the script again.
@@ -106,7 +106,7 @@ maverick agents.
 `get_agent_workspace_archive(slug, app_env="dev")` → `{url, expiresInSeconds,
 namespace, prefix, files, bytes}` (save it to `$DIR/.pull/workspace.json`).
 Then download within 15 minutes:
-`python3 $ASSETS/pull_agent.py download --url "<url>" --out $DIR/.pull/workspace.zip`
+`python3 "$PLUGIN/bin/soleon_newest.py" $ASSETS/pull_agent.py download --url "<url>" --out $DIR/.pull/workspace.zip`
 - `files: 0` → an empty zip is normal (the user never built memory with this
   agent); continue.
 - Download error mentioning an expired URL → call the tool again and retry
@@ -116,7 +116,7 @@ Then download within 15 minutes:
   with an empty `workspace/` only if the user says so).
 
 ### Step 5 — The local model (a question ONLY when there is a choice)
-Run `python3 $ASSETS/pull_agent.py default-model --dir $DIR` →
+Run `python3 "$PLUGIN/bin/soleon_newest.py" $ASSETS/pull_agent.py default-model --dir $DIR` →
 `{platformModel, suggested, ask, warning, choices}`. **`ask` decides, and you
 never ask when it is false** — "this agent runs on
 `us.anthropic.claude-sonnet-5`, run it locally on sonnet?" is a question with
@@ -135,7 +135,7 @@ Only the aliases in `choices` are valid answers.
 
 ### Step 6 — Materialize
 ```
-python3 $ASSETS/pull_agent.py materialize --slug <slug> --dir <abs $DIR> \
+python3 "$PLUGIN/bin/soleon_newest.py" $ASSETS/pull_agent.py materialize --slug <slug> --dir <abs $DIR> \
   --server-url "$SOLEON_MCP_URL" --model <chosen> --plugin-root "$PLUGIN"
 ```
 Writes, under `$DIR`: `SOUL.md` (draft soul), `config.json` (the nested
@@ -262,5 +262,5 @@ From the script's JSON summary tell the user, in plain words:
 The hook's stderr says either the draft was changed elsewhere (conflict) or
 why the platform refused. On a conflict STOP and ask the user, one question:
 reload theirs (re-run `/pull-agent <slug>`) or overwrite with the local
-version (`python3 $ASSETS/pull_agent.py adopt-etag --dir <abs $DIR>`, then
+version (`python3 "$PLUGIN/bin/soleon_newest.py" $ASSETS/pull_agent.py adopt-etag --dir <abs $DIR>`, then
 save the file again). Never choose for them (spec D5).
