@@ -89,7 +89,8 @@ def _pulled(tmp_path, budget=100000, enabled=None):
     return agent_dir
 
 
-MSG = "prompt:p1"
+#: The message of agent run a1 for prompt p1 (each run of the agent is its own message).
+MSG = "prompt:p1:a1"
 
 
 def _hook(tmp_path, agent_id="a1", agent_type=SLUG, tool="mcp__soleon-agent-tools__mcp_gmail_read",
@@ -397,6 +398,23 @@ def test_the_next_prompt_is_a_new_message(tmp_path, capsys):
     _agent_spend(tmp_path, 1000, agent_id="a2")
     _, out = _run_agent_hook(_hook(tmp_path, agent_id="a2", prompt_id="p2"), capsys)
     assert out == ""
+
+
+def test_two_runs_of_the_agent_for_one_prompt_are_two_messages(tmp_path, capsys):
+    """An eval suite runs the agent once per eval for ONE prompt of the person.
+    On Soleon each eval is its own message; 2026-11-17 four such runs shared one
+    allowance and each was refused after ~98k tokens."""
+    _pulled(tmp_path, budget=100000)
+    _agent_spend(tmp_path, 60000, agent_id="a1")
+    _, out = _run_agent_hook(_hook(tmp_path, agent_id="a1"), capsys)
+    assert out == ""
+    _agent_spend(tmp_path, 60000, agent_id="a2")
+    _, out = _run_agent_hook(_hook(tmp_path, agent_id="a2"), capsys)
+    assert out == ""                                    # 60k of its own, not 120k
+    # ...while a resumed run keeps its message and its spend
+    _agent_spend(tmp_path, 90000, agent_id="a2")
+    _, out = _run_agent_hook(_hook(tmp_path, agent_id="a2"), capsys)
+    assert "deny" in out
 
 
 def test_a_subagent_of_something_that_is_not_pulled_is_untouched(tmp_path, capsys):

@@ -190,11 +190,12 @@ class Ledger:
     helper's hook — separate processes, so every change is read-modify-write
     under an exclusive lock.
 
-    A MESSAGE is everything between two prompts of the person: the pulled
-    agent's run(s), every configured subagent the conversation runs for it
-    (`<slug>--<id>`, workflows' members included), and every integration
+    A MESSAGE is one run of the pulled agent for one prompt of the person
+    (resumes included), every configured subagent the conversation runs for
+    it (`<slug>--<id>`, workflows' members included), and every integration
     helper any of them starts. Claude Code stamps one `prompt_id` on every
-    tool call of a prompt, subagents' included, so that id is the key.
+    tool call of a prompt, subagents' included; the key is that id plus the
+    agent run's id (`_message_of`).
 
     State: `{message, runs: {agent_id: transcript}, helpers: {run: tokens},
     touchedAt}`."""
@@ -297,13 +298,25 @@ def _pulled_agent_of(hook: Dict[str, Any]) -> Optional[Tuple[Path, bool]]:
     return candidate, bool(sep)
 
 
-def _message_of(hook: Dict[str, Any], agent_dir: Path, agent_id: str) -> str:
-    """The person's prompt this run serves. Claude Code stamps `prompt_id`
-    on every tool call; without it (an older build), the agent run's own turn
-    — its configured subagents then cannot be joined."""
+def _message_of(hook: Dict[str, Any], agent_dir: Path, agent_id: str, is_subagent: bool = False) -> str:
+    """The message this run belongs to. Claude Code stamps `prompt_id` on
+    every tool call; without it (an older build), the agent run's own turn —
+    its configured subagents then cannot be joined.
+
+    Each run of the agent ITSELF is its own message (`prompt:<id>:<run>`), as
+    each message to it is on Soleon: several runs for one prompt — an eval
+    suite — do not share one allowance (2026-11-17: four evals run for one
+    prompt were each refused after ~98k tokens, together past the 85% mark).
+    A resumed run keeps its agent id, so it stays in its message. A configured
+    subagent (`<slug>--<id>`) is run by the conversation FOR the agent, so it
+    joins the agent run of the same prompt the ledger holds."""
     prompt_id = hook.get("prompt_id")
     if isinstance(prompt_id, str) and prompt_id:
-        return "prompt:" + prompt_id
+        prompt = "prompt:" + prompt_id
+        if not is_subagent:
+            return prompt + ":" + agent_id
+        current = Ledger(agent_dir)._load().get("message")
+        return current if isinstance(current, str) and current.startswith(prompt + ":") else prompt
     try:
         data = json.loads((agent_dir / TURN_FILE_NAME).read_text(encoding="utf-8"))
     except (OSError, ValueError):
@@ -326,7 +339,7 @@ def agent_pretool(hook: Dict[str, Any]) -> int:
     if budget <= 0:
         return 0
     transcript = subagent_transcript(hook.get("transcript_path"), str(agent_id))
-    state = Ledger(agent_dir).note_run(_message_of(hook, agent_dir, str(agent_id)), str(agent_id), transcript)
+    state = Ledger(agent_dir).note_run(_message_of(hook, agent_dir, str(agent_id), is_subagent), str(agent_id), transcript)
     used = spent(state)
     if used >= wind_down_at(budget):
         _deny(refusal(used, budget, who="this subagent" if is_subagent else "the agent"))
