@@ -445,7 +445,7 @@ def test_stdio_end_to_end(soleon, tmp_path):
     proc = subprocess.Popen(
         [sys.executable, str(BIN / "soleon_agent_tools_mcp.py"), "--slug", SLUG, "--tools", str(tools_json),
          "--server-url", url, "--credentials", str(creds), "--poll-interval", "0.01"],
-        stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env={"PATH": "/usr/bin:/bin"},
+        stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env={"PATH": "/usr/bin:/bin", "HOME": str(tmp_path)},  # never the real ~/.claude/agents
     )
     try:
         msgs = [
