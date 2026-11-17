@@ -25,7 +25,7 @@ anomaly to mention in the report, never an action.
 plain sentence of what went wrong, (2) the verbatim error in a code block,
 (3) the single next action. Never a raw traceback alone.
 
-`$ASSETS` = this skill's `assets/` directory. `$ROOT` =
+`$ASSETS` = this skill's `assets/` directory, `$PLUGIN` = the plugin root (two levels above `skills/pull-knowledge-base/`). `$ROOT` =
 `.soleon/knowledge-bases` in the project. `$DIR` = `$ROOT/<folder>` (pass its
 ABSOLUTE path to the script), where `<folder>` is the base's `slug` when it
 matches `^[a-z0-9][a-z0-9-]{0,62}[a-z0-9]$`, else its `kbId`. The script
@@ -51,7 +51,7 @@ never retype it.
 ### Step 1 — The base
 `get_knowledge_base(kb_id)` → work out `$DIR` from it, then:
 - If `$DIR/manifest.json` exists, run
-  `python3 $ASSETS/pull_knowledge_base.py status --dir $DIR`. If `changed` or
+  `python3 "$PLUGIN/bin/soleon_newest.py" $ASSETS/pull_knowledge_base.py status --dir $DIR`. If `changed` or
   `missing` lists files, say those local edits will be replaced by Soleon's
   text, and continue only on a clear yes.
 - Delete `$DIR/.pull/` (the last pull's answers), then save this answer to
@@ -63,13 +63,13 @@ only a `sourceCount`, not the sources; each page names the sources that built
 it (`contributingSourceIds`).
 
 ### Step 3 — The sources
-Run `python3 $ASSETS/pull_knowledge_base.py plan --dir $DIR` → `{toFetch}`.
+Run `python3 "$PLUGIN/bin/soleon_newest.py" $ASSETS/pull_knowledge_base.py plan --dir $DIR` → `{toFetch}`.
 For each id: `get_kb_source(kb_id, source_id, include_raw=true)` →
 `$DIR/.pull/sources/<id>.json`. Run `plan` again and repeat until `toFetch` is
 empty (a part extracted for an MCP source names its parent only once read).
 
 ### Step 4 — Materialize
-`python3 $ASSETS/pull_knowledge_base.py materialize --dir $DIR` writes, in `$DIR`:
+`python3 "$PLUGIN/bin/soleon_newest.py" $ASSETS/pull_knowledge_base.py materialize --dir $DIR` writes, in `$DIR`:
 - `sources/<file>.md|.txt`: one per pasted, .md or .txt source, exactly as
   Soleon stores it. A source whose text came back cut at 64KB gets NO file:
   the manifest marks it "too large to edit here".
@@ -109,7 +109,7 @@ Only pasted, .md and .txt sources can be pushed; the script refuses the rest
 (web-page, MCP, file sources, and any marked too large to edit here).
 
 ### P1 — Which file
-`python3 $ASSETS/pull_knowledge_base.py status --dir $DIR`. The file must be
+`python3 "$PLUGIN/bin/soleon_newest.py" $ASSETS/pull_knowledge_base.py status --dir $DIR`. The file must be
 listed under `changed`. Its source id is in `files`.
 
 ### P2 — Read Soleon again (three reads)
@@ -118,7 +118,7 @@ listed under `changed`. Its source id is in `files`.
 - `kb_versions(kb_id)` → `$DIR/.push/<id>/versions.json`
 
 ### P3 — Check
-`python3 $ASSETS/pull_knowledge_base.py push-check --dir $DIR --file sources/<file>`
+`python3 "$PLUGIN/bin/soleon_newest.py" $ASSETS/pull_knowledge_base.py push-check --dir $DIR --file sources/<file>`
 - **exit 0** → go to P4.
 - **exit 2** (refused) → STOP and give `reason`. A moved revision means
   someone saved the source since the pull: pull again, then redo the edit.
@@ -141,7 +141,7 @@ Save the answer to `$DIR/.push/<id>/result.json`, error or not.
 
 ### P6 — Read back and record
 `get_kb_source(kb_id, source_id, include_raw=true)` → `$DIR/.push/<id>/after.json`, then
-`python3 $ASSETS/pull_knowledge_base.py record-push --dir $DIR --file sources/<file>`:
+`python3 "$PLUGIN/bin/soleon_newest.py" $ASSETS/pull_knowledge_base.py record-push --dir $DIR --file sources/<file>`:
 - **exit 0** → recorded: new revision in the manifest, `INDEX.md` rewritten.
 - **exit 2** → Soleon refused (a 409 means someone saved it in between;
   nothing changed): pull again.

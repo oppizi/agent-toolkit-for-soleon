@@ -16,7 +16,7 @@ from pathlib import Path
 
 import pytest
 
-from _local_emulation_fixtures import PLUGIN
+from _local_emulation_fixtures import BIN, PLUGIN
 
 HOOKS = json.loads((PLUGIN / "hooks" / "hooks.json").read_text(encoding="utf-8"))["hooks"]
 BASH = shutil.which("bash")
@@ -38,6 +38,9 @@ def _started(tmp_path: Path, command: str, payload: dict, project: Path) -> bool
     stub = "import sys, pathlib; sys.stdin.read(); pathlib.Path({!r}).write_text('1')\n".format(str(marker))
     for name in ("soleon_message_budget.py", "soleon_pull_refresh.py", "soleon_draft_sync.py"):
         (plugin / "bin" / name).write_text(stub, encoding="utf-8")
+    # Every hook starts its script through the launcher (bin/soleon_newest.py).
+    (plugin / "bin" / "soleon_newest.py").write_text((BIN / "soleon_newest.py").read_text(encoding="utf-8"),
+                                                     encoding="utf-8")
     if marker.exists():
         marker.unlink()
     proc = subprocess.run([BASH, "-c", command], input=json.dumps(payload), capture_output=True, text=True, timeout=60,

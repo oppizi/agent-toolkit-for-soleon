@@ -82,6 +82,8 @@ STDLIB_OK = {
     "getpass",
     # pull-knowledge-base: ASCII-safe source file names
     "unicodedata",
+    # bin/soleon_newest.py runs the newest installed version's script in-process
+    "runpy",
 }
 # The plugin's OWN modules that its scripts import from a sibling path (they ship
 # together, so they are not third-party): the deploy-agent engine seam plus every
