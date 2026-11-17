@@ -178,6 +178,12 @@ From the script's JSON summary tell the user, in plain words:
 3. Tool routing: how many external tools run via Soleon, which are
    approval-gated (the agent will ask before calling them), the workspace
    tools served locally, and any prompt tool the local copy cannot reach.
+   **Script model calls run locally too**: a code run the agent starts
+   (`write_and_run_code`, `run_code_file`) still runs in Soleon's sandbox, but
+   every `llm.generate` / `llm.map` it makes is handed back to this session and
+   answered by headless Claude Code on the local model — never by the
+   platform's model, so a local test never bills Bedrock. A call the local
+   model cannot answer fails the script; it never falls back to the platform.
    **Integration helpers** (`localHelpers`): an integration the agent uses in
    subagent mode (`mcp_gmail_read`) is one tool that hands a task to a helper.
    That helper now reasons HERE — a headless Claude Code run on the same local
