@@ -186,16 +186,41 @@ def _materialize(agent_dir: Path, pull: Dict[str, Any], plugin_root: Path, runne
     return summary if isinstance(summary, dict) else {}
 
 
-def follow_plugin(agent_dir: Path, pull: Dict[str, Any], runner=subprocess.run) -> Optional[str]:
+#: materialize's refusal when a skill file has no text in the saved answers (pull_agent.fill_live_files).
+_NO_TEXT = "have no text in the pulled answers"
+
+
+def _fetch_skill_files(agent_dir: Path, pull: Dict[str, Any], client) -> None:
+    """Save get_agent_skills(content_mode="files") as .pull/skills.json: each skill file's text from the
+    deployed version, which a pull before 1.0.20 never saved."""
+    slug = str(pull.get("slug") or agent_dir.name)
+    app_env = str(pull.get("appEnv") or "dev")
+    skills_env = client.call_tool("get_agent_skills", {"slug": slug, "app_env": app_env, "content_mode": "files"})
+    if is_platform_error(skills_env):
+        raise RefreshError("get_agent_skills: {}".format(describe_error(skills_env)))
+    (agent_dir / doc.PULL_DIR).mkdir(parents=True, exist_ok=True)
+    doc.dump_json(agent_dir / doc.PULL_DIR / "skills.json", skills_env)
+
+
+def follow_plugin(agent_dir: Path, pull: Dict[str, Any], runner=subprocess.run, client=None) -> Optional[str]:
     """Move a pulled agent onto the running plugin when it names another
-    version's folder; None when it already does. Local files only."""
+    version's folder; None when it already does. Local files only, except one
+    read of the skill files' texts when the saved answers predate them (a pull
+    before 1.0.20: 2026-11-17, flyer-builder-app's 431 KB engine had none and
+    the move was refused)."""
     root = current_plugin_root()
     if _same_root(pull.get("pluginRoot"), root):
         return None
     display = str(pull.get("displayName") or pull.get("slug") or agent_dir.name)
     try:
-        _materialize(agent_dir, pull, root, runner)
-    except (RefreshError, subprocess.TimeoutExpired) as exc:
+        try:
+            _materialize(agent_dir, pull, root, runner)
+        except RefreshError as exc:
+            if client is None or _NO_TEXT not in str(exc):
+                raise
+            _fetch_skill_files(agent_dir, pull, client)
+            _materialize(agent_dir, pull, root, runner)
+    except (RefreshError, SoleonClientError, subprocess.TimeoutExpired) as exc:
         return "Soleon: {} still runs an older plugin version ({}); moving it failed ({}).".format(
             display, pull.get("pluginRoot"), exc)
     # materialize rewrote pull.json (with the new pluginRoot); keep the sync provenance.
@@ -231,7 +256,9 @@ def refresh(agent_dir: Path, pull: Dict[str, Any], draft_raw: Dict[str, Any], cl
     config_env = client.call_tool("get_agent_config", {"slug": slug, "app_env": app_env})
     if is_platform_error(config_env):
         raise RefreshError("get_agent_config: {}".format(describe_error(config_env)))
-    skills_env = client.call_tool("get_agent_skills", {"slug": slug, "app_env": app_env, "content_mode": "full"})
+    # "files": each skill file's text from the deployed version, which materialize needs for a file a
+    # draft keeps by path or one over 64 KB (1.0.20).
+    skills_env = client.call_tool("get_agent_skills", {"slug": slug, "app_env": app_env, "content_mode": "files"})
     if is_platform_error(skills_env):
         raise RefreshError("get_agent_skills: {}".format(describe_error(skills_env)))
     sync_env = client.call_tool("sync_draft_test_chat", {"slug": slug, "app_env": app_env})
@@ -277,16 +304,16 @@ def check_agent(agent_dir: Path, client_factory=SoleonMcpClient, runner=subproce
                        "Soleon: could not check whether {} changed on the platform ({}); using the local copy.".format(display, exc))
     if not isinstance(draft_raw, dict) or not isinstance(draft_raw.get("agent"), dict):
         if isinstance(draft_raw, dict) and is_platform_error(draft_raw):
-            return _joined(follow_plugin(agent_dir, pull, runner),
+            return _joined(follow_plugin(agent_dir, pull, runner, client),
                            "Soleon: could not check whether {} changed on the platform ({}); using the local copy.".format(
                                display, describe_error(draft_raw)))
-        return _joined(follow_plugin(agent_dir, pull, runner),
+        return _joined(follow_plugin(agent_dir, pull, runner, client),
                        "Soleon: unexpected get_agent_draft answer for {}; using the local copy.".format(display))
 
     remote, local = version_of(draft_raw), materialized_version_of(pull)
     if remote == local:
         # Same agent; it may still name an older plugin's folder.
-        return follow_plugin(agent_dir, pull, runner)
+        return follow_plugin(agent_dir, pull, runner, client)
     if (agent_dir / doc.PULL_DIR / doc.CONFLICT_JSON).is_file():
         return ("Soleon: {} changed on the platform ({} → {}) but a save conflict is pending in {} — NOT refreshed. "
                 "Resolve it first: reload theirs with /pull-agent {}, or keep yours with `pull_agent.py adopt-etag` and save again."
