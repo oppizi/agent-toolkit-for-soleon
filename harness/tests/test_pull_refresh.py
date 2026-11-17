@@ -327,3 +327,43 @@ def test_materialized_version_prefers_refreshed_from_and_falls_back(tmp_path):
     assert refresh.materialized_version_of({"draftEtag": "9", "refreshedFrom": "draft:4"}) == "draft:4"
     assert refresh.materialized_version_of({"draftEtag": "9"}) == "draft:9"
     assert refresh.materialized_version_of({"baselineEtag": "7"}) == "deployed:7"
+
+
+def _pin_to_an_old_plugin(agent_dir: Path) -> None:
+    pull = json.loads((agent_dir / "pull.json").read_text())
+    pull["pluginRoot"] = "/old/cache/soleon/1.0.12"
+    (agent_dir / "pull.json").write_text(json.dumps(pull), encoding="utf-8")
+
+
+def test_an_agent_pulled_with_an_older_plugin_moves_onto_the_running_one(tmp_path):
+    """2026-11-17: pulled agents kept running the plugin version they were
+    pulled with (1.0.12 / 1.0.13) after 1.0.17 shipped — the subagent file
+    names the plugin folder its tool servers start from."""
+    agent_dir = _pulled(tmp_path)
+    _pin_to_an_old_plugin(agent_dir)
+    FakeClient.instances.clear()
+    rc, out, _ = _run(tmp_path, FakeClient, runner=_real_runner_with_home(tmp_path))
+    assert rc == 0 and "now runs the installed plugin" in json.loads(out)["systemMessage"]
+    # Same agent version: one read, nothing re-pulled.
+    assert [c[0] for c in FakeClient.instances[0].calls] == ["get_agent_draft"]
+    pull = json.loads((agent_dir / "pull.json").read_text())
+    assert Path(pull["pluginRoot"]).resolve() == PLUGIN.resolve()
+    assert pull["draftEtag"] == OLD_ETAG
+    subagent = (tmp_path / ".claude" / "agents" / "{}.md".format(SLUG)).read_text(encoding="utf-8")
+    assert str(PLUGIN / "bin") in subagent and "1.0.12" not in subagent
+    # Moved once: the next start is silent again.
+    rc, out, _ = _run(tmp_path, FakeClient, runner=_real_runner_with_home(tmp_path))
+    assert out == ""
+
+
+def test_an_older_plugin_is_left_behind_even_when_the_platform_is_unreachable(tmp_path):
+    agent_dir = _pulled(tmp_path)
+    _pin_to_an_old_plugin(agent_dir)
+
+    def factory(url):
+        return FakeClient(url, fail={"get_agent_draft": ToolError("HTTP 503", {"error": "unavailable"})})
+
+    rc, out, _ = _run(tmp_path, factory, runner=_real_runner_with_home(tmp_path))
+    message = json.loads(out)["systemMessage"]
+    assert "now runs the installed plugin" in message and "using the local copy" in message
+    assert Path(json.loads((agent_dir / "pull.json").read_text())["pluginRoot"]).resolve() == PLUGIN.resolve()

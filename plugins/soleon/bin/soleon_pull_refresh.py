@@ -149,6 +149,65 @@ def _terminal(client, slug: str, app_env: str, name: str) -> Dict[str, Any]:
     return envelope
 
 
+def current_plugin_root() -> Path:
+    """The plugin running THIS hook — the newest installed version. A pulled
+    agent's subagent file names the plugin folder its tool servers start from,
+    so it must follow this one, never the folder recorded at pull time: a
+    pinned agent never received a plugin update (2026-11-17: three pulled
+    agents still ran 1.0.12 / 1.0.13 after 1.0.17 shipped)."""
+    return Path(os.environ.get("CLAUDE_PLUGIN_ROOT") or Path(__file__).resolve().parents[1])
+
+
+def _same_root(a: Any, b: Path) -> bool:
+    if not a:
+        return False
+    try:
+        return Path(str(a)).resolve() == b.resolve()
+    except OSError:
+        return str(a) == str(b)
+
+
+def _materialize(agent_dir: Path, pull: Dict[str, Any], plugin_root: Path, runner) -> Dict[str, Any]:
+    """Re-write the subagent definition from the files already saved under
+    ``agent_dir`` (no platform reads), with ``plugin_root``'s scripts."""
+    slug = str(pull.get("slug") or agent_dir.name)
+    server_url = str(pull.get("serverUrl") or DEFAULT_SERVER_URL)
+    model = str(pull.get("model") or "sonnet")
+    cmd = [sys.executable, str(plugin_root / "skills" / "pull-agent" / "assets" / "pull_agent.py"), "materialize",
+           "--slug", slug, "--dir", str(agent_dir), "--server-url", server_url, "--model", model,
+           "--plugin-root", str(plugin_root), "--keep-workspace"]
+    proc = runner(cmd, capture_output=True, text=True, timeout=120, encoding="utf-8", errors="replace")
+    if proc.returncode != 0:
+        raise RefreshError("materialize failed: {}".format((proc.stderr or proc.stdout or "").strip()[-800:]))
+    try:
+        summary = json.loads(proc.stdout)
+    except json.JSONDecodeError:
+        summary = {}
+    return summary if isinstance(summary, dict) else {}
+
+
+def follow_plugin(agent_dir: Path, pull: Dict[str, Any], runner=subprocess.run) -> Optional[str]:
+    """Move a pulled agent onto the running plugin when it names another
+    version's folder; None when it already does. Local files only."""
+    root = current_plugin_root()
+    if _same_root(pull.get("pluginRoot"), root):
+        return None
+    display = str(pull.get("displayName") or pull.get("slug") or agent_dir.name)
+    try:
+        _materialize(agent_dir, pull, root, runner)
+    except (RefreshError, subprocess.TimeoutExpired) as exc:
+        return "Soleon: {} still runs an older plugin version ({}); moving it failed ({}).".format(
+            display, pull.get("pluginRoot"), exc)
+    # materialize rewrote pull.json (with the new pluginRoot); keep the sync provenance.
+    fresh = doc.load_pull(agent_dir)
+    for key in ("refreshedAt", "refreshedFrom", "draftEtag"):
+        if key in pull and key not in fresh:
+            fresh[key] = pull[key]
+    fresh["pluginRoot"] = str(root)
+    doc.save_pull(agent_dir, fresh)
+    return "Soleon: {} now runs the installed plugin ({}).".format(display, root.name)
+
+
 def refresh(agent_dir: Path, pull: Dict[str, Any], draft_raw: Dict[str, Any], client,
             runner: Callable[..., "subprocess.CompletedProcess[str]"] = subprocess.run) -> Dict[str, Any]:
     """Re-pull everything but the workspace and re-materialize. Returns the
@@ -156,9 +215,8 @@ def refresh(agent_dir: Path, pull: Dict[str, Any], draft_raw: Dict[str, Any], cl
     when a read fails BEFORE anything is written."""
     slug = str(pull.get("slug") or agent_dir.name)
     app_env = str(pull.get("appEnv") or "dev")
-    plugin_root = Path(str(pull.get("pluginRoot") or os.environ.get("CLAUDE_PLUGIN_ROOT") or Path(__file__).resolve().parents[1]))
-    server_url = str(pull.get("serverUrl") or DEFAULT_SERVER_URL)
-    model = str(pull.get("model") or "sonnet")
+    # The RUNNING plugin, never pull.json's recorded folder (current_plugin_root).
+    plugin_root = current_plugin_root()
     # The subagent file goes where materialize puts it TODAY (the user scope,
     # ~/.claude/agents/), never where an older pull.json says it went. The
     # first version of this hook re-used pull.json's `subagentFile` — a
@@ -190,22 +248,14 @@ def refresh(agent_dir: Path, pull: Dict[str, Any], draft_raw: Dict[str, Any], cl
     doc.dump_json(agent_dir / "tools.json", tools_env)
     doc.dump_json(agent_dir / "prompt.json", prompt_env)
 
-    cmd = [sys.executable, str(plugin_root / "skills" / "pull-agent" / "assets" / "pull_agent.py"), "materialize",
-           "--slug", slug, "--dir", str(agent_dir), "--server-url", server_url, "--model", model,
-           "--plugin-root", str(plugin_root), "--keep-workspace"]
-    proc = runner(cmd, capture_output=True, text=True, timeout=120, encoding="utf-8", errors="replace")
-    if proc.returncode != 0:
-        raise RefreshError("materialize failed: {}".format((proc.stderr or proc.stdout or "").strip()[-800:]))
-    try:
-        summary = json.loads(proc.stdout)
-    except json.JSONDecodeError:
-        summary = {}
+    summary = _materialize(agent_dir, pull, plugin_root, runner)
     # materialize rewrites pull.json; keep the refresh provenance on it.
     fresh = doc.load_pull(agent_dir)
     fresh["refreshedAt"] = _now_iso()
     fresh["refreshedFrom"] = version_of(draft_raw)
+    fresh["pluginRoot"] = str(plugin_root)
     doc.save_pull(agent_dir, fresh)
-    return summary if isinstance(summary, dict) else {}
+    return summary
 
 
 def check_agent(agent_dir: Path, client_factory=SoleonMcpClient, runner=subprocess.run) -> Optional[str]:
@@ -223,16 +273,20 @@ def check_agent(agent_dir: Path, client_factory=SoleonMcpClient, runner=subproce
         client = client_factory(str(pull.get("serverUrl") or DEFAULT_SERVER_URL))
         draft_raw = doc.unwrap(client.call_tool("get_agent_draft", {"slug": slug, "app_env": app_env}))
     except SoleonClientError as exc:
-        return "Soleon: could not check whether {} changed on the platform ({}); using the local copy.".format(display, exc)
+        return _joined(follow_plugin(agent_dir, pull, runner),
+                       "Soleon: could not check whether {} changed on the platform ({}); using the local copy.".format(display, exc))
     if not isinstance(draft_raw, dict) or not isinstance(draft_raw.get("agent"), dict):
         if isinstance(draft_raw, dict) and is_platform_error(draft_raw):
-            return "Soleon: could not check whether {} changed on the platform ({}); using the local copy.".format(
-                display, describe_error(draft_raw))
-        return "Soleon: unexpected get_agent_draft answer for {}; using the local copy.".format(display)
+            return _joined(follow_plugin(agent_dir, pull, runner),
+                           "Soleon: could not check whether {} changed on the platform ({}); using the local copy.".format(
+                               display, describe_error(draft_raw)))
+        return _joined(follow_plugin(agent_dir, pull, runner),
+                       "Soleon: unexpected get_agent_draft answer for {}; using the local copy.".format(display))
 
     remote, local = version_of(draft_raw), materialized_version_of(pull)
     if remote == local:
-        return None
+        # Same agent; it may still name an older plugin's folder.
+        return follow_plugin(agent_dir, pull, runner)
     if (agent_dir / doc.PULL_DIR / doc.CONFLICT_JSON).is_file():
         return ("Soleon: {} changed on the platform ({} → {}) but a save conflict is pending in {} — NOT refreshed. "
                 "Resolve it first: reload theirs with /pull-agent {}, or keep yours with `pull_agent.py adopt-etag` and save again."
@@ -245,6 +299,10 @@ def check_agent(agent_dir: Path, client_factory=SoleonMcpClient, runner=subproce
     return ("Soleon: {} was out of date ({} → {}); the local copy was refreshed — SOUL.md, config.json, "
             "{} skill(s), {} eval(s), the system prompt and the subagent definition. workspace/ untouched."
             ).format(display, local, remote, len(summary.get("skills") or []), len(summary.get("evals") or []))
+
+
+def _joined(*messages: Optional[str]) -> str:
+    return " ".join(m for m in messages if m)
 
 
 def main(argv: Optional[List[str]] = None, stream=None, client_factory=SoleonMcpClient, runner=subprocess.run) -> int:
