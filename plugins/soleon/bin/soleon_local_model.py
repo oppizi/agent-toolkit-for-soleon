@@ -30,6 +30,9 @@ CALL_TIMEOUT_S = 600
 #: Calls of one batch (`llm.map`) run together, as they do on the platform.
 MAX_PARALLEL = 8
 DEFAULT_SYSTEM = "You answer the request exactly as asked."
+#: The platform stores an answer beside its request in one DynamoDB item and
+#: refuses a larger one (agent-infra local_call_verbs._MODEL_ANSWER_MAX_CHARS).
+MAX_ANSWER_CHARS = 180_000
 UTF8 = {"encoding": "utf-8", "errors": "replace"}
 
 
@@ -148,7 +151,12 @@ class LocalModelAnswerer:
             return {"request_id": request_id,
                     "error": "the local model failed: {}".format(str(detail or "no output")[:500])}
         try:
-            return {"request_id": request_id, "completion": completion(body, out)}
+            reply = completion(body, out)
+            if len(json.dumps(reply, separators=(",", ":"))) > MAX_ANSWER_CHARS:
+                return {"request_id": request_id, "error": (
+                    "the local model's reply is larger than the {} characters one answer may carry; "
+                    "ask for less per call".format(MAX_ANSWER_CHARS))}
+            return {"request_id": request_id, "completion": reply}
         except (ValueError, TypeError) as exc:
             return {"request_id": request_id,
                     "error": "the local model's reply was not the requested JSON: {}".format(exc)}

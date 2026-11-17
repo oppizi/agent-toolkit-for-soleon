@@ -164,3 +164,26 @@ def test_the_tool_server_answers_with_its_local_model():
     name = server.published[0]["name"]
     server.call(name, {})
     assert seen and seen[0]["request_id"] == "a" * 32
+
+
+def test_a_reply_too_large_for_the_platform_is_sent_as_an_error():
+    big = json.dumps({"result": "x" * (lm.MAX_ANSWER_CHARS + 1), "usage": USAGE})
+    answer, = _answerer(big).answer([{"request_id": "a" * 32, "body": TEXT}])
+    assert "completion" not in answer and "larger than" in answer["error"]
+
+
+def test_answers_lost_to_a_network_drop_are_sent_once_more():
+    from soleon_mcp_client import TransportError
+    platform = _Platform()
+    real = platform.call_tool
+    drops = []
+
+    def flaky(name, args):
+        if args.get("model_answers") and not drops:
+            drops.append(1)
+            raise TransportError("connection reset")
+        return real(name, args)
+    platform.call_tool = flaky
+    done = await_control(platform, SLUG, WAITING, answer_models=lambda rs: [
+        {"request_id": r["request_id"], "error": "x"} for r in rs])
+    assert done["state"] == "done" and drops == [1]

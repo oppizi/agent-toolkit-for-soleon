@@ -543,10 +543,15 @@ def await_control(
             answers = answer_models(requests) if answer_models else [
                 {"request_id": r.get("request_id"),
                  "error": "this local caller cannot answer model calls"} for r in requests]
-            envelope = client.call_tool("get_agent_tool_result", {
-                "slug": slug, "app_env": app_env, "call_id": envelope["call_id"],
-                "model_answers": answers,
-            })
+            sent = {"slug": slug, "app_env": app_env, "call_id": envelope["call_id"],
+                    "model_answers": answers}
+            try:
+                envelope = client.call_tool("get_agent_tool_result", sent)
+            except TransportError:
+                # The answers cost local model time: send them once more
+                # before giving up (an already-stored answer counts as stale).
+                do_sleep(interval_s)
+                envelope = client.call_tool("get_agent_tool_result", sent)
             continue
         if on_wait:
             on_wait(envelope)
