@@ -57,8 +57,13 @@ Save each RAW tool result to disk with the Write tool exactly as returned
      open — check the slug with `list_agents`".
 2. `get_agent_config(slug, app_env="dev")` → `$DIR/.pull/config.json`
    (deployed soul + config.json + schedules; the read-only baseline).
-3. `get_agent_skills(slug, app_env="dev", content_mode="full")` →
-   `$DIR/.pull/skills.json`.
+3. `get_agent_skills(slug, app_env="dev", content_mode="files")` →
+   `$DIR/.pull/skills.json`. `"files"` returns each skill package file's text
+   from the deployed version: a draft lists a file it keeps unchanged by path
+   only, and a published read leaves out a file over 64 KB, so this is the only
+   source of their text. Materialize stops, naming the files, when a text file
+   has no text anywhere; a server that refuses `"files"` predates it and needs
+   the platform update first.
 
 ### Step 2 — Registered tools (materializes the draft; may be slow)
 1. `sync_draft_test_chat(slug, app_env="dev")` — stages the draft (or the

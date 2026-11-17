@@ -33,6 +33,18 @@ PULL_JSON = "pull.json"
 DRAFT_SNAPSHOT = "draft.json"
 CONFLICT_JSON = "conflict.json"
 SKILL_META = "skill.json"
+#: skill.json key: {relative path: sha256 of its text} for each package file whose text the pull took
+#: from the LIVE copy. A save sends such a file back as a KEEP entry (path only) while its text is
+#: unchanged, so the platform's 128 KB-per-agent inline cap counts only what was really edited
+#: (2026-11-17: a pulled skill's untouched 70 KB of engines made a save refuse at 159 KB).
+LIVE_FILES_KEY = "liveFiles"
+#: An internal marker on a skill file entry handed to write_skills: its content is the live copy.
+LIVE_MARK = "_live"
+
+
+def text_sha(text: str) -> str:
+    import hashlib
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 #: Flat loop fields ↔ `config.loop` keys. The Agent field is `loopDimensions`
 #: but the config key is `dimensions` (the platform mirrors the rename).
@@ -279,7 +291,7 @@ def write_skills(agent_dir: Path, skills: List[Dict[str, Any]]) -> List[str]:
             "description": skill.get("description") or "",
             "enabled": bool(skill.get("enabled", True)),
         }
-        dump_json(sdir / SKILL_META, meta)
+        live: Dict[str, str] = {}
         for entry in skill.get("files") or []:
             if not isinstance(entry, dict) or not entry.get("path"):
                 continue
@@ -290,6 +302,11 @@ def write_skills(agent_dir: Path, skills: List[Dict[str, Any]]) -> List[str]:
                 target = sdir / rel
                 target.parent.mkdir(parents=True, exist_ok=True)
                 target.write_text(entry["content"], encoding="utf-8")
+                if entry.get(LIVE_MARK):
+                    live[rel] = text_sha(entry["content"])
+        if live:
+            meta[LIVE_FILES_KEY] = live
+        dump_json(sdir / SKILL_META, meta)
         written.append(sid)
     return written
 
@@ -343,15 +360,21 @@ def read_skills(agent_dir: Path, snapshot_skills: Optional[List[Dict[str, Any]]]
             if rel in ("SKILL.md", SKILL_META):
                 continue
             on_disk[rel] = p
+        live_files = meta.get(LIVE_FILES_KEY) if isinstance(meta.get(LIVE_FILES_KEY), dict) else {}
         for rel, p in on_disk.items():
             prev = dict(prior_files.get(rel) or {})
             if _TEXT_FILE_RE.search(rel) or "content" in prev:
                 try:
-                    prev["content"] = p.read_text(encoding="utf-8")
+                    text = p.read_text(encoding="utf-8")
                 except UnicodeDecodeError:
                     if rel in prior_files:
                         files.append(prior_files[rel])
                     continue
+                if live_files.get(rel) == text_sha(text):
+                    # Still the live copy: keep it (path only), never re-send it inline.
+                    prev.pop("content", None)
+                else:
+                    prev["content"] = text
             prev["path"] = rel
             prev.pop("stagedMissing", None)
             files.append(prev)

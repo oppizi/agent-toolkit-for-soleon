@@ -153,6 +153,64 @@ def _tools_of(tools_env: Any) -> List[Dict[str, Any]]:
     return [t for t in tools if isinstance(t, dict) and t.get("name")]
 
 
+def _live_file_texts(skills_env: Any) -> Optional[Dict[str, Dict[str, Any]]]:
+    """{skill id: {relative path: text or None (binary)}} from get_agent_skills content_mode
+    "files", or None when the saved answer carries no file texts (an older server)."""
+    env = skills_env.get("body", skills_env) if isinstance(skills_env, dict) else None
+    records = env.get("skills") if isinstance(env, dict) else None
+    if not isinstance(records, list):
+        return None
+    out = {str(r.get("name") or r.get("id")): r["fileContents"] for r in records
+           if isinstance(r, dict) and isinstance(r.get("fileContents"), dict)}
+    return out if out or not records else None
+
+
+def fill_live_files(skills: List[Dict[str, Any]], live: Optional[Dict[str, Dict[str, Any]]],
+                    has_draft: bool, docmod: Any = None) -> List[Dict[str, Any]]:
+    """Copies of the skills with every package file's text present, ready for write_skills.
+
+    A draft lists a file it keeps from the deployed version by path only (no text), and a
+    published read leaves out a file over 64 KB; both take their text from the LIVE copy
+    (get_agent_skills content_mode "files"). A text file that still has no text stops the
+    pull: a local copy missing skill files runs steps without their instructions, silently
+    (2026-11-17: a pulled flyer-builder had 3 of its 9 reference files). Files whose text is
+    the live copy are marked, so a later save sends them back unchanged as KEEP entries."""
+    doc = docmod or __import__("soleon_agent_document")
+    missing: List[str] = []
+    out: List[Dict[str, Any]] = []
+    for skill in skills:
+        sid = str(skill.get("id"))
+        texts = (live or {}).get(sid) or {}
+        files = []
+        for f in skill.get("files") or []:
+            if not isinstance(f, dict) or not f.get("path"):
+                files.append(f)
+                continue
+            f = dict(f)
+            rel = str(f["path"]).lstrip("/")
+            if isinstance(f.get("content"), str):
+                if not has_draft:
+                    f[doc.LIVE_MARK] = True  # a published read: this text IS the live copy
+            elif f.get("staged") is not None or f.get("from") is not None:
+                pass  # a pending upload or a move: its bytes are the platform's until deploy
+            elif isinstance(texts.get(rel), str):
+                f["content"] = texts[rel]
+                f[doc.LIVE_MARK] = True
+            elif rel in texts:
+                pass  # binary: never written locally
+            elif doc._TEXT_FILE_RE.search(rel):
+                missing.append("{}/{}".format(sid, rel))
+            files.append(f)
+        out.append({**skill, "files": files} if "files" in skill else dict(skill))
+    if missing:
+        raise SystemExit(
+            "These skill files have no text in the pulled answers, so the local copy would run without them: "
+            + ", ".join(missing) + ". Save get_agent_skills(content_mode=\"files\") to .pull/skills.json "
+            "(it returns each file's text from the deployed version) and run materialize again. If the "
+            "server refuses content_mode \"files\", it predates it: that platform needs the update first.")
+    return out
+
+
 def _skills_of(document: Dict[str, Any], skills_env: Any) -> List[Dict[str, Any]]:
     if isinstance(document.get("skills"), list):
         return [s for s in document["skills"] if isinstance(s, dict) and s.get("id")]
@@ -799,7 +857,7 @@ def materialize(args: argparse.Namespace) -> int:
     if not platform_model:
         platform_model = str(((config.get("agents") or {}).get("defaults") or {}).get("model") or "")
 
-    skills = _skills_of(document, skills_raw)
+    skills = fill_live_files(_skills_of(document, skills_raw), _live_file_texts(skills_raw), has_draft, doc)
     skill_ids = doc.write_skills(agent_dir, skills)
     evals = doc.standard_evals_of(document) or doc.standard_evals_of({"evals": config.get("evals")})
     eval_files = doc.write_evals(agent_dir, evals)
