@@ -28,6 +28,7 @@ PLUGIN = PLUGINS_DIR / "soleon"
 # plugin whose skill vanished.
 EXPECTED_SKILLS = {
     "attach-tool-server",
+    "build-knowledge-base",
     "browse-knowledge",
     "change-a-setting",
     "compare-environments",

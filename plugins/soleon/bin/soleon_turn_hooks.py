@@ -41,9 +41,11 @@ from typing import Any, Dict, List, Optional, Tuple
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from soleon_agent_tools_mcp import (  # noqa: E402
+    EXTRACTION_FILE,
     TURN_FILE_NAME,
     ConversationTracker,
     await_control,
+    extraction_args,
     mint_turn_id,
 )
 from soleon_mcp_client import (  # noqa: E402
@@ -304,6 +306,9 @@ def stop(hook: Dict[str, Any], client_factory=SoleonMcpClient, now=None) -> int:
         payload["started_at"] = turn["started_at"]
     if turn.get("completed_at"):
         payload["completed_at"] = turn["completed_at"]
+    # Under a LOCAL extraction job the turn's calls ran on the job's session;
+    # the record goes there too.
+    payload.update(extraction_args(str(agent_dir / EXTRACTION_FILE)))
     try:
         client = client_factory(server_url)
         envelope = client.call_tool("record_agent_turn", payload)

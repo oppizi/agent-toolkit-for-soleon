@@ -197,3 +197,18 @@ def test_stop_failure_tells_the_user_and_never_blocks(tmp_path, capsys):
     hook["agent_type"] = "code-reviewer"
     assert hooks.main(["stop"], stream=io.StringIO(json.dumps(hook)), client_factory=FakeClient) == 0
     assert FakeClient.instances == []
+
+
+def test_stop_records_a_local_extraction_turn_under_its_job(tmp_path):
+    agent_dir = _pulled(tmp_path)
+    (agent_dir / ".local-extraction.json").write_text(json.dumps(
+        {"callId": "lc_" + "1" * 24, "jobId": "ext_" + "2" * 32 + "_"}))
+    transcript = _write_transcript(tmp_path)
+    FakeClient.instances.clear()
+    hook = _hook(agent_dir, hook_event_name="SubagentStop", agent_transcript_path=str(transcript),
+                 last_assistant_message="Emitted 12 documents.")
+    assert hooks.main(["stop"], stream=io.StringIO(json.dumps(hook)), client_factory=FakeClient) == 0
+    (client,) = FakeClient.instances
+    (_name, args), = client.calls
+    assert args["extraction_job_id"] == "ext_" + "2" * 32 + "_"
+    assert args["extraction_call_id"] == "lc_" + "1" * 24

@@ -15,6 +15,14 @@ one result tool in `tools`. It runs as ONE headless Claude Code call
 session, and comes back as the completion object the sandbox reads: a text
 reply, a native JSON reply, or a result-tool call, with `usage`.
 
+A local knowledge-base build (the `build-knowledge-base` skill) sends the same
+shape for its distill calls, plus two things a code run never does: SEVERAL
+tools in one call (the distill may look pages up before it writes its plan)
+and a conversation that carries earlier tool calls and their results. With
+several tools the model answers one JSON object naming the tool it calls and
+its arguments (`tool_choice` "auto" also offers a plain reply), which comes
+back as that tool's call.
+
 Stdlib only, Python 3.9-compatible, like every script the plugin ships.
 """
 from __future__ import annotations
@@ -36,37 +44,87 @@ MAX_ANSWER_CHARS = 180_000
 UTF8 = {"encoding": "utf-8", "errors": "replace"}
 
 
+#: The answer to a several-tool call that chose to reply in plain text.
+REPLY_CHOICE = "reply"
+
+
+def _turn_text(m: Dict[str, Any]) -> str:
+    """One conversation turn as text: its words, its tool calls, or a tool result."""
+    if m.get("role") == "tool":
+        return "[result of tool call {}]\n{}".format(m.get("tool_call_id") or "", m.get("content") or "")
+    parts = [m["content"]] if isinstance(m.get("content"), str) and m["content"] else []
+    for call in m.get("tool_calls") or []:
+        fn = (call or {}).get("function") or {}
+        parts.append("(called {} with {}, call id {})".format(
+            fn.get("name"), fn.get("arguments") or "{}", (call or {}).get("id") or ""))
+    return "[{}]\n{}".format(m.get("role"), "\n".join(parts))
+
+
 def _prompt(messages: List[Dict[str, Any]]) -> "tuple[str, str]":
     """(system prompt, prompt) for one `claude -p` call."""
     system = "\n\n".join(m["content"] for m in messages if m.get("role") == "system")
-    turns = [m for m in messages if m.get("role") in ("user", "assistant")]
-    if len(turns) == 1:
+    turns = [m for m in messages if m.get("role") in ("user", "assistant", "tool")]
+    if len(turns) == 1 and turns[0].get("role") == "user":
         return system, turns[0]["content"]
     lines = ["The conversation so far, oldest first:"]
-    for m in turns:
-        lines.append("[{}]\n{}".format(m["role"], m["content"]))
-    lines.append("Reply to the last user message.")
+    lines.extend(_turn_text(m) for m in turns)
+    lines.append("Continue from the last tool result." if turns[-1].get("role") == "tool"
+                 else "Reply to the last user message.")
     return system, "\n\n".join(lines)
 
 
+def _offered(body: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """The tools this call may answer with: all of them, or the one
+    `tool_choice` names."""
+    tools = [((t or {}).get("function") or {}) for t in body.get("tools") or []]
+    tools = [fn for fn in tools if fn.get("name")]
+    choice = body.get("tool_choice")
+    if isinstance(choice, dict):
+        named = ((choice.get("function") or {}).get("name"))
+        return [fn for fn in tools if fn["name"] == named] or tools
+    return tools
+
+
+def _choice_schema(tools: List[Dict[str, Any]], allow_reply: bool) -> dict:
+    names = [fn["name"] for fn in tools] + ([REPLY_CHOICE] if allow_reply else [])
+    return {"type": "object", "properties": {
+        "tool": {"type": "string", "enum": names},
+        "arguments": {"type": "object"}}, "required": ["tool", "arguments"]}
+
+
+def _tools_brief(tools: List[Dict[str, Any]], allow_reply: bool) -> str:
+    lines = ["Answer with ONE JSON object: {\"tool\": <name>, \"arguments\": <that tool's input>}. "
+             "Call exactly one of these tools:"]
+    for fn in tools:
+        lines.append("- {}: {}\n  input schema: {}".format(
+            fn["name"], fn.get("description") or "", json.dumps(fn.get("parameters") or {})))
+    if allow_reply:
+        lines.append('- {}: answer in words instead; arguments {{"text": "<your answer>"}}'.format(REPLY_CHOICE))
+    return "\n".join(lines)
+
+
 def _schema(body: Dict[str, Any]) -> "tuple[Optional[dict], str, str]":
-    """(JSON schema, form, result tool name): form is `native`, `tool` or `text`.
-    A structured call offers exactly one tool, the sandbox's result tool; the
-    answer calls it by the name the request gave it."""
+    """(JSON schema, form, result tool name): form is `native`, `tool`,
+    `choose` or `text`. A structured call offers exactly one tool, the
+    sandbox's result tool; the answer calls it by the name the request gave
+    it. Several tools are `choose`: the answer names the one it calls."""
     response_format = body.get("response_format") or {}
     if response_format.get("type") == "json_schema" and isinstance(response_format.get("schema"), dict):
         return response_format["schema"], "native", ""
-    tools = body.get("tools") or []
-    if len(tools) == 1:
-        fn = (tools[0] or {}).get("function") or {}
-        if fn.get("name") and isinstance(fn.get("parameters"), dict):
-            return fn["parameters"], "tool", str(fn["name"])
+    tools = _offered(body)
+    if len(tools) == 1 and isinstance(tools[0].get("parameters"), dict):
+        return tools[0]["parameters"], "tool", str(tools[0]["name"])
+    if len(tools) > 1:
+        return _choice_schema(tools, body.get("tool_choice") == "auto"), "choose", ""
     return None, "text", ""
 
 
 def command(binary: str, model: str, body: Dict[str, Any]) -> List[str]:
     system, prompt = _prompt(body.get("messages") or [])
-    schema, _form, _name = _schema(body)
+    schema, form, _name = _schema(body)
+    if form == "choose":
+        brief = _tools_brief(_offered(body), body.get("tool_choice") == "auto")
+        system = "{}\n\n{}".format(system, brief) if system else brief
     cmd = [binary, "-p", prompt,
            "--model", model,
            "--system-prompt", system or DEFAULT_SYSTEM,
@@ -97,6 +155,18 @@ def completion(body: Dict[str, Any], out: Dict[str, Any]) -> Dict[str, Any]:
         if form == "native":
             message = {"role": "assistant", "content": json.dumps(value)}
             finish = "stop"
+        elif form == "choose":
+            if not isinstance(value, dict) or not isinstance(value.get("tool"), str):
+                raise ValueError("the answer names no tool")
+            arguments = value.get("arguments") if isinstance(value.get("arguments"), dict) else {}
+            if value["tool"] == REPLY_CHOICE:
+                message = {"role": "assistant", "content": str(arguments.get("text") or "")}
+                finish = "stop"
+            else:
+                message = {"role": "assistant", "content": None, "tool_calls": [{
+                    "id": "call_local", "type": "function",
+                    "function": {"name": value["tool"], "arguments": json.dumps(arguments)}}]}
+                finish = "tool_calls"
         else:
             message = {"role": "assistant", "content": None, "tool_calls": [{
                 "id": "call_local", "type": "function",

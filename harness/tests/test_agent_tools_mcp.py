@@ -1202,3 +1202,22 @@ def test_workers_follow_the_agents_workers_dial(tmp_path):
     assert shim.workers_enabled(str(tmp_path)) is True
     (tmp_path / "config.json").write_text(json.dumps({"loop": {"effort": {"workers": "off"}}}))
     assert shim.workers_enabled(str(tmp_path)) is False
+
+
+def test_an_extraction_job_file_rides_every_platform_call(soleon, tmp_path):
+    """2026-11-17 — while the kb-extractor runs a LOCAL extraction job, each
+    of its calls carries the job (`soleon_kb_local_ingest.py prepare-extractor`)."""
+    url, state = soleon
+    creds = tmp_path / "creds.json"
+    write_credentials(creds, url, GOOD)
+    client = client_mod.SoleonMcpClient(url, credentials_path=str(creds), token_override="",
+                                        sleep=lambda s: None)
+    path = tmp_path / shim.EXTRACTION_FILE
+    server = shim.AgentToolsServer(SLUG, TOOLS, client, poll_interval_s=0.01, extraction_path=str(path))
+    server.call("custom_echo-server_read", {"prompt": "before"})
+    assert "extraction_job_id" not in state["calls"][-1][1]
+    path.write_text(json.dumps({"callId": "lc_" + "1" * 24, "jobId": "ext_" + "2" * 32 + "_"}))
+    server.call("custom_echo-server_read", {"prompt": "during"})
+    args = state["calls"][-1][1]
+    assert args["extraction_job_id"] == "ext_" + "2" * 32 + "_"
+    assert args["extraction_call_id"] == "lc_" + "1" * 24
