@@ -323,7 +323,7 @@ from your keychain and can be deleted.
 - `test-draft-in-chat` — Try your draft in the test chat
 - `read-skills` — List and read an agent's skills
 - `edit-skill` — Add or rewrite one of the agent's skills
-- `browse-knowledge` — Find and read a knowledge base
+- `browse-knowledge` — Search and read a knowledge base
 - `see-agent-tools` — See an agent's tools and tool servers
 - `attach-tool-server` — Give an agent a tool server
 - `tool-switches` — Switch single tools on or off, and set approval

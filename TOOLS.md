@@ -72,6 +72,7 @@ agents they hold a role on).
 | `create_knowledge_base` | Create a new empty KB scaffold (the slug names the agent-facing `kb_{slug}_*` tools). |
 | `list_kb_pages` | A KB's wiki pages: path, title, kind, last modified, contributing sources (optional knowledge-graph fact counts). |
 | `get_kb_page` | Read one wiki page: markdown body + etag (optionally the page's knowledge-graph facts). |
+| `search_knowledge_base` | Search a KB the way its agents do (keyword + meaning, relevance-graded hits, graph facts, `answered`); one trace + cost under the caller. |
 | `put_kb_page` | Write one wiki page (full replacement) with `expected_etag` stale-write protection. |
 | `add_kb_source` | Add a source (url / text / mcp / file) to a KB and queue its ingestion. |
 | `get_kb_source` | Read one source's config row — plus, behind flags, the raw content and the extraction log feed. |
