@@ -349,6 +349,32 @@ def unwrap_tool_result(rpc: Dict[str, Any]) -> Dict[str, Any]:
     return payload
 
 
+#: Renew a token this many seconds before it expires.
+_RENEW_EARLY_S = 60.0
+
+
+def _expiry_of(entry: Optional[Dict[str, Any]]) -> Optional[float]:
+    expires = (entry or {}).get("expiresAt")
+    if isinstance(expires, bool) or not isinstance(expires, (int, float)) or not expires:
+        return None
+    return float(expires)
+
+
+#: Token-verification failures a tool reports as plain text (PyJWT's expiry
+#: message through libs/authz, 2026-11-18) or as the invalid-token envelope.
+_AUTH_FAILURE_TEXT = ("signature has expired", "token could not be verified", "token has expired")
+
+
+def _is_auth_failure(exc: Exception) -> bool:
+    """The Soleon tool error that means "your token failed verification":
+    `mcp_errors.invalid_token_error` (`stage: auth`) or its plain-text form."""
+    payload = getattr(exc, "payload", None)
+    if isinstance(payload, dict) and payload.get("stage") == "auth":
+        return True
+    text = " ".join(str(v) for v in ((payload or {}).get("text"), (payload or {}).get("detail"), str(exc)) if v)
+    return any(marker in text.lower() for marker in _AUTH_FAILURE_TEXT)
+
+
 class SoleonMcpClient:
     """`call_tool(name, arguments)` against the stateless Soleon MCP."""
 
@@ -368,13 +394,21 @@ class SoleonMcpClient:
         self._next_id = 1
         self._entry: Optional[Dict[str, Any]] = None
         self._token: Optional[str] = None
-        #: ONE refresh per process, whether triggered by a past `expiresAt` or a 401.
-        self._refresh_attempted = False
+        #: When the token in use expires (ms since the epoch), when known.
+        self._expires_at_ms: Optional[float] = None
+        #: The token a refresh already failed for: ONE refresh per token, so a
+        #: rejected refresh is never retried, while a long-running process (the
+        #: knowledge-base loop runs for hours) renews again after every expiry.
+        self._refresh_failed_for: Optional[str] = None
 
     # -- token -------------------------------------------------------------
 
     def _resolve_token(self) -> str:
         if self._token:
+            if not self._token_override and self._expiring():
+                # Adopt a token another process saved first; else renew it here.
+                if not self._reload_from_store():
+                    self._try_refresh()
             return self._token
         if self._token_override:
             self._token = self._token_override
@@ -383,12 +417,15 @@ class SoleonMcpClient:
         if entry is None:
             raise MissingTokenError(RECONNECT_INSTRUCTION)
         self._entry = entry
-        expires_at = entry.get("expiresAt")
-        if isinstance(expires_at, (int, float)) and expires_at and expires_at / 1000.0 <= time.time():
-            if self._try_refresh():
-                return self._token or ""
         self._token = str(entry["accessToken"])
+        self._expires_at_ms = _expiry_of(entry)
+        if self._expiring():
+            self._try_refresh()
         return self._token
+
+    def _expiring(self) -> bool:
+        """The token in use expires within a minute (False when its expiry is unknown)."""
+        return bool(self._expires_at_ms) and self._expires_at_ms / 1000.0 <= time.time() + _RENEW_EARLY_S
 
     def _reload_from_store(self) -> bool:
         """Adopt a token another process saved since this one read it. Claude
@@ -403,15 +440,21 @@ class SoleonMcpClient:
         fresh = str(entry.get("accessToken") or "") if entry else ""
         if not fresh or fresh == self._token:
             return False
+        expiry = _expiry_of(entry)
+        if expiry and expiry / 1000.0 <= time.time():
+            return False  # the store holds nothing newer than an expired token
         self._entry, self._token = entry, fresh
+        self._expires_at_ms = expiry
         return True
 
     def _try_refresh(self) -> bool:
-        """ONE refresh_token grant. True when a new access token is in place."""
+        """ONE refresh_token grant per token. True when a new access token is in place."""
         entry = self._entry
-        if self._refresh_attempted or not entry or not entry.get("refreshToken") or not entry.get("clientId"):
+        if not entry or not entry.get("refreshToken") or not entry.get("clientId"):
             return False
-        self._refresh_attempted = True
+        if self._refresh_failed_for is not None and self._refresh_failed_for == self._token:
+            return False
+        self._refresh_failed_for = self._token
         try:
             meta_url = _origin(self.server_url) + "/.well-known/oauth-authorization-server"
             req = urllib.request.Request(meta_url, headers={"Accept": "application/json"})
@@ -444,6 +487,9 @@ class SoleonMcpClient:
         if isinstance(expires_in, (int, float)):
             expires_at_ms = int((time.time() + float(expires_in)) * 1000)
         self._token = str(access)
+        self._expires_at_ms = expires_at_ms
+        if tok.get("refresh_token"):
+            entry["refreshToken"] = tok["refresh_token"]
         if entry.get("_source") != "file":
             return True  # Keychain: Claude Code's item, refreshed in memory only
         try:
@@ -477,6 +523,7 @@ class SoleonMcpClient:
         token = self._resolve_token()
         attempt = 0
         reloaded = False
+        auth_retried = False
         while True:
             rpc_id = self._next_id
             self._next_id += 1
@@ -508,7 +555,20 @@ class SoleonMcpClient:
                 raise TransportError("Soleon MCP HTTP {} on tools/call {}".format(code, name))
             except urllib.error.URLError as exc:
                 raise TransportError("Soleon MCP unreachable: {}".format(getattr(exc, "reason", exc)))
-            return unwrap_tool_result(rpc)
+            try:
+                return unwrap_tool_result(rpc)
+            except ToolError as exc:
+                # A tool that re-verifies the bearer itself (the admin forwards)
+                # reports an expired token as a tool error with stage "auth",
+                # not as HTTP 401 (2026-11-18: a knowledge-base loop died on
+                # "cognito: Signature has expired" after two hours).
+                if auth_retried or not _is_auth_failure(exc):
+                    raise
+                auth_retried = True
+                if self._reload_from_store() or self._try_refresh():
+                    token = self._token or token
+                    continue
+                raise
 
 
 # ---------------------------------------------------------------------------
