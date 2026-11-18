@@ -35,7 +35,8 @@ def _flags(cmd):
 
 def test_a_text_call_is_one_tool_less_settings_less_claude_call_on_the_agents_model():
     cmd = lm.command("claude", "opus", TEXT)
-    assert cmd[:3] == ["claude", "-p", "Say OK."]
+    assert cmd[:2] == ["claude", "-p"] and "Say OK." not in cmd  # the prompt rides stdin
+    assert lm.prompt_of(TEXT) == "Say OK."
     flags = _flags(cmd)
     assert flags["--model"] == "opus" and flags["--system-prompt"] == "Be brief."
     assert flags["--tools"] == "" and flags["--setting-sources"] == ""
@@ -52,7 +53,7 @@ def test_a_repaired_call_carries_the_whole_conversation():
     body = {**TEXT, "messages": TEXT["messages"] + [
         {"role": "assistant", "content": "{\"sentiment\": \"Meh\"}"},
         {"role": "user", "content": "Meh is not allowed."}]}
-    prompt = lm.command("claude", "opus", body)[2]
+    prompt = lm.prompt_of(body)
     assert "[user]\nSay OK." in prompt and "[assistant]" in prompt and prompt.endswith("Reply to the last user message.")
 
 

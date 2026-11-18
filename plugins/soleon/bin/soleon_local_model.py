@@ -119,13 +119,22 @@ def _schema(body: Dict[str, Any]) -> "tuple[Optional[dict], str, str]":
     return None, "text", ""
 
 
+def prompt_of(body: Dict[str, Any]) -> str:
+    """The prompt of one call, sent on STDIN: a distill prompt runs to tens
+    of thousands of characters, and Windows caps a whole command line at
+    32,767 (2026-11-17: "[WinError 206] The filename or extension is too
+    long" failed the first local knowledge-base build)."""
+    return _prompt(body.get("messages") or [])[1]
+
+
 def command(binary: str, model: str, body: Dict[str, Any]) -> List[str]:
-    system, prompt = _prompt(body.get("messages") or [])
+    """The `claude -p` command line for one call; its prompt goes on stdin (`prompt_of`)."""
+    system, _prompt_text = _prompt(body.get("messages") or [])
     schema, form, _name = _schema(body)
     if form == "choose":
         brief = _tools_brief(_offered(body), body.get("tool_choice") == "auto")
         system = "{}\n\n{}".format(system, brief) if system else brief
-    cmd = [binary, "-p", prompt,
+    cmd = [binary, "-p",
            "--model", model,
            "--system-prompt", system or DEFAULT_SYSTEM,
            "--setting-sources", "",
@@ -205,8 +214,8 @@ class LocalModelAnswerer:
         try:
             # An empty working directory: no project CLAUDE.md reaches the call.
             with tempfile.TemporaryDirectory(prefix="soleon-local-model-") as cwd:
-                done = self._run(command(self.binary, self.model, body), capture_output=True,
-                                 timeout=self.timeout_s, cwd=cwd, **UTF8)
+                done = self._run(command(self.binary, self.model, body), input=prompt_of(body),
+                                 capture_output=True, timeout=self.timeout_s, cwd=cwd, **UTF8)
         except subprocess.TimeoutExpired:
             return {"request_id": request_id,
                     "error": "the local model did not answer within {} s".format(self.timeout_s)}
