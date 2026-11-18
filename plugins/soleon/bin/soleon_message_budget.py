@@ -54,6 +54,9 @@ DEFAULT_LIMIT = 500_000
 WIND_DOWN_FRACTION = 0.85
 LEDGER_NAME = ".local-budget.json"
 TURN_FILE_NAME = ".local-turn.json"
+#: soleon_agent_tools_mcp.EXTRACTION_FILE — present while the agent runs a
+#: knowledge-base extraction job (`soleon_kb_local_ingest.py prepare-extractor`).
+EXTRACTION_FILE = ".local-extraction.json"
 
 
 # ---------------------------------------------------------------------------
@@ -335,6 +338,12 @@ def agent_pretool(hook: Dict[str, Any]) -> int:
     if found is None:
         return 0
     agent_dir, is_subagent = found
+    if (agent_dir / EXTRACTION_FILE).exists():
+        # A knowledge-base extraction job is not a chat message: on Soleon it
+        # runs on the job's own budget, never the Per Message Token Budget,
+        # and locally it has none (build-knowledge-base Step 4). Refusing
+        # here would block emit_document and save nothing.
+        return 0
     budget = budget_of(agent_dir)
     if budget <= 0:
         return 0
