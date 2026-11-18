@@ -431,3 +431,21 @@ def test_a_worker_server_told_its_turn_never_mints_its_own(tmp_path):
     path.write_text(json.dumps({"turn": "hook-turn", "agentId": "a1", "startedAt": 0}))
     assert shim.TurnTracker(str(path), fixed="t1").current() == "t1"
     assert json.loads(path.read_text())["turn"] == "hook-turn"     # the agent's file is not overwritten
+
+
+def test_an_extraction_job_is_not_held_to_the_message_budget(tmp_path, capsys):
+    """2026-11-18: a knowledge-base extraction job runs on the job's budget on
+    Soleon and on none locally; the chat message budget refusing past 85% would
+    block emit_document and the job would save nothing."""
+    agent_dir = _pulled(tmp_path, budget=100000)
+    _agent_spend(tmp_path, 90000)
+    (agent_dir / mb.EXTRACTION_FILE).write_text(json.dumps({"callId": "lc_x", "jobId": "ext_y"}))
+    assert _run_agent_hook(_hook(tmp_path), capsys) == (0, "")
+    (agent_dir / mb.EXTRACTION_FILE).unlink()
+    rc, out = _run_agent_hook(_hook(tmp_path), capsys)
+    assert json.loads(out)["hookSpecificOutput"]["permissionDecision"] == "deny"
+
+
+def test_the_extraction_file_name_matches_the_tools_server():
+    import soleon_agent_tools_mcp as shim
+    assert mb.EXTRACTION_FILE == shim.EXTRACTION_FILE
