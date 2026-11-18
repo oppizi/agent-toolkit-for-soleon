@@ -45,8 +45,13 @@ Add each source with `add_kb_source(..., ingest=false)`: it is stored as
 - pasted text → `kind: "text"` (title + text, up to 256 KB);
 - a markdown or text file → `kind: "file"` (filename `.md`/`.txt` + content);
 - a web page → `kind: "url"`;
-- an integration → `kind: "mcp"` (connection_id, tool_allowlist, token_budget,
-  ingestion_prompt);
+- an integration → `kind: "mcp"` (connection_id = the integration id,
+  tool_allowlist, token_budget, ingestion_prompt). A shared integration
+  (Confluence) or one of the caller's OWN connections (GitHub and the other
+  sign-in-per-person integrations): a source on a personal connection reads
+  with the caller's own sign-in, so only the caller can run or change it, and
+  everyone who can read the base sees what it extracts — say so before adding
+  one. Only read-only tools reach the extractor;
 - a PDF or Word file → the person adds it in Soleon (the base's Sources tab,
   Add source, with "Ingest now" switched off); it is staged the same way;
 - S3 objects arrive through a watch, which ingests them on the platform as it
