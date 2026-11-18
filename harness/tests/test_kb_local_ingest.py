@@ -48,7 +48,7 @@ def test_several_tools_ask_for_one_named_choice():
     assert schema["properties"]["tool"]["enum"] == ["emit_distill_plan", "search_wiki", "read_page"]
     assert "emit_distill_plan: emit_distill_plan it" in flags["--system-prompt"]
     assert flags["--system-prompt"].startswith("You distill.")
-    prompt = cmd[2]
+    prompt = lm.prompt_of(LOOKUP)
     assert "(called search_wiki with {\"query\": \"fees\"}, call id t1)" in prompt
     assert "[result of tool call t1]\nfound: concepts/fees.md" in prompt
     assert prompt.endswith("Continue from the last tool result.")
@@ -86,7 +86,10 @@ class FakeClient:
 
     def call_tool(self, name, args):
         self.calls.append((name, json.loads(json.dumps(args))))
-        return self.states.pop(0) if len(self.states) > 1 else self.states[0]
+        state = self.states.pop(0) if len(self.states) > 1 else self.states[0]
+        # local_kb_ingest is a forward tool: the wire answers {status, body}
+        # (a fake that returned the bare body hid exactly that on 2026-11-17).
+        return {"status": 200, "body": state} if name == "local_kb_ingest" else state
 
 
 def _state(*, requests=(), sources=(), jobs=(), done=False):
@@ -175,3 +178,21 @@ def test_the_extraction_file_adds_the_job_to_every_call(tmp_path):
     assert shim.extraction_args(str(path)) == {"extraction_job_id": JOB, "extraction_call_id": CALL}
     path.write_text("not json")
     assert shim.extraction_args(str(path)) == {}
+
+
+def test_a_long_prompt_rides_stdin_never_the_command_line():
+    """Windows caps a command line at 32,767 characters; a distill prompt is
+    tens of thousands (2026-11-17, WinError 206)."""
+    seen = []
+    big = {"messages": [{"role": "user", "content": "x" * 60_000}]}
+
+    def run(cmd, **kwargs):
+        seen.append((cmd, kwargs))
+        return SimpleNamespace(returncode=0, stdout=json.dumps({"result": "ok", "usage": {}}), stderr="")
+
+    answerer = lm.LocalModelAnswerer("sonnet", lambda: "claude", run=run)
+    (answer,) = answerer.answer([{"request_id": "r1", "body": big}])
+    assert answer["completion"]["choices"][0]["message"]["content"] == "ok"
+    cmd, kwargs = seen[0]
+    assert sum(len(a) for a in cmd) < 2_000
+    assert kwargs["input"] == "x" * 60_000

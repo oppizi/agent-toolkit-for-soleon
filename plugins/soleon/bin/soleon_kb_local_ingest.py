@@ -65,6 +65,15 @@ def _checked(envelope: Any, what: str) -> Dict[str, Any]:
     return envelope
 
 
+def _body(envelope: Any, what: str) -> Dict[str, Any]:
+    """A forward tool's answer, `{status, body}`: the body of a 2xx, else an error."""
+    envelope = _checked(envelope, what)
+    status = envelope.get("status")
+    if not isinstance(status, int) or not 200 <= status < 300 or not isinstance(envelope.get("body"), dict):
+        raise SoleonClientError("{}: {}".format(what, json.dumps(envelope, default=str)[:600]))
+    return envelope["body"]
+
+
 class LocalIngestRun:
     """One run: poll, answer, report. ``answer`` is the local model."""
 
@@ -76,7 +85,7 @@ class LocalIngestRun:
         self._announced_jobs: set = set()
 
     def poll(self, **extra) -> Dict[str, Any]:
-        return _checked(self.client.call_tool("local_kb_ingest", {
+        return _body(self.client.call_tool("local_kb_ingest", {
             "kb_id": self.kb_id, "call_id": self.call_id, **extra}), "local_kb_ingest")
 
     def report(self, state: Dict[str, Any]) -> None:
@@ -222,7 +231,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             path = release_extractor(client, Path(args.project).resolve())
             _out("kb-extractor at {} runs its own tools again".format(path))
             return 0
-        state = _checked(client.call_tool("local_kb_ingest", {
+        state = _body(client.call_tool("local_kb_ingest", {
             "kb_id": args.kb, "call_id": args.call, "finish_job_id": args.job}), "local_kb_ingest")
         _out("job {} handed back; {} source(s) in the run".format(args.job, len(state.get("sources") or [])))
         return 0
