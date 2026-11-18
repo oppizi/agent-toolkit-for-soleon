@@ -1,0 +1,235 @@
+#!/usr/bin/env python3
+"""Drive a LOCAL knowledge-base ingestion from this machine.
+
+Soleon runs the ingestion — convert, pages, links, facts, versions, embeddings
+— and hands every model call that decides a source's pages to the caller
+(agent-infra `knowledge_ingestor/local_model.py`; owner decision 2026-11-17:
+local testing never calls Bedrock for the agent's reasoning). Start the run
+with `ingest_kb_sources(local=true)`, then:
+
+  run                 Poll `local_kb_ingest`, answer each waiting model call
+                      with headless Claude Code (`soleon_local_model.py`), and
+                      report progress until every source is done. An mcp
+                      source's extraction job is announced on a line starting
+                      `EXTRACTION_JOB_WAITING`; the skill runs the pulled
+                      kb-extractor for it and finishes it (`finish`).
+  prepare-extractor   Point the pulled kb-extractor at one job: its tools are
+                      re-listed under the job (the integration's tools and
+                      emit_document) and `.local-extraction.json` makes every
+                      call it makes run under the job.
+  release-extractor   Undo `prepare-extractor` (the agent's own tools again).
+  finish              Hand a job back once the kb-extractor has emitted its
+                      documents; Soleon turns them into sources and ingests
+                      them, locally too.
+
+Stdlib only, Python 3.9-compatible, like every script the plugin ships.
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import subprocess
+import sys
+import time
+from pathlib import Path
+from typing import Any, Callable, Dict, List, Optional
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from soleon_local_model import LocalModelAnswerer  # noqa: E402
+from soleon_mcp_client import (  # noqa: E402
+    DEFAULT_SERVER_URL,
+    SoleonClientError,
+    SoleonMcpClient,
+    await_control,
+    describe_error,
+    is_platform_error,
+)
+
+#: The file the agent-tools server and the turn hooks read (soleon_agent_tools_mcp.EXTRACTION_FILE).
+EXTRACTION_FILE = ".local-extraction.json"
+KB_EXTRACTOR = "kb-extractor"
+#: Answers sent per call: each completion can be large, and the wire has a size cap.
+ANSWERS_PER_CALL = 4
+POLL_INTERVAL_S = 3.0
+
+
+def _out(line: str) -> None:
+    print(line, flush=True)
+
+
+def _checked(envelope: Any, what: str) -> Dict[str, Any]:
+    if not isinstance(envelope, dict) or is_platform_error(envelope):
+        raise SoleonClientError("{}: {}".format(
+            what, describe_error(envelope) if isinstance(envelope, dict) else envelope))
+    return envelope
+
+
+class LocalIngestRun:
+    """One run: poll, answer, report. ``answer`` is the local model."""
+
+    def __init__(self, client, kb_id: str, call_id: str, answer: Callable[[List[Dict[str, Any]]], List[Dict[str, Any]]],
+                 *, interval_s: float = POLL_INTERVAL_S, sleep=time.sleep, out=_out):
+        self.client, self.kb_id, self.call_id = client, kb_id, call_id
+        self.answer, self.interval_s, self.sleep, self.out = answer, interval_s, sleep, out
+        self._seen_status: Dict[str, Any] = {}
+        self._announced_jobs: set = set()
+
+    def poll(self, **extra) -> Dict[str, Any]:
+        return _checked(self.client.call_tool("local_kb_ingest", {
+            "kb_id": self.kb_id, "call_id": self.call_id, **extra}), "local_kb_ingest")
+
+    def report(self, state: Dict[str, Any]) -> None:
+        for source in state.get("sources") or []:
+            key = source.get("sourceId")
+            status = (source.get("status"), source.get("failureCode"))
+            if self._seen_status.get(key) != status:
+                self._seen_status[key] = status
+                detail = ""
+                if source.get("status") == "failed":
+                    detail = " — {}: {}".format(source.get("failureCode") or "failed",
+                                                source.get("failureMessage") or "")
+                elif source.get("pagesContributed") is not None:
+                    detail = " ({} pages)".format(source["pagesContributed"])
+                self.out("SOURCE {} {} {}{}".format(key, source.get("status"), source.get("title") or "", detail))
+        for job in state.get("extraction_jobs") or []:
+            if job.get("status") == "waiting" and job.get("job_id") not in self._announced_jobs:
+                self._announced_jobs.add(job.get("job_id"))
+                self.out("EXTRACTION_JOB_WAITING job={} source={} integration={}".format(
+                    job.get("job_id"), job.get("source_id"), job.get("integration_id")))
+
+    def step(self) -> Dict[str, Any]:
+        """One poll; answers what is waiting. Returns the latest state."""
+        state = self.poll()
+        self.report(state)
+        requests = state.get("model_requests") or []
+        if requests:
+            self.out("answering {} model call(s) locally".format(len(requests)))
+            answers = self.answer(requests)
+            for i in range(0, len(answers), ANSWERS_PER_CALL):
+                state = self.poll(answers=answers[i:i + ANSWERS_PER_CALL])
+            failed = [a for a in answers if a.get("error")]
+            for a in failed:
+                self.out("model call {} failed locally: {}".format(a.get("request_id"), a["error"]))
+            self.report(state)
+        return state
+
+    def run(self) -> int:
+        while True:
+            state = self.step()
+            if state.get("done"):
+                failed = [s for s in state.get("sources") or [] if s.get("status") == "failed"]
+                self.out("DONE {} source(s), {} failed".format(len(state.get("sources") or []), len(failed)))
+                return 1 if failed else 0
+            if not state.get("model_requests"):
+                self.sleep(self.interval_s)
+
+
+def _agent_dir(project: Path) -> Path:
+    return project / ".soleon" / "agents" / KB_EXTRACTOR
+
+
+def _plugin_root() -> Path:
+    return Path(os.environ.get("CLAUDE_PLUGIN_ROOT") or Path(__file__).resolve().parents[1])
+
+
+def _materialize(agent_dir: Path, runner=subprocess.run) -> None:
+    """Re-write the kb-extractor's subagent file from the saved tools.json,
+    the way the refresh hook does (soleon_pull_refresh._materialize)."""
+    pull = json.loads((agent_dir / "pull.json").read_text(encoding="utf-8"))
+    root = _plugin_root()
+    cmd = [sys.executable, str(root / "skills" / "pull-agent" / "assets" / "pull_agent.py"), "materialize",
+           "--slug", KB_EXTRACTOR, "--dir", str(agent_dir),
+           "--server-url", str(pull.get("serverUrl") or DEFAULT_SERVER_URL),
+           "--model", str(pull.get("model") or "sonnet"), "--plugin-root", str(root), "--keep-workspace"]
+    proc = runner(cmd, capture_output=True, text=True, timeout=120, encoding="utf-8", errors="replace")
+    if proc.returncode != 0:
+        raise SoleonClientError("materialize failed: {}".format((proc.stderr or proc.stdout or "").strip()[-800:]))
+
+
+def _list_tools(client, extraction: Optional[Dict[str, str]]) -> Dict[str, Any]:
+    args: Dict[str, Any] = {"slug": KB_EXTRACTOR, "app_env": "dev"}
+    if extraction:
+        args.update(extraction_job_id=extraction["jobId"], extraction_call_id=extraction["callId"])
+    envelope = _checked(client.call_tool("list_agent_tools", args), "list_agent_tools")
+    envelope = await_control(client, KB_EXTRACTOR, envelope, app_env="dev")
+    if not isinstance(envelope, dict) or envelope.get("state") != "done":
+        raise SoleonClientError("list_agent_tools: {}".format(
+            describe_error(envelope) if isinstance(envelope, dict) else envelope))
+    return envelope
+
+
+def prepare_extractor(client, project: Path, call_id: str, job_id: str, runner=subprocess.run) -> Path:
+    agent_dir = _agent_dir(project)
+    if not (agent_dir / "pull.json").is_file():
+        raise SoleonClientError("kb-extractor is not pulled into this project: run the pull-agent "
+                                "skill for kb-extractor first")
+    extraction = {"callId": call_id, "jobId": job_id}
+    tools = _list_tools(client, extraction)
+    (agent_dir / "tools.json").write_text(json.dumps(tools, indent=2), encoding="utf-8")
+    (agent_dir / EXTRACTION_FILE).write_text(json.dumps(extraction), encoding="utf-8")
+    _materialize(agent_dir, runner)
+    return agent_dir
+
+
+def release_extractor(client, project: Path, runner=subprocess.run) -> Path:
+    agent_dir = _agent_dir(project)
+    try:
+        (agent_dir / EXTRACTION_FILE).unlink()
+    except FileNotFoundError:
+        pass
+    tools = _list_tools(client, None)
+    (agent_dir / "tools.json").write_text(json.dumps(tools, indent=2), encoding="utf-8")
+    _materialize(agent_dir, runner)
+    return agent_dir
+
+
+def _binary() -> Optional[str]:
+    from soleon_agent_tools_mcp import claude_binary
+    return claude_binary()
+
+
+def main(argv: Optional[List[str]] = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
+    parser.add_argument("--server-url", default=DEFAULT_SERVER_URL)
+    sub = parser.add_subparsers(dest="cmd", required=True)
+    run = sub.add_parser("run")
+    run.add_argument("--kb", required=True)
+    run.add_argument("--call", required=True)
+    run.add_argument("--model", default="sonnet", help="the local model that answers (a claude --model value)")
+    run.add_argument("--interval", type=float, default=POLL_INTERVAL_S)
+    prep = sub.add_parser("prepare-extractor")
+    prep.add_argument("--call", required=True)
+    prep.add_argument("--job", required=True)
+    prep.add_argument("--project", default=".")
+    rel = sub.add_parser("release-extractor")
+    rel.add_argument("--project", default=".")
+    fin = sub.add_parser("finish")
+    fin.add_argument("--kb", required=True)
+    fin.add_argument("--call", required=True)
+    fin.add_argument("--job", required=True)
+    args = parser.parse_args(argv)
+    client = SoleonMcpClient(args.server_url)
+    try:
+        if args.cmd == "run":
+            answerer = LocalModelAnswerer(args.model, _binary, log=lambda m: print(m, file=sys.stderr))
+            return LocalIngestRun(client, args.kb, args.call, answerer.answer, interval_s=args.interval).run()
+        if args.cmd == "prepare-extractor":
+            path = prepare_extractor(client, Path(args.project).resolve(), args.call, args.job)
+            _out("kb-extractor at {} now runs under job {}".format(path, args.job))
+            return 0
+        if args.cmd == "release-extractor":
+            path = release_extractor(client, Path(args.project).resolve())
+            _out("kb-extractor at {} runs its own tools again".format(path))
+            return 0
+        state = _checked(client.call_tool("local_kb_ingest", {
+            "kb_id": args.kb, "call_id": args.call, "finish_job_id": args.job}), "local_kb_ingest")
+        _out("job {} handed back; {} source(s) in the run".format(args.job, len(state.get("sources") or [])))
+        return 0
+    except SoleonClientError as exc:
+        print("soleon: {}".format(exc), file=sys.stderr)
+        return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main())

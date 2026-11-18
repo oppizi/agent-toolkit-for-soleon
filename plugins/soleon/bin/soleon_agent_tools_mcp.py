@@ -965,6 +965,31 @@ class LocalSpawnWorker(LocalWorkerRunner):
 #: Written by /run-local-eval next to tools.json for the length of one eval case.
 EVAL_REPLAY_FILE = ".eval-replay.json"
 
+#: Written by `soleon_kb_local_ingest.py prepare-extractor` next to tools.json:
+#: while it exists every platform call this agent makes runs under that LOCAL
+#: knowledge-base extraction job (its session, its integration, emit_document).
+EXTRACTION_FILE = ".local-extraction.json"
+
+
+def extraction_job_of(path: Optional[str]) -> Optional[Dict[str, str]]:
+    """`{callId, jobId}` from the extraction file, or None when there is none."""
+    if not path:
+        return None
+    try:
+        with open(path, encoding="utf-8") as fh:
+            data = json.load(fh)
+    except (OSError, ValueError):
+        return None
+    if isinstance(data, dict) and isinstance(data.get("callId"), str) and isinstance(data.get("jobId"), str):
+        return {"callId": data["callId"], "jobId": data["jobId"]}
+    return None
+
+
+def extraction_args(path: Optional[str]) -> Dict[str, str]:
+    """The `extraction_job_id` / `extraction_call_id` tool arguments, or none."""
+    job = extraction_job_of(path)
+    return {"extraction_job_id": job["jobId"], "extraction_call_id": job["callId"]} if job else {}
+
 
 def load_eval_replay(path: Optional[str], now: Optional[float] = None) -> Optional[Dict[str, Any]]:
     """The replay file /run-local-eval wrote, or None. A file past its ``expiresAt`` (epoch seconds) is
@@ -1089,8 +1114,12 @@ class AgentToolsServer:
                  read_only_views: Optional[Dict[str, str]] = None,
                  replay_path: Optional[str] = None,
                  local_model: Optional["LocalModelAnswerer"] = None,
-                 stale_note: Optional[str] = None):
+                 stale_note: Optional[str] = None,
+                 extraction_path: Optional[str] = None):
         self.slug = slug
+        #: The extraction file (EXTRACTION_FILE): read on every call, so a job
+        #: set or released while this server runs applies to its next call.
+        self.extraction_path = extraction_path
         #: Set when this server was started from a definition a newer pull replaced: every call refuses.
         self.stale_note = stale_note
         #: Answers the model calls a code run of one of this server's calls is
@@ -1227,6 +1256,7 @@ class AgentToolsServer:
                 "name": platform_name, "args": args, "approved": approved,
                 "conversation": self.conversation.current(),
                 "turn": self.turn.current(),
+                **extraction_args(self.extraction_path),
             })
             envelope = await_control(
                 self.client, self.slug, envelope, app_env=self.app_env,
@@ -1456,7 +1486,8 @@ def main(argv: Optional[List[str]] = None) -> int:
                               spawn_worker=spawner,
                               read_only_views=WORKER_READ_ONLY_VIEWS if args.worker else None,
                               replay_path=os.path.join(agent_dir, EVAL_REPLAY_FILE),
-                              local_model=local_model, stale_note=stale_note)
+                              local_model=local_model, stale_note=stale_note,
+                              extraction_path=os.path.join(agent_dir, EXTRACTION_FILE))
     _log("serving {} external tool(s) for {} via {}".format(len(server.published), args.slug, client.server_url))
     serve(server)
     return 0
