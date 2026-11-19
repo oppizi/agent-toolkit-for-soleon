@@ -467,6 +467,30 @@ UTF8_PIPES = {"encoding": "utf-8", "errors": "replace"}
 HELPER_MCP_OUTPUT_TOKENS = 100_000
 
 
+#: A system prompt longer than this goes to the CLI in a file. Windows refuses a
+#: command line over 32,767 characters ("[WinError 206] The filename or
+#: extension is too long"), and one helper's prompt alone can pass that: the
+#: code helper's is about 90,000, so every local code run failed on Windows
+#: (oppizi-data, 2026-11-19).
+SYSTEM_PROMPT_ARG_MAX = 8_000
+
+
+def system_prompt_as_file(cmd: List[str]) -> Tuple[List[str], Optional[str]]:
+    """`(cmd, path)`: `cmd` with a long `--system-prompt` text moved into a
+    temporary file the CLI reads (`--system-prompt-file`), and that file's
+    path for the caller to delete; `(cmd, None)` when the prompt is short."""
+    if "--system-prompt" not in cmd:
+        return cmd, None
+    at = cmd.index("--system-prompt")
+    if at + 1 >= len(cmd) or len(cmd[at + 1]) <= SYSTEM_PROMPT_ARG_MAX:
+        return cmd, None
+    import tempfile
+    fd, path = tempfile.mkstemp(prefix="soleon-helper-prompt-", suffix=".txt")
+    with os.fdopen(fd, "w", encoding="utf-8") as handle:
+        handle.write(cmd[at + 1])
+    return cmd[:at] + ["--system-prompt-file", path] + cmd[at + 2:], path
+
+
 def _helper_env() -> Dict[str, str]:
     """The helper's environment: ours, with the MCP result cap raised to fit a platform result
     (never lowered when the person set a larger one)."""
@@ -598,15 +622,22 @@ class LocalWorkerRunner:
             # The tool name leads the id, so the ledger says which helper spent what.
             run_id = "{}-{}".format(name or "helper", __import__("uuid").uuid4().hex[:12])
             budget_run = (self._budget_message(turn, run_id), run_id)
-        cmd = build(budget_run)
-        if budget_run:
-            proc = self._stream(cmd, *budget_run)
-        else:
-            try:
-                proc = self._run(cmd, capture_output=True, text=True, timeout=self.timeout_s,
-                                 stdin=subprocess.DEVNULL, env=_helper_env(), **UTF8_PIPES)
-            except subprocess.TimeoutExpired:
-                proc = None
+        cmd, prompt_file = system_prompt_as_file(build(budget_run))
+        try:
+            if budget_run:
+                proc = self._stream(cmd, *budget_run)
+            else:
+                try:
+                    proc = self._run(cmd, capture_output=True, text=True, timeout=self.timeout_s,
+                                     stdin=subprocess.DEVNULL, env=_helper_env(), **UTF8_PIPES)
+                except subprocess.TimeoutExpired:
+                    proc = None
+        finally:
+            if prompt_file:
+                try:
+                    os.remove(prompt_file)
+                except OSError:
+                    _log("could not delete the helper prompt file {}".format(prompt_file))
         if proc is None:
             return _text_result("{}'s local helper was still running after {} s and was stopped; carry on "
                                 "without its answer.".format(name, int(self.timeout_s)), True)
