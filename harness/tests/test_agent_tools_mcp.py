@@ -583,6 +583,34 @@ def test_the_worker_is_isolated_and_holds_only_the_integrations_tools(tmp_path):
     assert "--pre-approved" not in args
 
 
+def test_a_long_worker_prompt_reaches_the_cli_in_a_file(tmp_path):
+    """Windows refuses a command line over 32,767 characters ("[WinError 206]
+    The filename or extension is too long"). The code helper's prompt is about
+    90,000, so every local code run of an agent failed there (oppizi-data,
+    2026-11-19). A long prompt goes in a file the CLI reads; a short one stays
+    on the command line."""
+    seen = {}
+
+    def fake_run(cmd, **opts):
+        flags = dict(zip(cmd, cmd[1:]))
+        seen["cmd"], seen["path"] = cmd, flags["--system-prompt-file"]
+        seen["text"] = Path(seen["path"]).read_text(encoding="utf-8")
+        return _Proc(json.dumps({"type": "result", "subtype": "success", "is_error": False, "result": "done"}))
+    (tmp_path / "config.json").write_text(json.dumps({"loop": {"tokenBudgetEnabled": False}}))
+    runner = shim.LocalWorkerRunner(slug=SLUG, tools_path=str(tmp_path / "tools.json"),
+                                    server_url="https://mcp-dev.oppizi.com/mcp", model="sonnet",
+                                    binary="/opt/claude", runner=fake_run)
+    prompt = "You run code. " + "A rule of the sandbox. " * 4000          # ~92,000 characters
+    long_wrapper = dict(WRAPPER, localWorker=dict(WRAPPER["localWorker"], prompt=prompt))
+    out = _server(tmp_path, runner, tools=[long_wrapper] + MEMBERS).call("mcp_gmail_read", {"prompt": "build the file"})
+    assert out["content"][0]["text"] == "done"
+    assert "--system-prompt" not in seen["cmd"] and seen["text"] == prompt + shim.HELPER_PAGING_NOTE
+    assert sum(len(part) + 1 for part in seen["cmd"]) < 32_767
+    assert not os.path.exists(seen["path"])                              # deleted once the run ends
+    short = ["/opt/claude", "-p", "x", "--system-prompt", "You read Gmail."]
+    assert shim.system_prompt_as_file(short) == (short, None)
+
+
 def test_a_worker_can_never_start_another_worker(tmp_path):
     """Its server is `--only` the integration's tools — never a wrapper — so the
     CLI builds it without a runner."""
