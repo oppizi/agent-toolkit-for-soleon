@@ -229,6 +229,14 @@ From the script's JSON summary tell the user, in plain words:
    set to "Draft Agents", the agent selected and the last 24 h. Say why:
    local runs use the agent's draft session, so they file under "Draft
    Agents", and the Traces tab's default filter ("Live Agents") hides them.
+   **Progress messages and files:** when the agent's Progress messages
+   setting is on, a local run shows them in the terminal (`Progress message
+   from <agent>: …`), decided and written by the platform exactly as for a
+   live turn, one step after the step they report. Every file the agent hands
+   over (`attach_file`, a deck, a sheet, a screenshot) is saved under
+   `$DIR/delivered/` and its path is printed — with a progress message when
+   the decision picks the file, and always when the run ends. Tell the user
+   where the files are; never say a local run cannot deliver files.
    If `tracesUrl` is null (older server), tell the user to set the Activity
    dropdown to "Draft Agents" or "All" themselves.
 6. **Why the subagent lives in `~/.claude/agents/` (user scope), and when a

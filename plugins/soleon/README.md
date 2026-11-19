@@ -197,6 +197,28 @@ Use this, not the platform's `run_eval`, while you tune a pulled agent: a
 platform eval starts a full agent session per case, and the Cost tab charges
 each case its share of the runtime on top of its tokens.
 
+**Progress messages and files work locally.** When the agent's Progress
+messages setting (Loop tab) is On demand, Key milestones or Verbose, a local
+run sends them the way a live turn does (`bin/soleon_progress.py`, a
+PostToolUse hook): after each tool call the platform is asked whether the
+person should be told something now — the agent's decision model decides and
+the agent's own model writes the message (`check_agent_progress`) — and a
+message is shown in the terminal as `Progress message from <agent>: …`. The
+agent is told what was sent, so its answer does not repeat it. The check is
+never waited for, so a message appears one step after the step it reports.
+Each check and message is recorded under the turn in Traces and charged to
+the agent, as on Soleon.
+
+A file the agent hands over is really delivered: it is saved under
+`.soleon/agents/<slug>/delivered/` and its path is printed. A file goes with a
+progress message only when the decision picks it (the message is about that
+file, or an instruction says to send it), and **every** handed-over file is
+saved when the run ends, as the final answer carries them on Soleon — in its
+newest version, with the Progress messages setting on or off. `attach_file` on
+a file the agent wrote in its local workspace is handled on your machine (the
+platform's copy of the workspace does not have it); a file a platform tool made
+(a deck, a sheet, a screenshot) is downloaded.
+
 **What is NOT emulated** (platform-only, listed read-only in `config.json` and
 in the pull summary): channels, the daily token budgets, schedules, guardrails,
 online-eval sampling. The **Per Message Token Budget is enforced** the way Soleon

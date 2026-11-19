@@ -85,6 +85,13 @@ def _pulled(tmp_path: Path) -> Path:
     return agent_dir
 
 
+def _records(client) -> list:
+    """The turn records a client sent. The end of a turn that used platform
+    tools also asks for the files those tools made (`check_agent_progress`
+    with `final`, soleon_progress.py); that call is not the record."""
+    return [c for c in client.calls if c[0] == "record_agent_turn"]
+
+
 def _hook(agent_dir: Path, **extra) -> dict:
     base = {"session_id": "s1", "cwd": str(agent_dir.parents[2]), "hook_event_name": "SubagentStart",
             "agent_id": "ae6c9a15e98175395", "agent_type": SLUG}
@@ -146,7 +153,7 @@ def test_stop_records_the_turn_under_the_hooks_turn_id_and_conversation(tmp_path
     assert hooks.main(["stop"], stream=io.StringIO(json.dumps(hook)), client_factory=FakeClient) == 0
     (client,) = FakeClient.instances
     assert client.server_url == SERVER_URL  # pull.json's serverUrl
-    (name, args), = client.calls
+    (name, args), = _records(client)
     assert name == "record_agent_turn"
     assert args["slug"] == SLUG and args["app_env"] == "dev"
     assert args["turn"] == "hookturn0001" and args["conversation"] == "c" * 24  # the ids the tool calls used
@@ -164,14 +171,14 @@ def test_stop_mints_a_turn_when_no_tool_call_left_one(tmp_path):
     FakeClient.instances.clear()
     hook = _hook(agent_dir, hook_event_name="SubagentStop", agent_transcript_path=str(transcript))
     assert hooks.main(["stop"], stream=io.StringIO(json.dumps(hook)), client_factory=FakeClient) == 0
-    (name, args), = FakeClient.instances[0].calls
+    (name, args), = _records(FakeClient.instances[0])
     assert re.fullmatch(r"[0-9a-f]{12}", args["turn"]) and re.fullmatch(r"[0-9a-f]{24}", args["conversation"])
     # a stale file from an EARLIER run is not this turn's
     (agent_dir / ".local-turn.json").write_text(json.dumps(
         {"turn": "oldturn00001", "agentId": "other", "startedAt": time.time() - 3600, "source": "hook"}))
     FakeClient.instances.clear()
     assert hooks.main(["stop"], stream=io.StringIO(json.dumps(hook)), client_factory=FakeClient) == 0
-    assert FakeClient.instances[0].calls[0][1]["turn"] != "oldturn00001"
+    assert _records(FakeClient.instances[0])[0][1]["turn"] != "oldturn00001"
 
 
 def test_stop_failure_tells_the_user_and_never_blocks(tmp_path, capsys):
@@ -209,6 +216,6 @@ def test_stop_records_a_local_extraction_turn_under_its_job(tmp_path):
                  last_assistant_message="Emitted 12 documents.")
     assert hooks.main(["stop"], stream=io.StringIO(json.dumps(hook)), client_factory=FakeClient) == 0
     (client,) = FakeClient.instances
-    (_name, args), = client.calls
+    (_name, args), = _records(client)
     assert args["extraction_job_id"] == "ext_" + "2" * 32 + "_"
     assert args["extraction_call_id"] == "lc_" + "1" * 24

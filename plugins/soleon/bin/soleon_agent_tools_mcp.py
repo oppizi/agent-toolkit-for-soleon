@@ -1115,8 +1115,12 @@ class AgentToolsServer:
                  replay_path: Optional[str] = None,
                  local_model: Optional["LocalModelAnswerer"] = None,
                  stale_note: Optional[str] = None,
-                 extraction_path: Optional[str] = None):
+                 extraction_path: Optional[str] = None,
+                 agent_dir: Optional[str] = None):
         self.slug = slug
+        #: The pulled agent's directory: where a file the agent hands over
+        #: from its LOCAL workspace is kept for delivery (soleon_progress.py).
+        self.agent_dir = agent_dir
         #: The extraction file (EXTRACTION_FILE): read on every call, so a job
         #: set or released while this server runs applies to its next call.
         self.extraction_path = extraction_path
@@ -1230,6 +1234,20 @@ class AgentToolsServer:
             return self.delegate_runner.run_delegate(name, str(args.get("task") or ""), turn=self.turn.current())
         approved = bool(args.pop("approved", False)) or self.pre_approved
         platform_name = self._platform_name.get(name, name)
+        if platform_name == "attach_file" and self.agent_dir:
+            # The platform's attach_file reads the PLATFORM copy of the
+            # workspace, which does not hold a file this agent wrote locally:
+            # a local file is handed over here. Anything else (a file a
+            # platform tool made) goes to the platform as before.
+            entry = self._by_name.get(platform_name) or {}
+            if entry.get("approval") and not approved:
+                return self.render(name, {"state": "error", "error": "approval_required"})
+            import soleon_progress
+            handled, text = soleon_progress.stage_local_file(
+                Path(self.agent_dir), self.turn.current(), str(args.get("path") or ""), args.get("filename"))
+            if handled:
+                _log("attach_file {} handled locally".format(args.get("path")))
+                return _text_result(text, text.startswith("Error"))
         replay = load_eval_replay(self.replay_path)
         if replay is not None:
             decl = find_declared_response(replay.get("toolResponses"), (name, platform_name), args)
@@ -1487,7 +1505,8 @@ def main(argv: Optional[List[str]] = None) -> int:
                               read_only_views=WORKER_READ_ONLY_VIEWS if args.worker else None,
                               replay_path=os.path.join(agent_dir, EVAL_REPLAY_FILE),
                               local_model=local_model, stale_note=stale_note,
-                              extraction_path=os.path.join(agent_dir, EXTRACTION_FILE))
+                              extraction_path=os.path.join(agent_dir, EXTRACTION_FILE),
+                              agent_dir=agent_dir)
     _log("serving {} external tool(s) for {} via {}".format(len(server.published), args.slug, client.server_url))
     serve(server)
     return 0
