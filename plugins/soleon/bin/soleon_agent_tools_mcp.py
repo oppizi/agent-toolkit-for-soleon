@@ -43,6 +43,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+import soleon_background  # noqa: E402
 import soleon_message_budget as message_budget  # noqa: E402
 from soleon_local_model import LocalModelAnswerer  # noqa: E402
 from soleon_mcp_client import (  # noqa: E402
@@ -57,7 +58,7 @@ from soleon_mcp_client import (  # noqa: E402
 )
 
 PROTOCOL_VERSION = "2025-03-26"
-SERVER_INFO = {"name": "soleon-agent-tools", "version": "0.4.15"}
+SERVER_INFO = {"name": "soleon-agent-tools", "version": "0.4.16"}
 APPROVAL_NOTE = "Requires human approval: ask the person first, then call with approved=true."
 POLL_INTERVAL_S = 1.5
 #: A platform call still unanswered after this long dumps every thread's stack to stderr (and again each
@@ -626,6 +627,8 @@ class LocalWorkerRunner:
         try:
             if budget_run:
                 proc = self._stream(cmd, *budget_run)
+            elif soleon_background.in_call():
+                proc = self._run_stoppable(cmd)
             else:
                 try:
                     proc = self._run(cmd, capture_output=True, text=True, timeout=self.timeout_s,
@@ -643,6 +646,20 @@ class LocalWorkerRunner:
                                 "without its answer.".format(name, int(self.timeout_s)), True)
         return self._render(name, proc)
 
+    def _run_stoppable(self, cmd: List[str]) -> Any:
+        """``subprocess.run`` for a run inside a background call: the process
+        is tracked, so stopping the call ends it (soleon_background.track)."""
+        proc = self._popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                           stdin=subprocess.DEVNULL, env=_helper_env(), **UTF8_PIPES)
+        soleon_background.track(proc)
+        try:
+            out, err = proc.communicate(timeout=self.timeout_s)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.communicate()
+            return None
+        return _Finished(stdout=out or "", stderr=err or "", returncode=proc.returncode)
+
     def _stream(self, cmd: List[str], message: str, run_id: str) -> Any:
         """Run a budgeted helper, booking each model call in the message's
         ledger as it streams in. Returns a finished-process-like object whose
@@ -657,6 +674,7 @@ class LocalWorkerRunner:
         err: List[str] = []
         proc = self._popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
                            stdin=subprocess.DEVNULL, env=_helper_env(), **UTF8_PIPES)
+        soleon_background.track(proc)
         log = None
         if self.stream_log_dir:
             os.makedirs(self.stream_log_dir, exist_ok=True)
@@ -1147,7 +1165,8 @@ class AgentToolsServer:
                  local_model: Optional["LocalModelAnswerer"] = None,
                  stale_note: Optional[str] = None,
                  extraction_path: Optional[str] = None,
-                 agent_dir: Optional[str] = None):
+                 agent_dir: Optional[str] = None,
+                 background: Optional["soleon_background.BackgroundCalls"] = None):
         self.slug = slug
         #: The pulled agent's directory: where a file the agent hands over
         #: from its LOCAL workspace is kept for delivery (soleon_progress.py).
@@ -1180,6 +1199,13 @@ class AgentToolsServer:
         self._pages: Dict[str, str] = {}
         if tools and READ_RESULT_PAGE_TOOL["name"] not in taken:
             self.published.append(json.loads(json.dumps(READ_RESULT_PAGE_TOOL)))
+        #: AHP-1834 — the AGENT's own server runs helpers, workflows and
+        #: workers in the background (soleon_background.py), with the three
+        #: background tools; None on every other server.
+        self.background = background
+        if background is not None:
+            self.published += [json.loads(json.dumps(t)) for t in soleon_background.TOOLS
+                               if t["name"] not in taken]
         #: A WORKER's server: tool → the writing parameter its view drops and refuses.
         self.read_only_views = dict(read_only_views or {})
         for t in self.published:
@@ -1213,7 +1239,56 @@ class AgentToolsServer:
             return _text_result(self.stale_note, True)
         if name == READ_RESULT_PAGE_TOOL["name"] and name not in self._platform_name:
             return self._read_page(arguments or {})
-        return self._paged(name, self._call(name, arguments))
+        if self.background is None:
+            return self._paged(name, self._call(name, arguments))
+        out = self._call_with_background(name, dict(arguments or {}))
+        finished = self.background.take_finished()
+        if finished:
+            # A tool server cannot speak to the model by itself: a finished
+            # call's result rides on the agent's next tool result.
+            out = dict(out, content=list(out.get("content") or []) + self.background.delivery(finished))
+        return out
+
+    def _always_in_background(self, name: str, args: Dict[str, Any]) -> bool:
+        """Every helper call: a configured subagent or workflow, spawn_worker,
+        and an integration helper run here (unless it still needs the
+        person's approval, which the agent must get first)."""
+        if name in self.delegate_ids or (name == "spawn_worker" and self.spawn_worker is not None):
+            return True
+        entry = self._by_name.get(self._platform_name.get(name, name)) or {}
+        if self.local_workers is not None and local_worker_of(entry) is not None:
+            return not (entry.get("approval") and not (args.get("approved") or self.pre_approved))
+        return False
+
+    def _call_with_background(self, name: str, args: Dict[str, Any]) -> Dict[str, Any]:
+        bg = self.background
+        mine = name in soleon_background.TOOL_NAMES and name not in self._platform_name
+        if mine and name == soleon_background.WAIT_TOOL:
+            ids = args.get("ids")
+            timeout = args.get("timeout_s")
+            return _text_result(bg.wait([str(i) for i in ids] if isinstance(ids, list) and ids else None,
+                                        timeout if isinstance(timeout, (int, float)) else None))
+        if mine and name == soleon_background.STOP_TOOL:
+            text = bg.stop(str(args.get("id") or ""), str(args.get("mode") or ""))
+            return _text_result(text, text.startswith("Error"))
+        if set(args) == {"background_id"}:
+            return _text_result("A background call's result comes by itself with a later tool call. To wait "
+                                "for {}, call {}.".format(args["background_id"], soleon_background.WAIT_TOOL), True)
+        if mine and name == soleon_background.RUN_TOOL:
+            inner, inner_args = args.get("tool"), args.get("arguments")
+            usable = sorted(t["name"] for t in self.published if t["name"] not in soleon_background.TOOL_NAMES
+                            and t["name"] != READ_RESULT_PAGE_TOOL["name"])
+            if not isinstance(inner, str) or inner not in usable:
+                return _text_result("{!r} is not one of your tools that can run in the background. Use one of: "
+                                    "{}.".format(inner, ", ".join(usable)), True)
+            if not isinstance(inner_args, dict):
+                return _text_result("arguments must be an object holding the tool's arguments.", True)
+            name, args = inner, dict(inner_args)
+        elif not self._always_in_background(name, args):
+            return self._paged(name, self._call(name, args))
+        call = bg.start(name, lambda n=name, a=args: self._paged(n, self._call(n, a)))
+        _log("{} started in the background as {}".format(name, call.id))
+        return _text_result(bg.started_text(call))
 
     def _paged(self, name: str, out: Dict[str, Any]) -> Dict[str, Any]:
         """A text-only result longer than RESULT_PAGE_CHARS comes back as its first page, with the id and
@@ -1527,6 +1602,11 @@ def main(argv: Optional[List[str]] = None) -> int:
         if current:
             stale_note = stale_definition_note(args.slug, current)
             _log("started from a replaced definition: {} now runs from {}".format(args.slug, current))
+    # AHP-1834 — background calls on the agent's own server only: its
+    # SubagentStop hook holds the answer while a call is open. A helper's,
+    # worker's or workflow manager's server runs its calls as before.
+    own_server = args.only is None and args.turn is None and not args.worker
+    background = soleon_background.BackgroundCalls(agent_dir) if own_server else None
     server = AgentToolsServer(args.slug, tools, client, app_env=args.app_env,
                               poll_interval_s=args.poll_interval, conversation=tracker, turn=turn,
                               local_workers=workers, pre_approved=args.pre_approved,
@@ -1537,9 +1617,13 @@ def main(argv: Optional[List[str]] = None) -> int:
                               replay_path=os.path.join(agent_dir, EVAL_REPLAY_FILE),
                               local_model=local_model, stale_note=stale_note,
                               extraction_path=os.path.join(agent_dir, EXTRACTION_FILE),
-                              agent_dir=agent_dir)
+                              agent_dir=agent_dir, background=background)
     _log("serving {} external tool(s) for {} via {}".format(len(server.published), args.slug, client.server_url))
-    serve(server)
+    try:
+        serve(server)
+    finally:
+        if background is not None:
+            background.close()  # nothing outlives the server
     return 0
 
 
