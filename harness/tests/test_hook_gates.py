@@ -53,8 +53,11 @@ def _started(tmp_path: Path, command: str, payload: dict, project: Path) -> bool
 pytestmark = pytest.mark.skipif(BASH is None, reason="bash runs the plugin's hook commands")
 
 
-def test_nothing_runs_before_a_prompt():
-    assert "UserPromptSubmit" not in HOOKS
+def test_nothing_but_the_freshness_gate_runs_before_a_prompt():
+    """The one prompt hook is the freshness gate, which runs shell only on all but
+    one prompt in ten minutes (tests in test_freshness.py prove it)."""
+    assert [h["command"] for e in HOOKS["UserPromptSubmit"] for h in e["hooks"]
+            if "soleon_freshness.py" not in h["command"]] == []
 
 
 def test_the_refresh_runs_only_when_a_subagent_starts_in_a_project_with_a_pulled_agent(tmp_path):
