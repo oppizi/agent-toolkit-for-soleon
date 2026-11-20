@@ -400,6 +400,14 @@ In the VS Code extension, a conversation keeps the Claude Code build it was
 opened with. If a reconnect still shows the old tools, run **Developer:
 Reload Window** and reopen the conversation.
 
+You don't have to remember any of this: the plugin checks for you
+(`bin/soleon_freshness.py`). When a newer toolkit is published, when Soleon's
+tools change after your session connected, or when a newer Claude Code build
+is installed than the one this conversation runs, the next prompt shows one
+line naming the command to run, once per change. It never runs the command
+itself, and a prompt never waits for it: the reads happen in a background
+process at most every 10 minutes.
+
 ### Testing a tool from a terminal
 
 `bin/soleon_call.py` calls one Soleon tool with your own Claude Code sign-in,
