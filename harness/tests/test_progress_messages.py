@@ -107,16 +107,54 @@ def _done(**result):
 
 
 # ---------------------------------------------------------------------------
-# post-tool
+# post-tool: local work only; the worker does the network work
 # ---------------------------------------------------------------------------
 
-def test_a_tool_call_sends_a_check_with_what_happened_and_does_not_wait(tmp_path):
+def _job(agent_dir: Path, transcript: str, **over) -> dict:
+    job = {"turn": TURN, "conversation": "c" * 24, "slug": SLUG, "serverUrl": SERVER_URL,
+           "agentDir": str(agent_dir), "agentId": AGENT_ID, "transcript": transcript,
+           "current": progress.current_call(_hook(agent_dir, transcript))}
+    job.update(over)
+    return job
+
+
+def test_the_hook_makes_no_network_call_and_hands_the_check_to_a_worker(tmp_path):
+    """The agent's next step never waits: the hook shows what is ready and
+    starts a detached worker with what the worker needs."""
     agent_dir = _pulled(tmp_path)
-    client = FakeClient({"check_agent_progress": [PENDING]})
-    out = progress.post_tool(_hook(agent_dir, _transcript(tmp_path, RUN)), client_factory=client, now=lambda: 1000.0)
-    assert out is None                                    # nothing to show yet, and nothing was waited for
-    (name, args), = client.calls
-    assert name == "check_agent_progress" and client.server_url == SERVER_URL
+    transcript = _transcript(tmp_path, RUN)
+    spawned = []
+    out = progress.post_tool(_hook(agent_dir, transcript), spawn=spawned.append, now=lambda: 1000.0)
+    assert out is None                                    # nothing is ready yet
+    (job_path,) = spawned
+    job = json.loads(job_path.read_text())
+    assert job == {"turn": TURN, "conversation": "c" * 24, "slug": SLUG, "serverUrl": SERVER_URL,
+                   "agentDir": str(agent_dir), "agentId": AGENT_ID, "transcript": transcript,
+                   "current": {"id": "toolu_2", "kind": "tool", "name": "web_search", "args": {"query": "q"},
+                               "result": "3 results", "status": "success"}}
+
+
+def test_the_worker_sends_a_check_with_what_happened_and_leaves_the_message_to_be_shown(tmp_path):
+    agent_dir = _pulled(tmp_path)
+    (agent_dir / "workspace" / "draft.csv").write_text("a,b\n1,2\n", encoding="utf-8")
+    assert progress.stage_local_file(agent_dir, TURN, "draft.csv")[0] is True
+    downloads = []
+
+    def opener(url):
+        downloads.append(url)
+        return io.BytesIO(b"deck-bytes")
+
+    client = FakeClient({
+        "check_agent_progress": [PENDING],
+        "get_agent_tool_result": [PENDING, _done(
+            enabled=True, send=True, text="The draft is written.",
+            files=[{"name": "draft.csv", "source": "local", "id": "local_1"},
+                   {"name": "deck.pptx", "source": "platform", "marker": MARKER, "url": "https://signed/deck"}])]})
+    outcome = progress.work(_job(agent_dir, _transcript(tmp_path, RUN)), client_factory=client,
+                            now=lambda: 1000.0, sleep=lambda s: None, opener=opener)
+    assert outcome == "sent" and client.server_url == SERVER_URL
+    (name, args) = client.calls[0]
+    assert name == "check_agent_progress"
     assert args["slug"] == SLUG and args["turn"] == TURN and args["conversation"] == "c" * 24
     assert args["wait"] is False and args["app_env"] == "dev"
     assert args["prompt"] == "Build the report and send me the draft." and args["identity"] == "You are Demo."
@@ -126,34 +164,17 @@ def test_a_tool_call_sends_a_check_with_what_happened_and_does_not_wait(tmp_path
         ("tool", "web_search", "3 results"),              # the call the hook fired for, not yet in the transcript
     ]
     assert args["steps_so_far"] == 3 and args["since_last_s"] == -1 and args["sent"] == []
-    state = json.loads((agent_dir / progress.STATE_FILE).read_text())
-    assert state["pending"] == {"callId": CALL, "at": 1000.0} and "toolu_2" in state["covered"]
-
-
-def test_the_next_tool_call_shows_the_message_saves_its_files_and_tells_the_agent(tmp_path):
-    agent_dir = _pulled(tmp_path)
-    (agent_dir / "workspace" / "draft.csv").write_text("a,b\n1,2\n", encoding="utf-8")
-    handled, text = progress.stage_local_file(agent_dir, TURN, "draft.csv")
-    assert handled and text.startswith("Delivered draft.csv to the user")
-    state = progress.load_state(agent_dir, TURN)
-    state["pending"] = {"callId": CALL, "at": 990.0}
-    state["covered"] = ["say:u1", "toolu_1", "toolu_2"]
-    progress.save_state(agent_dir, state)
-    downloads = []
-
-    def opener(url):
-        downloads.append(url)
-        return io.BytesIO(b"deck-bytes")
-
-    client = FakeClient({"get_agent_tool_result": [_done(
-        enabled=True, send=True, text="The draft is written.",
-        files=[{"name": "draft.csv", "source": "local", "id": "local_1"},
-               {"name": "deck.pptx", "source": "platform", "marker": MARKER, "url": "https://signed/deck"}])]})
-    out = progress.post_tool(_hook(agent_dir, _transcript(tmp_path, RUN)), client_factory=client,
-                             now=lambda: 1000.0, opener=opener)
+    assert args["files"] == [{"id": "local_1", "name": "draft.csv"}]
+    # The message's files are saved; the message waits for the next hook.
     delivered = agent_dir / "delivered"
     assert (delivered / "draft.csv").read_text() == "a,b\n1,2\n"
     assert (delivered / "deck.pptx").read_bytes() == b"deck-bytes" and downloads == ["https://signed/deck"]
+    state = json.loads((agent_dir / progress.STATE_FILE).read_text())
+    assert state["sent"] == ["The draft is written."] and state["lastAt"] == 1000.0 and state["pending"] is None
+    assert state["sentFiles"] == ["draft.csv", MARKER] and "toolu_2" in state["covered"]
+    assert not (agent_dir / progress.LOCK_FILE).exists()
+
+    out = progress.post_tool(_hook(agent_dir, _transcript(tmp_path, RUN)), spawn=lambda path: None)
     assert out["systemMessage"].splitlines() == [
         "Progress message from Demo Agent: The draft is written.",
         "  File: {}".format(delivered / "draft.csv"),
@@ -162,38 +183,47 @@ def test_the_next_tool_call_shows_the_message_saves_its_files_and_tells_the_agen
     told = out["hookSpecificOutput"]
     assert told["hookEventName"] == "PostToolUse"
     assert "The draft is written." in told["additionalContext"] and "Do not repeat it" in told["additionalContext"]
-    assert client.calls == [("get_agent_tool_result", {"slug": SLUG, "app_env": "dev", "call_id": CALL})]
-    state = json.loads((agent_dir / progress.STATE_FILE).read_text())
-    assert state["sent"] == ["The draft is written."] and state["lastAt"] == 1000.0 and state["pending"] is None
-    assert state["sentFiles"] == ["draft.csv", MARKER]     # never offered early again
+    # Shown exactly once.
+    assert progress.post_tool(_hook(agent_dir, _transcript(tmp_path, RUN)), spawn=lambda path: None) is None
 
 
 def test_a_later_check_reports_what_was_sent_and_only_the_new_steps(tmp_path):
     agent_dir = _pulled(tmp_path)
+    (agent_dir / "workspace" / "draft.csv").write_text("x", encoding="utf-8")
+    progress.stage_local_file(agent_dir, TURN, "draft.csv")
     state = progress.load_state(agent_dir, TURN)
     state.update(covered=["say:u1", "toolu_1"], stepsSoFar=2, sent=["The draft is written."], lastAt=940.0,
-                 sentFiles=["draft.csv"], handed=[{"id": "local_1", "name": "draft.csv", "path": "x"}])
+                 sentFiles=["draft.csv"])
     progress.save_state(agent_dir, state)
     client = FakeClient({"check_agent_progress": [_done(enabled=True, send=False, files=[])]})
-    out = progress.post_tool(_hook(agent_dir, _transcript(tmp_path, RUN)), client_factory=client, now=lambda: 1000.0)
-    assert out is None
+    assert progress.work(_job(agent_dir, _transcript(tmp_path, RUN)), client_factory=client,
+                         now=lambda: 1000.0, sleep=lambda s: None) == "no"
     args = client.calls[0][1]
     assert [s["name"] for s in args["steps"]] == ["web_search"] and args["steps_so_far"] == 3
     assert args["sent"] == ["The draft is written."] and args["since_last_s"] == 60.0
     assert args["files"] == [{"id": "local_1", "name": "draft.csv"}] and args["sent_files"] == ["draft.csv"]
+    assert progress.take_ready(agent_dir) == []
 
 
-def test_a_check_still_being_decided_is_not_asked_again_and_a_fresh_one_is_not_read(tmp_path):
+def test_one_worker_at_a_time_and_an_unanswered_check_is_picked_up_before_a_new_one(tmp_path):
     agent_dir = _pulled(tmp_path)
-    state = progress.load_state(agent_dir, TURN)
-    state["pending"] = {"callId": CALL, "at": 999.5}
-    progress.save_state(agent_dir, state)
+    job = _job(agent_dir, _transcript(tmp_path, RUN))
+    # A worker is running: this one leaves the steps to that worker's next check.
+    (agent_dir / progress.LOCK_FILE).write_text("999.0")
     client = FakeClient({})
-    hook = _hook(agent_dir, _transcript(tmp_path, RUN))
-    assert progress.post_tool(hook, client_factory=client, now=lambda: 1000.0) is None and client.calls == []
-    client = FakeClient({"get_agent_tool_result": [PENDING]})
-    assert progress.post_tool(hook, client_factory=client, now=lambda: 1010.0) is None
-    assert [c[0] for c in client.calls] == ["get_agent_tool_result"]          # no second check in flight
+    assert progress.work(job, client_factory=client, now=lambda: 1000.0) == "busy" and client.calls == []
+    # A lock left by a worker that died is taken over.
+    client = FakeClient({"check_agent_progress": [_done(enabled=True, send=False, files=[])]})
+    assert progress.work(job, client_factory=client, now=lambda: 999.0 + progress.LOCK_STALE_S + 1) == "no"
+    # An earlier check never answered in time: it is read first, and no second one is sent while it is pending.
+    state = progress.load_state(agent_dir, TURN)
+    state["pending"] = {"callId": CALL, "at": 990.0}
+    state["covered"] = []
+    progress.save_state(agent_dir, state)
+    ticks = iter(range(1000, 2000, 30))
+    client = FakeClient({"get_agent_tool_result": [PENDING, PENDING, PENDING]})
+    assert progress.work(job, client_factory=client, now=lambda: float(next(ticks)), sleep=lambda s: None) == "still_pending"
+    assert {c[0] for c in client.calls} == {"get_agent_tool_result"}
 
 
 @pytest.mark.parametrize("change", ["off", "other_agent", "helper", "main_thread", "stale_turn"])
@@ -208,9 +238,9 @@ def test_nothing_runs_outside_a_pulled_agents_own_run_with_the_setting_on(tmp_pa
         hook.pop("agent_id")
     elif change == "stale_turn":
         (agent_dir / ".local-turn.json").write_text(json.dumps({"turn": TURN, "agentId": "another-run"}))
-    client = FakeClient({})
-    assert progress.post_tool(hook, client_factory=client) is None
-    assert client.calls == [] and not (agent_dir / progress.STATE_FILE).exists()
+    spawned = []
+    assert progress.post_tool(hook, spawn=spawned.append) is None
+    assert spawned == [] and not [q for q in agent_dir.iterdir() if q.name.startswith(progress.JOB_PREFIX)]
 
 
 def test_a_platform_failure_never_fails_the_agents_tool_call(tmp_path, capsys):
@@ -221,9 +251,25 @@ def test_a_platform_failure_never_fails_the_agents_tool_call(tmp_path, capsys):
         def call_tool(self, name, arguments):
             raise TransportError("unreachable")
 
-    assert progress.post_tool(_hook(agent_dir, _transcript(tmp_path, RUN)), client_factory=Down({})) is None
+    assert progress.work(_job(agent_dir, _transcript(tmp_path, RUN)), client_factory=Down({})) == "failed"
     assert "progress check failed" in capsys.readouterr().err
+    assert not (agent_dir / progress.LOCK_FILE).exists()
     assert progress.main(["post-tool"], stream=io.StringIO("not json")) == 0
+    assert progress.main(["work", str(agent_dir / "no-such-job.json")]) == 0
+
+
+def test_the_real_worker_process_starts_detached_and_removes_its_job(tmp_path):
+    """The spawn itself: a job for an agent whose lock is held exits `busy`
+    without any network, which proves the process started and ran `work`."""
+    agent_dir = _pulled(tmp_path)
+    (agent_dir / progress.LOCK_FILE).write_text(str(time.time()))
+    job_path = agent_dir / (progress.JOB_PREFIX + "1.json")
+    job_path.write_text(json.dumps(_job(agent_dir, _transcript(tmp_path, RUN))))
+    progress._spawn_worker(job_path)
+    deadline = time.time() + 20
+    while job_path.exists() and time.time() < deadline:
+        time.sleep(0.1)
+    assert not job_path.exists(), "the detached worker never ran"
 
 
 # ---------------------------------------------------------------------------
@@ -240,7 +286,7 @@ def test_attach_file_keeps_the_file_as_it_is_now(tmp_path):
     assert progress.stage_local_file(agent_dir, TURN, "out/draft.csv")[0] is True
     source.write_text("v2", encoding="utf-8")
     state = progress.load_state(agent_dir, TURN)
-    (entry,) = state["handed"]
+    (entry,) = progress.handed_files(agent_dir, TURN)
     assert entry["id"] == "local_1" and entry["name"] == "draft.csv" and Path(entry["path"]).read_text() == "v1"
     assert progress.deliver(agent_dir, state, [{"source": "local", "id": "local_1", "name": "draft.csv"}]) == [
         str(agent_dir / "delivered" / "draft.csv")]
@@ -252,7 +298,7 @@ def test_attach_file_leaves_a_file_that_is_not_local_to_the_platform(tmp_path):
     assert progress.stage_local_file(agent_dir, TURN, "made_by_a_platform_tool.pptx") == (False, "")
     handled, text = progress.stage_local_file(agent_dir, TURN, "../SOUL.md")
     assert handled and text.startswith("Error:") and "outside the workspace" in text
-    assert progress.load_state(agent_dir, TURN)["handed"] == []
+    assert progress.handed_files(agent_dir, TURN) == []
 
 
 def test_the_tool_server_hands_a_local_file_over_without_calling_the_platform(tmp_path):
@@ -275,7 +321,7 @@ def test_the_tool_server_hands_a_local_file_over_without_calling_the_platform(tm
                                         agent_dir=str(agent_dir))
     out = server.call("attach_file", {"path": "draft.csv"})
     assert "Delivered draft.csv to the user" in out["content"][0]["text"] and calls == []
-    assert [h["name"] for h in progress.load_state(agent_dir, TURN)["handed"]] == ["draft.csv"]
+    assert [h["name"] for h in progress.handed_files(agent_dir, TURN)] == ["draft.csv"]
     # A file the local workspace does not have is the platform's to attach (a platform tool made it).
     out = server.call("attach_file", {"path": "deck.pptx"})
     assert "Delivered deck.pptx" in out["content"][0]["text"]
@@ -301,12 +347,14 @@ def test_the_end_of_the_turn_delivers_every_file_and_shows_a_message_still_in_fl
         "check_agent_progress": [_done(enabled=True, final=True, files=[
             {"name": "deck.pptx", "source": "platform", "marker": MARKER, "url": "https://signed/deck"}])],
     })
+    progress._leave_ready(agent_dir, ("Progress message from Demo Agent: Half way.", "note"))
     lines = progress.finish(agent_dir, TURN, "c" * 24, SLUG, SERVER_URL, platform_tools_used=True,
                             client_factory=client, now=lambda: 1000.0, sleep=lambda s: None,
                             opener=lambda url: io.BytesIO(b"deck"))
     delivered = agent_dir / "delivered"
     assert lines == [
-        "Progress message from Demo Agent: Almost done.",
+        "Progress message from Demo Agent: Half way.",          # ready, never shown by a hook
+        "Progress message from Demo Agent: Almost done.",       # still being decided when the run ended
         "Files delivered with Demo Agent's answer:\n  File: {}\n  File: {}".format(
             delivered / "draft.csv", delivered / "deck.pptx"),
     ]
@@ -315,6 +363,7 @@ def test_the_end_of_the_turn_delivers_every_file_and_shows_a_message_still_in_fl
     final = [a for n, a in client.calls if n == "check_agent_progress"]
     assert final == [{"slug": SLUG, "app_env": "dev", "conversation": "c" * 24, "turn": TURN, "final": True}]
     assert not (agent_dir / progress.STATE_FILE).exists() and not (agent_dir / progress.OUTBOX_DIR / TURN).exists()
+    assert not (agent_dir / progress.HANDED_FILE).exists() and not (agent_dir / progress.READY_FILE).exists()
 
 
 def test_the_end_of_the_turn_delivers_local_files_with_the_setting_off_and_asks_nothing_without_platform_tools(tmp_path):
