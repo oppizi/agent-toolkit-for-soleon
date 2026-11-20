@@ -297,6 +297,29 @@ def stop(hook: Dict[str, Any], client_factory=SoleonMcpClient, now=None) -> int:
     slug = str(pull.get("slug") or hook.get("agent_type"))
     server_url = str(pull.get("serverUrl") or DEFAULT_SERVER_URL)
     conversation = ConversationTracker(str(agent_dir / ".local-conversation.json"), now=now).current()
+    # Before the answer is shown: a progress message still being decided, and
+    # every file the agent handed over this turn (soleon_progress.py).
+    local_names = {s["name"] for s in turn["steps"]}
+    shown: List[str] = []
+    clients: List[Any] = []
+
+    def shared_client(url: str = server_url):
+        # One client (one token read) for the turn's files and its record.
+        if not clients:
+            clients.append(client_factory(url))
+        return clients[0]
+
+    try:
+        import soleon_progress
+        shown = soleon_progress.finish(
+            agent_dir, turn_id, conversation, slug, server_url,
+            # An extraction job's calls ran on the job's own session, which has
+            # no files to hand to a person.
+            platform_tools_used=(any(name not in local_names for name in turn["tools_used"])
+                                 and not (agent_dir / EXTRACTION_FILE).exists()),
+            client_factory=shared_client, now=now)
+    except Exception as exc:  # noqa: BLE001 — never block the turn's record
+        _stderr("soleon: could not finish the turn's progress messages and files: {}".format(exc))
     payload = {
         "slug": slug, "app_env": "dev", "conversation": conversation, "turn": turn_id,
         "prompt": turn["prompt"], "response": turn["response"], "status": turn["status"],
@@ -310,21 +333,24 @@ def stop(hook: Dict[str, Any], client_factory=SoleonMcpClient, now=None) -> int:
     # the record goes there too.
     payload.update(extraction_args(str(agent_dir / EXTRACTION_FILE)))
     try:
-        client = client_factory(server_url)
+        client = shared_client()
         envelope = client.call_tool("record_agent_turn", payload)
         envelope = await_control(client, slug, envelope, app_env="dev", interval_s=1.0)
     except SoleonClientError as exc:
-        return _not_recorded(str(exc))
+        return _not_recorded(str(exc), shown)
     if not isinstance(envelope, dict) or is_platform_error(envelope) or envelope.get("state") != "done":
         detail = describe_error(envelope) if isinstance(envelope, dict) else str(envelope)
-        return _not_recorded(detail)
+        return _not_recorded(detail, shown)
+    if shown:
+        sys.stdout.write(json.dumps({"systemMessage": "\n".join(shown)}) + "\n")
+        sys.stdout.flush()
     return EXIT_OK
 
 
-def _not_recorded(reason: str) -> int:
+def _not_recorded(reason: str, shown: Optional[List[str]] = None) -> int:
     msg = "Soleon: this turn was NOT recorded on the platform trace — {}".format(reason)
     _stderr(msg)
-    sys.stdout.write(json.dumps({"systemMessage": msg}) + "\n")
+    sys.stdout.write(json.dumps({"systemMessage": "\n".join(list(shown or []) + [msg])}) + "\n")
     sys.stdout.flush()
     return EXIT_OK
 
