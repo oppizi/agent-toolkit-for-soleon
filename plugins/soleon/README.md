@@ -383,6 +383,39 @@ Or from a local checkout of [oppizi/agent-toolkit-for-soleon](https://github.com
 (The only contents that matter at runtime are this directory's
 `contract.json`, `bin/`, `hooks/`, and `skills/`.)
 
+### Getting updates without a new session
+
+Claude Code does not refresh a GitHub marketplace by itself: auto-update is
+off for every marketplace Anthropic does not publish. Turn it on once in
+`/plugin` → **Marketplaces** → `agent-toolkit-for-soleon` → auto-update, or
+refresh by hand. Then, in the running session:
+
+| What changed | What to run |
+|---|---|
+| A skill, hook or script (a new plugin version) | `/plugin marketplace update agent-toolkit-for-soleon`, then `/reload-plugins` |
+| A new Soleon tool, or a tool's description or inputs | `/mcp` → soleon → Reconnect (the server cannot announce a changed tool list) |
+| What an existing tool does | nothing: every call reaches the live server |
+
+In the VS Code extension, a conversation keeps the Claude Code build it was
+opened with. If a reconnect still shows the old tools, run **Developer:
+Reload Window** and reopen the conversation.
+
+### Testing a tool from a terminal
+
+`bin/soleon_call.py` calls one Soleon tool with your own Claude Code sign-in,
+so a new tool can be tried the moment it is deployed, before any session
+reconnects:
+
+```
+python3 bin/soleon_call.py --list --grep knowledge
+python3 bin/soleon_call.py search_knowledge_base '{"kb_id": "2ebb3c747a88", "query": "delete order"}'
+python3 bin/soleon_call.py get_agent @args.json --server-url https://mcp.oppizi.com/mcp
+```
+
+It prints the tool's JSON answer, follows an agent tool call that answers
+`pending` to its end, and exits 1 on an error answer, 3 on a missing or
+rejected sign-in, 4 when the server cannot be reached.
+
 ## Use
 
 ```
