@@ -279,6 +279,15 @@ def stop(hook: Dict[str, Any], client_factory=SoleonMcpClient, now=None) -> int:
     agent_dir = agent_dir_of(hook)
     if agent_dir is None:
         return EXIT_OK
+    # AHP-1834 — no answer while a background call is open (as on Soleon):
+    # the agent is sent back to wait for it or stop it. The turn is recorded
+    # when it really ends.
+    import soleon_background
+    reason = soleon_background.hold_answer(agent_dir)
+    if reason:
+        sys.stdout.write(json.dumps({"decision": "block", "reason": reason}))
+        sys.stdout.flush()
+        return EXIT_OK
     transcript_path = hook.get("agent_transcript_path")
     if not isinstance(transcript_path, str) or not os.path.isfile(transcript_path):
         _stderr("soleon: SubagentStop carried no readable agent_transcript_path — turn not recorded")

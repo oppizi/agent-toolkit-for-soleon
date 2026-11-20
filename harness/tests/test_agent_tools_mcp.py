@@ -461,8 +461,10 @@ def test_stdio_end_to_end(soleon, tmp_path):
     lines = [json.loads(l) for l in out.decode().splitlines() if l.strip()]
     assert [l["id"] for l in lines] == [1, 2, 3], err.decode()
     assert lines[0]["result"]["serverInfo"]["name"] == "soleon-agent-tools"
+    # AHP-1834: the agent's own server also offers the three background tools.
     assert {t["name"] for t in lines[1]["result"]["tools"]} == {"web_search", "custom_echo-server_read", "custom_echo-server_write",
-                                                               "read_result_page"}
+                                                               "read_result_page", "wait_for_background",
+                                                               "stop_background", "run_in_background"}
     assert json.loads(lines[2]["result"]["content"][0]["text"]) == [{"title": "Paris"}]
     assert GOOD not in err.decode()
 

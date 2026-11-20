@@ -494,6 +494,15 @@ def routing_section(display_name: str, slug: str, tools: List[Dict[str, Any]], a
                 ", ".join("`{}`".format(m) for m in (w.get("memberIds") or []))))
     lines.append("")
     lines.append(
+        "- **Background calls** (as on the platform, AHP-1834): every configured subagent, workflow, "
+        "`spawn_worker` and integration helper call answers at once with an id such as `bg_1` and runs in the "
+        "background, so keep working while it runs. Locally a finished call's result comes attached to the "
+        "result of your NEXT tool call (marked `[Background call bg_1 (...) finished ...]`), not as a separate "
+        "call. `run_in_background` runs any other slow tool the same way, `wait_for_background` waits when you "
+        "have nothing else to do, and `stop_background` ends a call you no longer need (locally \"interrupt\" "
+        "ends it like \"cancel\"). You cannot finish your answer while a call is still running: wait for it or "
+        "stop it first.")
+    lines.append(
         "- **Not emulated locally** (platform-only, shown read-only in `config.json`): channels, the daily "
         "token budgets, schedules, guardrails, online eval sampling.")
     lines.append(
