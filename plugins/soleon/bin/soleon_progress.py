@@ -9,11 +9,14 @@ over goes with it when the decision picks that file. A local run has no
 conversation to post into, so this module does the same thing for it:
 
 * `post-tool` (PostToolUse hook, every tool call inside a pulled agent's
-  run): picks up the answer of the previous check and SHOWS it (the message
-  in the terminal, its files saved under `<agent dir>/delivered/`), tells the
-  agent what was sent so its answer does not repeat it, then sends the next
-  check with the steps finished since the last one. The check is never waited
-  for, so the agent is not held up: a message appears one step later.
+  run) does no network work, so the agent is never held up: it SHOWS the
+  messages that are ready (the message in the terminal, its files already
+  saved under `<agent dir>/delivered/`), tells the agent what was sent so its
+  answer does not repeat it, and starts a detached worker for the rest.
+* `work` (that worker, one at a time per agent): sends the next check with
+  the steps finished since the last one, waits for its answer, saves the
+  message's files and leaves the message for the next `post-tool` to show.
+  A message therefore appears one step after the step it reports.
 * `finish()` (called by the SubagentStop hook before the turn is recorded):
   shows a check still in flight, then delivers every file the agent handed
   over this turn, as the final answer does on Soleon.
@@ -41,7 +44,11 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-STATE_FILE = ".local-progress.json"
+STATE_FILE = ".local-progress.json"        # the worker's own state (and `finish`'s)
+HANDED_FILE = ".local-handed.jsonl"        # files the agent handed over (the tool server appends)
+READY_FILE = ".local-progress-ready.jsonl"  # messages ready to show (the worker appends, the hook takes)
+LOCK_FILE = ".local-progress.lock"         # one worker at a time
+JOB_PREFIX = ".local-progress-job-"
 OUTBOX_DIR = ".outbox"
 DELIVERED_DIR = "delivered"
 ON = ("on_demand", "key_milestones", "verbose")
@@ -55,11 +62,13 @@ SKILLS_MAX = 8
 SKILL_TEXT_MAX = 12_000
 SENT_MAX = 12
 FILES_MAX = 20
-#: A check younger than this is left for the next tool call: reading it would
-#: make the agent wait for the decision.
-COLLECT_AFTER_S = 2.0
-#: How long the end of the turn waits for a check still in flight.
-FINISH_WAIT_S = 25.0
+#: How long a worker waits for its check's answer (a decision plus, on a yes,
+#: the agent's model writing the message) before leaving it for the next one.
+ANSWER_WAIT_S = 45.0
+#: How long the end of the turn waits for a worker or a check still in flight.
+FINISH_WAIT_S = 45.0
+#: A lock older than this was left by a worker that died.
+LOCK_STALE_S = 180.0
 DOWNLOAD_MAX_BYTES = 100 * 1024 * 1024
 
 PLATFORM_TOOL_PREFIX = "mcp__soleon-agent-tools__"
@@ -100,7 +109,6 @@ def load_state(agent_dir: Path, turn: str) -> Dict[str, Any]:
     data.setdefault("stepsSoFar", 0)
     data.setdefault("sent", [])           # messages shown this turn
     data.setdefault("sentFiles", [])      # what already went with a message
-    data.setdefault("handed", [])         # local files the agent handed over
     data.setdefault("lastAt", None)
     data.setdefault("pending", None)
     return data
@@ -141,18 +149,40 @@ def stage_local_file(agent_dir: Path, turn: str, path: str, filename: Optional[s
     if not resolved.is_file():
         return False, ""
     display = safe_name(filename or resolved.name)
-    state = load_state(agent_dir, turn)
-    file_id = "local_{}".format(len(state["handed"]) + 1)
+    file_id = "local_{}".format(len(handed_files(agent_dir, turn)) + 1)
     staged = agent_dir / OUTBOX_DIR / turn / "{}-{}".format(file_id, display)
     try:
         staged.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(str(resolved), str(staged))
+        # Its own append-only file: the tool server writes here while a worker
+        # may be writing the state.
+        with open(str(agent_dir / HANDED_FILE), "a", encoding="utf-8") as fh:
+            fh.write(json.dumps({"turn": turn, "id": file_id, "name": display, "path": str(staged)}) + "\n")
     except OSError as exc:
         return True, "Error attaching file: {}".format(exc)
-    state["handed"].append({"id": file_id, "name": display, "path": str(staged)})
-    save_state(agent_dir, state)
     return True, ("Delivered {} to the user as a downloadable attachment. It appears in the chat "
                   "automatically — do not paste the file contents.".format(display))
+
+
+def _read_lines(path: Path) -> List[Dict[str, Any]]:
+    out: List[Dict[str, Any]] = []
+    try:
+        with open(str(path), "r", encoding="utf-8") as fh:
+            for line in fh:
+                try:
+                    item = json.loads(line)
+                except ValueError:
+                    continue
+                if isinstance(item, dict):
+                    out.append(item)
+    except OSError:
+        pass
+    return out
+
+
+def handed_files(agent_dir: Path, turn: str) -> List[Dict[str, Any]]:
+    """The local files the agent handed over this turn, oldest first."""
+    return [h for h in _read_lines(agent_dir / HANDED_FILE) if h.get("turn") == turn]
 
 
 def _deliver_local(agent_dir: Path, entry: Dict[str, Any]) -> Optional[str]:
@@ -194,7 +224,7 @@ def deliver(agent_dir: Path, state: Dict[str, Any], files: List[Dict[str, Any]],
     """Save the files of one message (or of the final answer) under
     `delivered/` and return their paths. A newer version of a name replaces
     the older file, as the newest upload is the one a person opens."""
-    handed = {h["id"]: h for h in state.get("handed") or []}
+    handed = {h["id"]: h for h in handed_files(agent_dir, str(state.get("turn") or ""))}
     paths: List[str] = []
     for item in files or []:
         if not isinstance(item, dict):
@@ -363,7 +393,7 @@ def build_check(agent_dir: Path, state: Dict[str, Any], turn: Dict[str, Any], no
         "steps": steps,
         "sent": list(state["sent"])[-SENT_MAX:],
         "skills": skills_read(agent_dir, turn["steps"]),
-        "files": [{"id": h["id"], "name": h["name"]} for h in state["handed"]][-FILES_MAX:],
+        "files": [{"id": h["id"], "name": h["name"]} for h in handed_files(agent_dir, state["turn"])][-FILES_MAX:],
         "sent_files": list(state["sentFiles"]),
         "_covers": [s["id"] for s in fresh],
     }
@@ -457,60 +487,168 @@ def _context(hook: Dict[str, Any]):
             str(pull.get("serverUrl") or DEFAULT_SERVER_URL))
 
 
-def post_tool(hook: Dict[str, Any], client_factory=None, now: Optional[Callable[[], float]] = None,
-              opener: Optional[Callable[[str], Any]] = None) -> Optional[Dict[str, Any]]:
-    """One PostToolUse call. Returns the hook's JSON output, or None."""
+def take_ready(agent_dir: Path) -> List[Dict[str, str]]:
+    """The messages a worker left to be shown, taken exactly once."""
+    path = agent_dir / READY_FILE
+    taken = path.with_name(path.name + ".taken")
+    try:
+        os.replace(str(path), str(taken))
+    except OSError:
+        return []
+    items = _read_lines(taken)
+    try:
+        taken.unlink()
+    except OSError:
+        pass
+    return [i for i in items if isinstance(i.get("shown"), str)]
+
+
+def _leave_ready(agent_dir: Path, said: Tuple[str, str]) -> None:
+    with open(str(agent_dir / READY_FILE), "a", encoding="utf-8") as fh:
+        fh.write(json.dumps({"shown": said[0], "note": said[1]}) + "\n")
+
+
+def _spawn_worker(job_path: Path) -> None:
+    """Start `work` detached: the hook returns at once and the agent's next
+    step never waits for a network call."""
+    import subprocess
+    cmd = [sys.executable, os.path.abspath(__file__), "work", str(job_path)]
+    kwargs: Dict[str, Any] = {"stdin": subprocess.DEVNULL, "stdout": subprocess.DEVNULL,
+                              "stderr": subprocess.DEVNULL, "close_fds": True}
+    if os.name == "nt":
+        kwargs["creationflags"] = 0x00000008 | 0x00000200 | 0x08000000  # detached, own group, no window
+    else:
+        kwargs["start_new_session"] = True
+    subprocess.Popen(cmd, **kwargs)  # noqa: S603 — our own script, our own interpreter
+
+
+def post_tool(hook: Dict[str, Any], spawn: Optional[Callable[[Path], None]] = None,
+              now: Optional[Callable[[], float]] = None) -> Optional[Dict[str, Any]]:
+    """One PostToolUse call: local work only. Returns the hook's JSON output
+    (the messages ready to show), or None."""
     ctx = _context(hook)
     if ctx is None:
         return None
+    agent_dir, turn_id, conversation, slug, server_url = ctx
+    output: Optional[Dict[str, Any]] = None
+    ready = take_ready(agent_dir)
+    if ready:
+        output = {"systemMessage": "\n".join(r["shown"] for r in ready),
+                  "hookSpecificOutput": {"hookEventName": "PostToolUse",
+                                         "additionalContext": "\n".join(str(r.get("note") or "") for r in ready)}}
+    job = {"turn": turn_id, "conversation": conversation, "slug": slug, "serverUrl": server_url,
+           "agentDir": str(agent_dir), "agentId": hook.get("agent_id"),
+           "transcript": hook.get("transcript_path"), "current": current_call(hook)}
+    job_path = agent_dir / "{}{}.json".format(JOB_PREFIX, int(((now or time.time)()) * 1000))
+    try:
+        job_path.write_text(json.dumps(job, default=str), encoding="utf-8")
+        (spawn or _spawn_worker)(job_path)
+    except OSError as exc:
+        _stderr("soleon: could not start the progress check: {}".format(exc))
+    return output
+
+
+def _take_lock(agent_dir: Path, now: float) -> bool:
+    path = agent_dir / LOCK_FILE
+    for _attempt in (0, 1):
+        try:
+            fd = os.open(str(path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            os.write(fd, str(now).encode("ascii"))
+            os.close(fd)
+            return True
+        except FileExistsError:
+            try:
+                if now - float(path.read_text(encoding="ascii") or 0) < LOCK_STALE_S:
+                    return False
+                path.unlink()             # left by a worker that died
+            except (OSError, ValueError):
+                return False
+        except OSError:
+            return False
+    return False
+
+
+def _lock_is_live(agent_dir: Path, now: float) -> bool:
+    try:
+        return now - float((agent_dir / LOCK_FILE).read_text(encoding="ascii") or 0) < LOCK_STALE_S
+    except (OSError, ValueError):
+        return False
+
+
+def _release_lock(agent_dir: Path) -> None:
+    try:
+        (agent_dir / LOCK_FILE).unlink()
+    except OSError:
+        pass
+
+
+def _await_answer(client, slug: str, call_id: str, clock, nap, wait_s: float) -> Tuple[str, Optional[Dict[str, Any]]]:
+    deadline = clock() + wait_s
+    while True:
+        status, result = _result_of(client.call_tool(
+            "get_agent_tool_result", {"slug": slug, "app_env": "dev", "call_id": call_id}))
+        if status != "pending" or clock() >= deadline:
+            return status, result
+        nap(1.0)
+
+
+def work(job: Dict[str, Any], client_factory=None, now: Optional[Callable[[], float]] = None,
+         sleep: Optional[Callable[[float], None]] = None,
+         opener: Optional[Callable[[str], Any]] = None) -> str:
+    """The detached worker: one check at a time per agent. Picks up a check an
+    earlier worker left unanswered, then sends the next one with everything
+    finished since and waits for its answer. A message that is sent is saved
+    (its files delivered) and left for the next `post-tool` to show. Returns
+    what happened, for logs and tests."""
     import soleon_message_budget as budget
     from soleon_mcp_client import SoleonClientError, SoleonMcpClient
 
-    agent_dir, turn_id, conversation, slug, server_url = ctx
-    clock = now or time.time
-    state = load_state(agent_dir, turn_id)
-    client = None
-    output: Optional[Dict[str, Any]] = None
+    agent_dir = Path(job["agentDir"])
+    clock, nap = now or time.time, sleep or time.sleep
+    if not _take_lock(agent_dir, clock()):
+        return "busy"                     # the worker already running reports these steps with its next check
+    state = load_state(agent_dir, job["turn"])
     try:
+        client = (client_factory or SoleonMcpClient)(job["serverUrl"])
         pending = state.get("pending")
         if pending:
-            if clock() - float(pending.get("at") or 0) < COLLECT_AFTER_S:
-                return None
-            client = (client_factory or SoleonMcpClient)(server_url)
-            envelope = client.call_tool("get_agent_tool_result",
-                                        {"slug": slug, "app_env": "dev", "call_id": pending["callId"]})
-            status, result = _result_of(envelope)
+            status, result = _await_answer(client, job["slug"], pending["callId"], clock, nap, ANSWER_WAIT_S)
             if status == "pending":
-                return None                # still deciding: one check at a time
+                return "still_pending"
             state["pending"] = None
-            if status == "done":
-                said = apply_result(agent_dir, state, result, clock(), opener)
-                if said:
-                    output = {"systemMessage": said[0],
-                              "hookSpecificOutput": {"hookEventName": "PostToolUse", "additionalContext": said[1]}}
-        turn = read_turn(load_records(budget.subagent_transcript(hook.get("transcript_path"), str(hook.get("agent_id")))),
-                         current_call(hook))
+            said = apply_result(agent_dir, state, result, clock(), opener) if status == "done" else None
+            if said:
+                _leave_ready(agent_dir, said)
+        turn = read_turn(load_records(budget.subagent_transcript(job.get("transcript"), str(job.get("agentId")))),
+                         job.get("current"))
         check = build_check(agent_dir, state, turn, clock())
-        if check is not None:
-            covers = check.pop("_covers")
-            client = client or (client_factory or SoleonMcpClient)(server_url)
-            envelope = client.call_tool("check_agent_progress", dict(
-                check, slug=slug, app_env="dev", conversation=conversation, turn=turn_id, wait=False))
-            status, result = _result_of(envelope)
-            state["covered"] = (state["covered"] + covers)[-2000:]
-            state["stepsSoFar"] = check["steps_so_far"]
-            if status == "pending" and envelope.get("call_id"):
-                state["pending"] = {"callId": envelope["call_id"], "at": clock()}
-            elif status == "done":
-                said = apply_result(agent_dir, state, result, clock(), opener)
-                if said and output is None:
-                    output = {"systemMessage": said[0],
-                              "hookSpecificOutput": {"hookEventName": "PostToolUse", "additionalContext": said[1]}}
+        if check is None:
+            return "nothing_new"
+        covers = check.pop("_covers")
+        envelope = client.call_tool("check_agent_progress", dict(
+            check, slug=job["slug"], app_env="dev", conversation=job["conversation"], turn=job["turn"], wait=False))
+        status, result = _result_of(envelope)
+        state["covered"] = (state["covered"] + covers)[-2000:]
+        state["stepsSoFar"] = check["steps_so_far"]
+        if status == "pending" and envelope.get("call_id"):
+            state["pending"] = {"callId": envelope["call_id"], "at": clock()}
+            save_state(agent_dir, state)
+            status, result = _await_answer(client, job["slug"], envelope["call_id"], clock, nap, ANSWER_WAIT_S)
+            if status == "pending":
+                return "still_pending"
+            state["pending"] = None
+        if status == "done":
+            said = apply_result(agent_dir, state, result, clock(), opener)
+            if said:
+                _leave_ready(agent_dir, said)
+                return "sent"
+        return "no"
     except SoleonClientError as exc:
         _stderr("soleon: progress check failed — {}".format(exc))
+        return "failed"
     finally:
         save_state(agent_dir, state)
-    return output
+        _release_lock(agent_dir)
 
 
 def finish(agent_dir: Path, turn_id: str, conversation: str, slug: str, server_url: str, *,
@@ -523,28 +661,25 @@ def finish(agent_dir: Path, turn_id: str, conversation: str, slug: str, server_u
     from soleon_mcp_client import SoleonClientError, SoleonMcpClient
 
     clock, nap = now or time.time, sleep or time.sleep
+    # A worker may still be waiting for its check's answer: let it finish.
+    deadline = clock() + FINISH_WAIT_S
+    while _lock_is_live(agent_dir, clock()) and clock() < deadline:
+        nap(0.5)
     state = load_state(agent_dir, turn_id)
-    lines: List[str] = []
+    lines: List[str] = [r["shown"] for r in take_ready(agent_dir)]
     client = None
     try:
         pending = state.get("pending")
         if pending and setting(agent_dir):
             client = (client_factory or SoleonMcpClient)(server_url)
-            deadline = clock() + FINISH_WAIT_S
-            while True:
-                envelope = client.call_tool("get_agent_tool_result",
-                                            {"slug": slug, "app_env": "dev", "call_id": pending["callId"]})
-                status, result = _result_of(envelope)
-                if status != "pending" or clock() >= deadline:
-                    break
-                nap(1.0)
+            status, result = _await_answer(client, slug, pending["callId"], clock, nap, FINISH_WAIT_S)
             state["pending"] = None
             if status == "done":
                 said = apply_result(agent_dir, state, result, clock(), opener)
                 if said:
                     lines.append(said[0])
         files: List[Dict[str, Any]] = [{"source": "local", "id": h["id"], "name": h["name"]}
-                                       for h in state.get("handed") or []]
+                                       for h in handed_files(agent_dir, turn_id)]
         # The newest version of each local name is the one the answer carries.
         newest: Dict[str, Dict[str, Any]] = {}
         for item in files:
@@ -574,18 +709,33 @@ def finish(agent_dir: Path, turn_id: str, conversation: str, slug: str, server_u
         # environment the feature has not reached) answers every turn this way.
         _stderr("soleon: the turn's platform-made files could not be fetched — {}".format(exc))
     finally:
+        leftovers = [agent_dir / STATE_FILE, agent_dir / HANDED_FILE, agent_dir / READY_FILE, agent_dir / LOCK_FILE]
         try:
-            (agent_dir / STATE_FILE).unlink()
+            leftovers += [q for q in agent_dir.iterdir() if q.name.startswith(JOB_PREFIX)]
         except OSError:
             pass
+        for path in leftovers:
+            try:
+                path.unlink()
+            except OSError:
+                pass
         shutil.rmtree(str(agent_dir / OUTBOX_DIR / turn_id), ignore_errors=True)
     return lines
 
 
 def main(argv: Optional[List[str]] = None, stream=None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
+    if len(argv) == 2 and argv[0] == "work":
+        job_path = Path(argv[1])
+        try:
+            job = json.loads(job_path.read_text(encoding="utf-8"))
+            job_path.unlink()
+            work(job)
+        except Exception as exc:  # noqa: BLE001 — a detached worker has nobody to raise to
+            _stderr("soleon: progress worker failed — {}: {}".format(type(exc).__name__, exc))
+        return 0
     if argv != ["post-tool"]:
-        _stderr("usage: soleon_progress.py post-tool  (hook JSON on stdin)")
+        _stderr("usage: soleon_progress.py post-tool  (hook JSON on stdin) | work <job file>")
         return 2
     raw = (stream or sys.stdin).read()
     try:

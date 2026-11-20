@@ -204,8 +204,9 @@ PostToolUse hook): after each tool call the platform is asked whether the
 person should be told something now — the agent's decision model decides and
 the agent's own model writes the message (`check_agent_progress`) — and a
 message is shown in the terminal as `Progress message from <agent>: …`. The
-agent is told what was sent, so its answer does not repeat it. The check is
-never waited for, so a message appears one step after the step it reports.
+agent is told what was sent, so its answer does not repeat it. The hook
+makes no network call itself (a detached worker asks), so the agent is never
+held up; a message appears one step after the step it reports.
 Each check and message is recorded under the turn in Traces and charged to
 the agent, as on Soleon.
 
