@@ -57,8 +57,15 @@ Add each source with `add_kb_source(..., ingest=false)`: it is stored as
 - S3 objects arrive through a watch, which ingests them on the platform as it
   finds them; re-run one locally as an existing source (below).
 
-Sources that already exist and are ingested are re-run in Step 2 with
-`manage_kb_source(reingest=true, local=true)`.
+Sources that already exist and are ingested are re-run in Step 2, one of two ways:
+- **Refresh** (bring it up to date): `manage_kb_source(refresh=true, local=true)`.
+  The source re-runs in update mode with its `update_prompt` (else its
+  `ingestion_prompt`), told which documents the base holds and when they were
+  last written. It rewrites only the documents whose content changed, under
+  their ids, and deletes nothing. Set the source's `update_prompt` first
+  (`manage_kb_source(update_prompt=...)`) so it reads only what changed.
+- **Rebuild** (start over): `manage_kb_source(reingest=true, local=true)`.
+  Every document is written again, and the ones it no longer writes are dropped.
 
 To turn hand-written pages into sources (a base with pages and no sources):
 read them (`list_kb_pages`, `get_kb_page`), group them into a few coherent
@@ -70,7 +77,8 @@ staged `text` source. Say which pages went into which source.
 The reply carries `local_call_id`. While `staged_remaining` is above zero,
 call again with `local_call_id` set, so every source joins the same run. A
 source that is already ingested joins with
-`manage_kb_source(kb_id, source_id, reingest=true, local=true, local_call_id=…)`.
+`manage_kb_source(kb_id, source_id, refresh=true, local=true, local_call_id=…)`
+(or `reingest=true` to rebuild it).
 
 ## Step 3 — Answer the run's model calls
 Start the answering loop in the background (`run_in_background: true`):
@@ -95,8 +103,9 @@ For each `EXTRACTION_JOB_WAITING job=<job_id> source=<source_id>` line:
    `extraction_jobs[]` entry with that `job_id` → `prompt`.
 3. Run the `kb-extractor` subagent with that prompt, verbatim. It researches
    with the integration's tools and saves each document with `emit_document`.
-   A prose answer saves nothing; a run that emitted no document fails the
-   source.
+   A prose answer saves nothing. A rebuild that emitted no document fails the
+   source; a refresh that found nothing changed ends with no document, and
+   that is a success (the job's prompt says so).
 4. `$RUN finish --kb <kb_id> --call <local_call_id> --job <job_id>` — Soleon
    turns the documents into sources and ingests them; their model calls come
    through Step 3's loop.
@@ -110,3 +119,21 @@ When the loop prints DONE: per source, its status and pages
 `get_knowledge_base(kb_id)` for the base's page, fact and link counts, and
 name a few of the concepts and entities it created (`list_kb_pages`). Never
 call a run successful while a source failed.
+
+## Daily refresh, unattended
+
+To keep a base current without anyone at the machine, install a daily task:
+
+```
+python3 "$PLUGIN/bin/soleon_kb_refresh.py" install --kb <kb_id> --source <source_id> [--source …] \
+    --project <the project folder where kb-extractor is pulled> --at 06:30
+```
+
+Each morning it starts Claude Code headless in that project and runs this
+skill's refresh for the named sources (Steps 2 to 5, `refresh=true`,
+`local=true`), so every model call runs on this machine. It runs only while
+the machine is on and the person's connections are signed in. Each run leaves
+a log and a status file under the plugin's data folder; `status` prints the
+last run, and a failed run is reported by the freshness check on the next
+prompt. `uninstall` removes the task. It never rebuilds: a monthly rebuild,
+which drops documents for things that no longer exist, is run by hand.
