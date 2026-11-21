@@ -80,7 +80,23 @@ def message_budget(config: Any) -> int:
     return value or DEFAULT_LIMIT
 
 
+#: Written by soleon_kb_local_ingest.prepare_extractor while the pulled
+#: kb-extractor runs an extraction job (its ``tokenBudget`` is the job's).
+EXTRACTION_FILE = ".local-extraction.json"
+
+
 def budget_of(agent_dir: Path) -> int:
+    """The budget the agent works to now: an extraction job's own budget while
+    it runs one (the platform enforces the source's ``tokenBudgetMax`` on an
+    extraction, never the agent's per-message setting), else its Per Message
+    Token Budget."""
+    try:
+        job = json.loads((agent_dir / EXTRACTION_FILE).read_text(encoding="utf-8"))
+        raw = job.get("tokenBudget") if isinstance(job, dict) else None
+        if isinstance(raw, int) and not isinstance(raw, bool) and raw > 0:
+            return raw
+    except (OSError, ValueError):
+        pass
     try:
         return message_budget(json.loads((agent_dir / "config.json").read_text(encoding="utf-8")))
     except (OSError, ValueError):

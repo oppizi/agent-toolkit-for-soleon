@@ -196,3 +196,39 @@ def test_a_long_prompt_rides_stdin_never_the_command_line():
     cmd, kwargs = seen[0]
     assert sum(len(a) for a in cmd) < 2_000
     assert kwargs["input"] == "x" * 60_000
+
+
+@pytest.mark.parametrize("extra, flagged", [([], False), (["--incomplete"], True)])
+def test_finish_hands_the_job_back_and_says_when_it_is_incomplete(monkeypatch, capsys, extra, flagged):
+    """2026-11-21: a kb-extractor that stopped short finishes with
+    --incomplete, so a refresh reads the same changes again next time."""
+    client = FakeClient([{"sources": [{"sourceId": "s"}]}])
+    monkeypatch.setattr(kli, "SoleonMcpClient", lambda _url: client)
+    assert kli.main(["finish", "--kb", "kb1", "--call", CALL, "--job", JOB] + extra) == 0
+    (name, args), = client.calls
+    assert name == "local_kb_ingest"
+    assert args == {"kb_id": "kb1", "call_id": CALL, "finish_job_id": JOB,
+                    **({"incomplete": True} if flagged else {})}
+    assert ("as incomplete" in capsys.readouterr().out) is flagged
+
+
+def test_prepare_with_the_kb_gives_the_agent_the_jobs_own_budget(tmp_path, monkeypatch):
+    agent_dir = _pulled_extractor(tmp_path)
+    state = {"extraction_jobs": [{"job_id": JOB, "source_id": "src_mcp_gh"}]}
+    source = {"status": 200, "body": {"sourceId": "src_mcp_gh", "tokenBudgetMax": 2_000_000}}
+    done = {"state": "done", "call_id": CALL, "result": {"tools": [{"name": "emit_document"}]}}
+
+    class Client(FakeClient):
+        def call_tool(self, name, args):
+            self.calls.append((name, json.loads(json.dumps(args))))
+            return {"local_kb_ingest": {"status": 200, "body": state},
+                    "get_kb_source": source}.get(name, done)
+
+    client = Client([done])
+    monkeypatch.setattr(kli, "await_control", lambda c, slug, env, **kw: env)
+    kli.prepare_extractor(client, tmp_path, CALL, JOB, kb_id="kb1",
+                          runner=lambda cmd, **kw: SimpleNamespace(returncode=0))
+    assert [n for n, _ in client.calls] == ["local_kb_ingest", "get_kb_source", "list_agent_tools"]
+    assert client.calls[1][1] == {"kb_id": "kb1", "source_id": "src_mcp_gh"}
+    assert json.loads((agent_dir / kli.EXTRACTION_FILE).read_text()) == {
+        "callId": CALL, "jobId": JOB, "tokenBudget": 2_000_000}

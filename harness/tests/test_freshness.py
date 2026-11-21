@@ -62,9 +62,31 @@ def _start(data: Path, root: Path, source="startup", execpath=""):
     return fr.session_start(hook, data, root, {"CLAUDE_CODE_EXECPATH": execpath}, now=NOW)
 
 
-def _work(data, tools=None, opener=None, live=None, now=NOW):
+def _work(data, tools=None, opener=None, live=None, now=NOW, runs=()):
     return fr.work(data, SESSION, now=now, tools_reader=lambda _url: tools,
-                   opener=opener or Opener("1.0.30"), live=live or (lambda _root: None))
+                   opener=opener or Opener("1.0.30"), live=live or (lambda _root: None),
+                   runs_reader=lambda: list(runs))
+
+
+def test_a_failed_daily_knowledge_base_refresh_is_said_once(tmp_path):
+    data = tmp_path / "data"
+    _start(data, _copy_install(tmp_path))
+    failed = {"kb": "2ebb3c747a88", "ok": False, "startedAt": NOW - 600, "finishedAt": NOW - 60,
+              "reason": "REFRESH FAILED github sign-in expired", "log": "C:/logs/kb.log"}
+    (said,) = _work(data, runs=[failed])
+    assert said.startswith("The daily refresh of knowledge base 2ebb3c747a88 failed "
+                           "(REFRESH FAILED github sign-in expired)")
+    assert said.endswith("Its log: C:/logs/kb.log")
+    assert _work(data, runs=[failed]) == []
+    assert _work(data, runs=[{**failed, "ok": True}]) == []
+    assert _work(data, runs=[{**failed, "startedAt": NOW + 10}]) != [], "a new failure is a new change"
+
+
+def test_a_running_or_good_refresh_says_nothing(tmp_path):
+    data = tmp_path / "data"
+    _start(data, _copy_install(tmp_path))
+    assert _work(data, runs=[{"kb": "k", "running": True, "startedAt": NOW}]) == []
+    assert _work(data, runs=[{"kb": "k", "ok": True, "startedAt": NOW, "finishedAt": NOW}]) == []
 
 
 # --- what the session runs -------------------------------------------------

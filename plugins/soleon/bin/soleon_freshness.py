@@ -304,6 +304,32 @@ def tools_advice(state: Dict[str, Any], current: Dict[str, str]) -> Optional[str
             "plugin:{}:soleon, choose Reconnect.".format("; ".join(parts), state["plugin"]["name"]))
 
 
+def refresh_runs() -> List[Dict[str, Any]]:
+    """The last run of each knowledge base's daily local refresh (soleon_kb_refresh.py)."""
+    try:
+        from soleon_kb_refresh import last_runs
+        return last_runs()
+    except Exception as exc:  # noqa: BLE001 — advisory: an unreadable record only skips this check
+        _log("could not read the knowledge-base refresh records: {}".format(exc))
+        return []
+
+
+def refresh_advice(state: Dict[str, Any], runs: List[Dict[str, Any]]) -> List[Tuple[str, Tuple[str, str]]]:
+    """(kb, (advice, key)) for each knowledge base whose last daily refresh failed."""
+    if state["plugin"]["kind"] == "generated":
+        return []  # a generated copy (soleon-prod) runs these hooks too: one plugin says it
+    out = []
+    for r in runs:
+        if r.get("running") or r.get("ok") or not r.get("kb") or not r.get("finishedAt"):
+            continue
+        when = time.strftime("%b %d %I:%M %p", time.localtime(float(r["finishedAt"])))
+        out.append((str(r["kb"]), (
+            "The daily refresh of knowledge base {} failed ({}), {}. Its log: {}".format(
+                r["kb"], r.get("reason") or "no reason recorded", when, r.get("log") or "none"),
+            "failed:{}".format(r.get("startedAt")))))
+    return out
+
+
 def build_advice(state: Dict[str, Any]) -> Tuple[Optional[str], Optional[str]]:
     build = state.get("build")
     if not build or state["plugin"]["kind"] == "generated":
@@ -318,7 +344,8 @@ def build_advice(state: Dict[str, Any]) -> Tuple[Optional[str], Optional[str]]:
 def work(data: Path, session: str, now: Optional[float] = None,
          tools_reader: Callable[[str], Optional[Dict[str, str]]] = server_tools,
          opener: Callable[..., Any] = urllib.request.urlopen,
-         live: Callable[[Path], Optional[Dict[str, Any]]] = live_state) -> List[str]:
+         live: Callable[[Path], Optional[Dict[str, Any]]] = live_state,
+         runs_reader: Callable[[], List[Dict[str, Any]]] = refresh_runs) -> List[str]:
     """One round of checks; returns (and leaves for the next prompt) any advice."""
     now = time.time() if now is None else now
     lock = data / "fresh-{}.lock".format(session)
@@ -329,6 +356,7 @@ def work(data: Path, session: str, now: Optional[float] = None,
         if state is None:
             return []
         advised = state.setdefault("advised", {})
+        runs = runs_reader()
         lines: List[str] = []
         current = tools_reader(state["plugin"]["server"]) if state["plugin"]["server"] else None
         if current is not None:
@@ -339,8 +367,10 @@ def work(data: Path, session: str, now: Optional[float] = None,
                 if said:
                     lines.append(said)
                     state["tools"] = current  # once per change: the next diff starts here
-        for advice, key, slot in (plugin_advice(state, data, now, opener, live) + ("plugin",),
-                                  build_advice(state) + ("build",)):
+        checks = [plugin_advice(state, data, now, opener, live) + ("plugin",),
+                  build_advice(state) + ("build",)]
+        checks += [advice + ("kbrefresh:" + kb,) for kb, advice in refresh_advice(state, runs)]
+        for advice, key, slot in checks:
             if advice and advised.get(slot) != key:
                 lines.append(advice)
                 advised[slot] = key
