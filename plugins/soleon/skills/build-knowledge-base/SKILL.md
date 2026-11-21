@@ -108,10 +108,16 @@ For each `EXTRACTION_JOB_WAITING job=<job_id> source=<source_id>` line:
    that is a success (the job's prompt says so).
 4. `$RUN finish --kb <kb_id> --call <local_call_id> --job <job_id>` — Soleon
    turns the documents into sources and ingests them; their model calls come
-   through Step 3's loop.
+   through Step 3's loop. If the kb-extractor says it stopped before it
+   covered everything (its token budget ran out, or it skipped reads), add
+   `--incomplete`: its documents are kept, but a refresh then reads the same
+   changes again next time instead of skipping past them.
 5. `$RUN release-extractor` — the kb-extractor gets its own tools back.
-Locally there is no token budget: the agent works until it has written its
-documents.
+The local kb-extractor has a budget: its own Per Message Token Budget (500,000
+tokens for `kb-extractor` on 2026-11-21), enforced by the toolkit. Large reads
+spend it fast (one pull request diff can be hundreds of thousands of
+characters), so an update prompt should name what to read and what never to
+fetch.
 
 ## Step 5 — Report
 When the loop prints DONE: per source, its status and pages

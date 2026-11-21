@@ -20,7 +20,9 @@ with `ingest_kb_sources(local=true)`, then:
   release-extractor   Undo `prepare-extractor` (the agent's own tools again).
   finish              Hand a job back once the kb-extractor has emitted its
                       documents; Soleon turns them into sources and ingests
-                      them, locally too.
+                      them, locally too. --incomplete when the agent stopped
+                      before covering everything: an update then reads the
+                      same changes again next time.
 
 Stdlib only, Python 3.9-compatible, like every script the plugin ships.
 """
@@ -217,6 +219,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     fin.add_argument("--kb", required=True)
     fin.add_argument("--call", required=True)
     fin.add_argument("--job", required=True)
+    fin.add_argument("--incomplete", action="store_true",
+                     help="the kb-extractor stopped before it covered everything (its budget ran out): "
+                          "keep its documents, but read the same changes again next time")
     args = parser.parse_args(argv)
     client = SoleonMcpClient(args.server_url)
     try:
@@ -231,9 +236,12 @@ def main(argv: Optional[List[str]] = None) -> int:
             path = release_extractor(client, Path(args.project).resolve())
             _out("kb-extractor at {} runs its own tools again".format(path))
             return 0
-        state = _body(client.call_tool("local_kb_ingest", {
-            "kb_id": args.kb, "call_id": args.call, "finish_job_id": args.job}), "local_kb_ingest")
-        _out("job {} handed back; {} source(s) in the run".format(args.job, len(state.get("sources") or [])))
+        finish = {"kb_id": args.kb, "call_id": args.call, "finish_job_id": args.job}
+        if args.incomplete:
+            finish["incomplete"] = True
+        state = _body(client.call_tool("local_kb_ingest", finish), "local_kb_ingest")
+        _out("job {} handed back{}; {} source(s) in the run".format(
+            args.job, " as incomplete" if args.incomplete else "", len(state.get("sources") or [])))
         return 0
     except SoleonClientError as exc:
         print("soleon: {}".format(exc), file=sys.stderr)

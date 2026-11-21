@@ -58,6 +58,11 @@ def build_prod_copy(dest: Path, plugin: Path = PLUGIN) -> Path:
     if target.exists():
         shutil.rmtree(target)
     shutil.copytree(plugin, target, ignore=_IGNORE)
+    # No hooks: they act on every agent pulled into a project, whichever
+    # server it came from, so with both plugins installed every save under
+    # .soleon/ was pushed twice and every pulled agent re-pointed at this
+    # copy (2026-11-20). The main plugin's hooks serve them all.
+    shutil.rmtree(target / "hooks", ignore_errors=True)
 
     manifest_path = target / ".claude-plugin" / "plugin.json"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))

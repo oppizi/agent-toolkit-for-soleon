@@ -196,3 +196,17 @@ def test_a_long_prompt_rides_stdin_never_the_command_line():
     cmd, kwargs = seen[0]
     assert sum(len(a) for a in cmd) < 2_000
     assert kwargs["input"] == "x" * 60_000
+
+
+@pytest.mark.parametrize("extra, flagged", [([], False), (["--incomplete"], True)])
+def test_finish_hands_the_job_back_and_says_when_it_is_incomplete(monkeypatch, capsys, extra, flagged):
+    """2026-11-21: a kb-extractor that stopped short finishes with
+    --incomplete, so a refresh reads the same changes again next time."""
+    client = FakeClient([{"sources": [{"sourceId": "s"}]}])
+    monkeypatch.setattr(kli, "SoleonMcpClient", lambda _url: client)
+    assert kli.main(["finish", "--kb", "kb1", "--call", CALL, "--job", JOB] + extra) == 0
+    (name, args), = client.calls
+    assert name == "local_kb_ingest"
+    assert args == {"kb_id": "kb1", "call_id": CALL, "finish_job_id": JOB,
+                    **({"incomplete": True} if flagged else {})}
+    assert ("as incomplete" in capsys.readouterr().out) is flagged
