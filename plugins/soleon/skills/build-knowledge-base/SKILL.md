@@ -96,7 +96,7 @@ used instead.
 
 ## Step 4 — MCP sources: run the kb-extractor here
 For each `EXTRACTION_JOB_WAITING job=<job_id> source=<source_id>` line:
-1. `$RUN prepare-extractor --call <local_call_id> --job <job_id>` — the
+1. `$RUN prepare-extractor --kb <kb_id> --call <local_call_id> --job <job_id>` — the
    kb-extractor's tools become the integration's (read-only, the source's
    allow-list) plus `emit_document`, and its calls run under the job.
 2. Read the job's prompt: `local_kb_ingest(kb_id, call_id)` →
@@ -113,11 +113,12 @@ For each `EXTRACTION_JOB_WAITING job=<job_id> source=<source_id>` line:
    `--incomplete`: its documents are kept, but a refresh then reads the same
    changes again next time instead of skipping past them.
 5. `$RUN release-extractor` — the kb-extractor gets its own tools back.
-The local kb-extractor has a budget: its own Per Message Token Budget (500,000
-tokens for `kb-extractor` on 2026-11-21), enforced by the toolkit. Large reads
-spend it fast (one pull request diff can be hundreds of thousands of
-characters), so an update prompt should name what to read and what never to
-fetch.
+The local kb-extractor works to the job's own token budget, as on the
+platform: the source's `tokenBudgetMax` (`--kb` on prepare-extractor reads it;
+without `--kb` it falls back to the agent's Per Message Token Budget, 500,000).
+Large reads still spend it fast (one pull request diff can be hundreds of
+thousands of characters), so an update prompt should name what to read and
+what never to fetch.
 
 ## Step 5 — Report
 When the loop prints DONE: per source, its status and pages

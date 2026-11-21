@@ -170,12 +170,36 @@ def _list_tools(client, extraction: Optional[Dict[str, str]]) -> Dict[str, Any]:
     return envelope
 
 
-def prepare_extractor(client, project: Path, call_id: str, job_id: str, runner=subprocess.run) -> Path:
+def job_budget(client, kb_id: str, call_id: str, job_id: str) -> Optional[int]:
+    """The token budget the platform gives this extraction job: its source's
+    ``tokenBudgetMax`` (the sidecar proxy enforces it on a platform run). The
+    kb-extractor's own Per Message Token Budget is for a chat message, not an
+    extraction (2026-11-21: two local refreshes stopped at that 500,000 default
+    while the job's source allowed 2,000,000)."""
+    state = _body(client.call_tool("local_kb_ingest", {"kb_id": kb_id, "call_id": call_id}),
+                  "local_kb_ingest")
+    job = next((j for j in state.get("extraction_jobs") or [] if j.get("job_id") == job_id), None)
+    if not job or not job.get("source_id"):
+        return None
+    source = _body(client.call_tool("get_kb_source", {"kb_id": kb_id, "source_id": job["source_id"]}),
+                   "get_kb_source")
+    source = source.get("source", source) if isinstance(source, dict) else {}
+    raw = source.get("tokenBudgetMax")
+    return int(raw) if isinstance(raw, (int, float)) and not isinstance(raw, bool) and raw > 0 else None
+
+
+def prepare_extractor(client, project: Path, call_id: str, job_id: str, runner=subprocess.run,
+                      kb_id: Optional[str] = None) -> Path:
     agent_dir = _agent_dir(project)
     if not (agent_dir / "pull.json").is_file():
         raise SoleonClientError("kb-extractor is not pulled into this project: run the pull-agent "
                                 "skill for kb-extractor first")
-    extraction = {"callId": call_id, "jobId": job_id}
+    extraction: Dict[str, Any] = {"callId": call_id, "jobId": job_id}
+    if kb_id:
+        budget = job_budget(client, kb_id, call_id, job_id)
+        if budget:
+            # Read by soleon_message_budget.budget_of while the agent runs the job.
+            extraction["tokenBudget"] = budget
     tools = _list_tools(client, extraction)
     (agent_dir / "tools.json").write_text(json.dumps(tools, indent=2), encoding="utf-8")
     (agent_dir / EXTRACTION_FILE).write_text(json.dumps(extraction), encoding="utf-8")
@@ -212,6 +236,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     prep = sub.add_parser("prepare-extractor")
     prep.add_argument("--call", required=True)
     prep.add_argument("--job", required=True)
+    prep.add_argument("--kb", help="the knowledge base: the agent then works to the job's own token budget")
     prep.add_argument("--project", default=".")
     rel = sub.add_parser("release-extractor")
     rel.add_argument("--project", default=".")
@@ -229,7 +254,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             answerer = LocalModelAnswerer(args.model, _binary, log=lambda m: print(m, file=sys.stderr))
             return LocalIngestRun(client, args.kb, args.call, answerer.answer, interval_s=args.interval).run()
         if args.cmd == "prepare-extractor":
-            path = prepare_extractor(client, Path(args.project).resolve(), args.call, args.job)
+            path = prepare_extractor(client, Path(args.project).resolve(), args.call, args.job, kb_id=args.kb)
             _out("kb-extractor at {} now runs under job {}".format(path, args.job))
             return 0
         if args.cmd == "release-extractor":

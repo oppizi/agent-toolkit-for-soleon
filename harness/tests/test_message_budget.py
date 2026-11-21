@@ -449,3 +449,21 @@ def test_an_extraction_job_is_not_held_to_the_message_budget(tmp_path, capsys):
 def test_the_extraction_file_name_matches_the_tools_server():
     import soleon_agent_tools_mcp as shim
     assert mb.EXTRACTION_FILE == shim.EXTRACTION_FILE
+
+
+def test_an_extraction_job_works_to_its_own_budget_not_the_message_budget(tmp_path):
+    """2026-11-21: on the platform an extraction runs to its source's
+    tokenBudgetMax; locally two refreshes stopped at the agent's 500,000
+    per-message default while their source allowed 2,000,000."""
+    (tmp_path / "config.json").write_text(json.dumps({"agents": {}}), encoding="utf-8")
+    assert mb.budget_of(tmp_path) == mb.DEFAULT_LIMIT
+    (tmp_path / mb.EXTRACTION_FILE).write_text(
+        json.dumps({"callId": "lc_x", "jobId": "ext_y", "tokenBudget": 2_000_000}), encoding="utf-8")
+    assert mb.budget_of(tmp_path) == 2_000_000
+    (tmp_path / mb.EXTRACTION_FILE).write_text(json.dumps({"callId": "lc_x", "jobId": "ext_y"}),
+                                               encoding="utf-8")
+    assert mb.budget_of(tmp_path) == mb.DEFAULT_LIMIT, "a job file without a budget changes nothing"
+
+
+def test_the_budget_and_the_extraction_scripts_share_one_file_name():
+    assert mb.EXTRACTION_FILE == shim.EXTRACTION_FILE
