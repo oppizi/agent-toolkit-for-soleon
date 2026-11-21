@@ -34,6 +34,7 @@ import os
 import subprocess
 import sys
 import time
+from concurrent.futures import Future, ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
@@ -54,6 +55,9 @@ KB_EXTRACTOR = "kb-extractor"
 #: Answers sent per call: each completion can be large, and the wire has a size cap.
 ANSWERS_PER_CALL = 4
 POLL_INTERVAL_S = 3.0
+#: Model calls answered at once. Soleon ingests a job's sources together, and
+#: each call is one headless Claude Code process.
+ANSWER_WORKERS = 12
 
 
 def _out(line: str) -> None:
@@ -80,11 +84,16 @@ class LocalIngestRun:
     """One run: poll, answer, report. ``answer`` is the local model."""
 
     def __init__(self, client, kb_id: str, call_id: str, answer: Callable[[List[Dict[str, Any]]], List[Dict[str, Any]]],
-                 *, interval_s: float = POLL_INTERVAL_S, sleep=time.sleep, out=_out):
+                 *, interval_s: float = POLL_INTERVAL_S, sleep=time.sleep, out=_out,
+                 workers: int = ANSWER_WORKERS):
         self.client, self.kb_id, self.call_id = client, kb_id, call_id
         self.answer, self.interval_s, self.sleep, self.out = answer, interval_s, sleep, out
         self._seen_status: Dict[str, Any] = {}
         self._announced_jobs: set = set()
+        #: request id -> its running answer; ids already handed back.
+        self._inflight: Dict[str, Future] = {}
+        self._answered: set = set()
+        self._pool = ThreadPoolExecutor(max_workers=workers, thread_name_prefix="local-answer")
 
     def poll(self, **extra) -> Dict[str, Any]:
         return _body(self.client.call_tool("local_kb_ingest", {
@@ -109,31 +118,60 @@ class LocalIngestRun:
                 self.out("EXTRACTION_JOB_WAITING job={} source={} integration={}".format(
                     job.get("job_id"), job.get("source_id"), job.get("integration_id")))
 
+    def _one(self, request: Dict[str, Any]) -> Dict[str, Any]:
+        try:
+            answers = self.answer([request])
+        except Exception as exc:  # noqa: BLE001 — reported to the platform as this call's error
+            return {"request_id": request.get("request_id"),
+                    "error": "the local answerer failed: {}: {}".format(type(exc).__name__, exc)}
+        if len(answers) == 1 and isinstance(answers[0], dict):
+            return answers[0]
+        return {"request_id": request.get("request_id"), "error": "the local answerer returned no answer"}
+
+    def _finished(self) -> List[Dict[str, Any]]:
+        done = [rid for rid, future in self._inflight.items() if future.done()]
+        answers = [self._inflight.pop(rid).result() for rid in done]
+        self._answered.update(done)
+        return answers
+
     def step(self) -> Dict[str, Any]:
-        """One poll; answers what is waiting. Returns the latest state."""
-        state = self.poll()
-        self.report(state)
-        requests = state.get("model_requests") or []
-        if requests:
-            self.out("answering {} model call(s) locally".format(len(requests)))
-            answers = self.answer(requests)
-            for i in range(0, len(answers), ANSWERS_PER_CALL):
-                state = self.poll(answers=answers[i:i + ANSWERS_PER_CALL])
-            failed = [a for a in answers if a.get("error")]
-            for a in failed:
+        """One poll. Hands back every answer that is ready and starts every
+        call that newly waits, WITHOUT waiting for the calls still running: a
+        source asks its calls one after another (the distill's lookups, then
+        its plan), so holding a finished answer until the slowest call of a
+        batch returns made each source wait on the others' largest documents
+        and ran it past Soleon's ~13-minute limit (2026-11-21: two sources
+        failed `local_model_unanswered`). Returns the latest state."""
+        answers = self._finished()
+        if not answers:
+            state = self.poll()
+        for i in range(0, len(answers), ANSWERS_PER_CALL):
+            state = self.poll(answers=answers[i:i + ANSWERS_PER_CALL])
+        for a in answers:
+            if a.get("error"):
                 self.out("model call {} failed locally: {}".format(a.get("request_id"), a["error"]))
-            self.report(state)
+        self.report(state)
+        new = [r for r in state.get("model_requests") or []
+               if r.get("request_id") not in self._inflight and r.get("request_id") not in self._answered]
+        if new:
+            self.out("answering {} model call(s) locally ({} already running)".format(
+                len(new), len(self._inflight)))
+        for request in new:
+            self._inflight[request.get("request_id")] = self._pool.submit(self._one, request)
         return state
 
     def run(self) -> int:
-        while True:
-            state = self.step()
-            if state.get("done"):
-                failed = [s for s in state.get("sources") or [] if s.get("status") == "failed"]
-                self.out("DONE {} source(s), {} failed".format(len(state.get("sources") or []), len(failed)))
-                return 1 if failed else 0
-            if not state.get("model_requests"):
-                self.sleep(self.interval_s)
+        try:
+            while True:
+                state = self.step()
+                if state.get("done") and not self._inflight:
+                    failed = [s for s in state.get("sources") or [] if s.get("status") == "failed"]
+                    self.out("DONE {} source(s), {} failed".format(len(state.get("sources") or []), len(failed)))
+                    return 1 if failed else 0
+                if not any(f.done() for f in self._inflight.values()):
+                    self.sleep(self.interval_s)
+        finally:
+            self._pool.shutdown(wait=False)
 
 
 def _agent_dir(project: Path) -> Path:

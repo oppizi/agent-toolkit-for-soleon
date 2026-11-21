@@ -20,8 +20,8 @@ shape for its distill calls, plus two things a code run never does: SEVERAL
 tools in one call (the distill may look pages up before it writes its plan)
 and a conversation that carries earlier tool calls and their results. With
 several tools the model answers one JSON object naming the tool it calls and
-its arguments (`tool_choice` "auto" also offers a plain reply), which comes
-back as that tool's call.
+its arguments, checked against that tool's own input schema (`tool_choice`
+"auto" also offers a plain reply), which comes back as that tool's call.
 
 Stdlib only, Python 3.9-compatible, like every script the plugin ships.
 """
@@ -46,6 +46,8 @@ UTF8 = {"encoding": "utf-8", "errors": "replace"}
 
 #: The answer to a several-tool call that chose to reply in plain text.
 REPLY_CHOICE = "reply"
+#: The key a several-tool answer puts its choice under (`_choice_schema`).
+CHOICE_KEY = "call"
 
 
 def _turn_text(m: Dict[str, Any]) -> str:
@@ -85,15 +87,40 @@ def _offered(body: Dict[str, Any]) -> List[Dict[str, Any]]:
     return tools
 
 
-def _choice_schema(tools: List[Dict[str, Any]], allow_reply: bool) -> dict:
-    names = [fn["name"] for fn in tools] + ([REPLY_CHOICE] if allow_reply else [])
+def _arguments_schema(fn: Dict[str, Any]) -> dict:
+    """The input schema a choice of `fn` must match. A schema that points into
+    itself (`$ref`) cannot be nested under the choice, so it is checked only as
+    an object; the platform still validates what arrives."""
+    params = fn.get("parameters")
+    if not isinstance(params, dict) or "$ref" in json.dumps(params):
+        return {"type": "object"}
+    return params
+
+
+def _choice_branch(name: str, arguments: dict) -> dict:
     return {"type": "object", "properties": {
-        "tool": {"type": "string", "enum": names},
-        "arguments": {"type": "object"}}, "required": ["tool", "arguments"]}
+        "tool": {"type": "string", "enum": [name]}, "arguments": arguments},
+        "required": ["tool", "arguments"]}
+
+
+def _choice_schema(tools: List[Dict[str, Any]], allow_reply: bool) -> dict:
+    """One branch per tool, each holding that tool's OWN input schema, so a
+    chosen tool's arguments are checked as a single tool's are. A loose
+    `arguments: object` let the model call emit_distill_plan without
+    `source_page` (2026-11-21: two sources failed "distill response missing
+    key 'source_page'"). The branches sit under one key because `claude -p`
+    refuses a schema with anyOf at its top level."""
+    branches = [_choice_branch(fn["name"], _arguments_schema(fn)) for fn in tools]
+    if allow_reply:
+        branches.append(_choice_branch(REPLY_CHOICE, {
+            "type": "object", "properties": {"text": {"type": "string"}}, "required": ["text"]}))
+    return {"type": "object", "properties": {CHOICE_KEY: {"anyOf": branches}},
+            "required": [CHOICE_KEY]}
 
 
 def _tools_brief(tools: List[Dict[str, Any]], allow_reply: bool) -> str:
-    lines = ["Answer with ONE JSON object: {\"tool\": <name>, \"arguments\": <that tool's input>}. "
+    lines = ["Answer with ONE JSON object: {\"call\": {\"tool\": <name>, \"arguments\": <that tool's input>}}. "
+             "The arguments must match that tool's input schema, every required field included. "
              "Call exactly one of these tools:"]
     for fn in tools:
         lines.append("- {}: {}\n  input schema: {}".format(
@@ -165,16 +192,25 @@ def completion(body: Dict[str, Any], out: Dict[str, Any]) -> Dict[str, Any]:
             message = {"role": "assistant", "content": json.dumps(value)}
             finish = "stop"
         elif form == "choose":
-            if not isinstance(value, dict) or not isinstance(value.get("tool"), str):
-                raise ValueError("the answer names no tool")
-            arguments = value.get("arguments") if isinstance(value.get("arguments"), dict) else {}
-            if value["tool"] == REPLY_CHOICE:
+            choice = value.get(CHOICE_KEY) if isinstance(value, dict) else None
+            if not isinstance(choice, dict) or not isinstance(choice.get("tool"), str):
+                raise ValueError("the answer names no tool: {}".format(json.dumps(value)[:300]))
+            offered = [fn["name"] for fn in _offered(body)]
+            if body.get("tool_choice") == "auto":
+                offered.append(REPLY_CHOICE)
+            if choice["tool"] not in offered:
+                raise ValueError("the answer calls {!r}, which this call did not offer".format(choice["tool"]))
+            arguments = choice.get("arguments")
+            if not isinstance(arguments, dict):
+                raise ValueError("the answer's arguments for {!r} are not an object: {}".format(
+                    choice["tool"], json.dumps(arguments)[:300]))
+            if choice["tool"] == REPLY_CHOICE:
                 message = {"role": "assistant", "content": str(arguments.get("text") or "")}
                 finish = "stop"
             else:
                 message = {"role": "assistant", "content": None, "tool_calls": [{
                     "id": "call_local", "type": "function",
-                    "function": {"name": value["tool"], "arguments": json.dumps(arguments)}}]}
+                    "function": {"name": choice["tool"], "arguments": json.dumps(arguments)}}]}
                 finish = "tool_calls"
         else:
             message = {"role": "assistant", "content": None, "tool_calls": [{
