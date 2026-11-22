@@ -89,6 +89,42 @@ def build_prod_copy(dest: Path, plugin: Path = PLUGIN) -> Path:
     return target
 
 
+INSTALLED_PLUGINS = Path.home() / ".claude" / "plugins" / "installed_plugins.json"
+PLUGIN_CACHE = Path.home() / ".claude" / "plugins" / "cache"
+
+
+def refresh_installed_prod(built: Path, installed: Path = INSTALLED_PLUGINS,
+                           cache: Path = PLUGIN_CACHE) -> List[str]:
+    """Copy the freshly built prod copy over the copy Claude Code actually runs.
+
+    Claude Code runs a plugin from its install cache
+    (`~/.claude/plugins/cache/soleon-prod/soleon-prod/<version>`), copied when
+    the plugin was installed or its version changed. The prod copy keeps the
+    main plugin's version, so a rebuild with the same version never reached
+    the cache: the 1.0.31 copy installed on 2026-11-20 kept the hooks the
+    generator had stopped writing, and every save under .soleon/ was pushed
+    twice, the second push reporting a false conflict (2026-11-22). Returns
+    the cache folders refreshed (only ones inside the plugin cache)."""
+    try:
+        data = json.loads(installed.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return []
+    entries = (data.get("plugins") or {}).get("{0}@{0}".format(PROD_NAME))
+    refreshed = []
+    for entry in entries if isinstance(entries, list) else [entries]:
+        path = Path(str((entry or {}).get("installPath") or ""))
+        try:
+            path.resolve().relative_to(cache.resolve())
+        except (OSError, ValueError):
+            continue  # never touch a folder outside Claude Code's plugin cache
+        if not path.is_dir() or path.resolve() == built.resolve():
+            continue
+        shutil.rmtree(path)
+        shutil.copytree(built, path, ignore=_IGNORE)
+        refreshed.append(str(path))
+    return refreshed
+
+
 def status() -> dict:
     git("fetch", "--quiet", "origin", "main")
     return {
@@ -116,7 +152,9 @@ def sync(prod_dir: Optional[Path]) -> dict:
     out = {"from": before["version"], "to": after["version"], "head": after["head"],
            "moved": before["head"] != after["head"]}
     if prod_dir is not None:
-        out["prod_copy"] = str(build_prod_copy(prod_dir))
+        built = build_prod_copy(prod_dir)
+        out["prod_copy"] = str(built)
+        out["prod_installed_refreshed"] = refresh_installed_prod(built)
     return out
 
 
@@ -130,7 +168,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     if opts.command == "status":
         result = status()
     elif opts.command == "prod-copy":
-        result = {"prod_copy": str(build_prod_copy(opts.prod_dir)), "version": plugin_version()}
+        built = build_prod_copy(opts.prod_dir)
+        result = {"prod_copy": str(built), "version": plugin_version(),
+                  "prod_installed_refreshed": refresh_installed_prod(built)}
     else:
         result = sync(None if opts.no_prod_copy else opts.prod_dir)
     print(json.dumps(result, indent=2))
