@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Refresh a Soleon knowledge base LOCALLY every day, with nobody at the machine.
 
-    soleon_kb_refresh.py install   --kb ID --source SRC [--source SRC ...] --project DIR [--at HH:MM]
+    soleon_kb_refresh.py install   --kb ID --source SRC [--source SRC ...] --project DIR [--at HH:MM] [--waive-budget]
     soleon_kb_refresh.py run       --kb ID --source SRC [--source SRC ...] --project DIR
     soleon_kb_refresh.py status    [--kb ID]
     soleon_kb_refresh.py uninstall --kb ID
@@ -38,6 +38,8 @@ import sys
 import time
 from pathlib import Path
 from typing import Callable, Dict, List, Optional
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 STATE_DIR = Path.home() / ".claude" / "soleon" / "kb-refresh"
 TASK_PREFIX = "Soleon KB refresh "
@@ -126,14 +128,32 @@ def _write_status(kb: str, value: Dict) -> None:
     os.replace(str(tmp), str(status_path(kb)))
 
 
+#: soleon_message_budget.WAIVER_ENV: a task installed with --waive-budget (the
+#: person approved it at install, through Claude Code's prompt) hands it to its
+#: headless runs, whose prepare-extractor then drops the job's budget. A
+#: headless run cannot ask anyone, so without it every run keeps the budget
+#: and a large backlog never catches up (2026-11-22).
+WAIVER_ENV = "SOLEON_KB_BUDGET_WAIVED"
+
+
 def run(kb: str, sources: List[str], project: Path, runner=subprocess.run,
-        claude: Optional[str] = None, now: Callable[[], float] = time.time) -> int:
+        claude: Optional[str] = None, now: Callable[[], float] = time.time,
+        waive_budget: bool = False) -> int:
     _check_ids(kb, sources)
     exe = claude or find_claude()
     started = now()
     STATE_DIR.mkdir(parents=True, exist_ok=True)
     log = STATE_DIR / "{}-{}.log".format(kb, time.strftime("%Y%m%d-%H%M%S", time.localtime(started)))
-    status = {"kb": kb, "sources": sources, "project": str(project), "startedAt": started, "log": str(log)}
+    status = {"kb": kb, "sources": sources, "project": str(project), "startedAt": started, "log": str(log),
+              "budgetWaived": bool(waive_budget)}
+    env = dict(os.environ)
+    env.pop(WAIVER_ENV, None)
+    if waive_budget:
+        import soleon_message_budget as mb
+        if mb.standing_waiver(kb, STATE_DIR).is_file():
+            env[WAIVER_ENV] = "1"
+        else:  # reinstalled without the waiver since: the budget stays
+            status["budgetWaived"] = False
     if not exe:
         status.update(finishedAt=now(), exitCode=None, ok=False, reason="Claude Code was not found")
         _write_status(kb, status)
@@ -142,7 +162,7 @@ def run(kb: str, sources: List[str], project: Path, runner=subprocess.run,
     with open(log, "w", encoding="utf-8") as out:
         try:
             proc = runner(command(exe, kb, sources), cwd=str(project), stdout=out, stderr=subprocess.STDOUT,
-                          stdin=subprocess.DEVNULL, timeout=RUN_TIMEOUT_S, text=True)
+                          stdin=subprocess.DEVNULL, timeout=RUN_TIMEOUT_S, text=True, env=env)
             code = proc.returncode
         except subprocess.TimeoutExpired:
             code = None
@@ -162,14 +182,28 @@ def _task_name(kb: str) -> str:
 
 
 def install(kb: str, sources: List[str], project: Path, at: str, runner=subprocess.run,
-            platform: str = sys.platform) -> str:
+            platform: str = sys.platform, waive_budget: bool = False, take_ask=None) -> str:
     _check_ids(kb, sources)
+    if take_ask is None:
+        import soleon_message_budget as _mb
+        take_ask = _mb.take_waiver_ask
     if not _AT_RE.match(at):
         raise SystemExit("--at must be HH:MM (24-hour)")
     args = [sys.executable, str(Path(__file__).resolve()), "run", "--kb", kb]
     for s in sources:
         args += ["--source", s]
     args += ["--project", str(project)]
+    import soleon_message_budget as mb
+    waiver = mb.standing_waiver(kb, STATE_DIR)
+    if waive_budget:
+        if not take_ask("install", naming=[kb]):
+            raise SystemExit("--waive-budget was not approved: Claude Code never showed the approval prompt "
+                             "for it in this conversation. Install without --waive-budget.")
+        STATE_DIR.mkdir(parents=True, exist_ok=True)
+        waiver.write_text(json.dumps({"kb": kb, "approvedAt": time.time()}), encoding="utf-8")
+        args += ["--waive-budget"]
+    elif waiver.exists():
+        waiver.unlink()
     if not platform.startswith("win"):
         hour, minute = at.split(":")
         line = "{} {} * * * {}".format(int(minute), int(hour), " ".join('"{}"'.format(a) for a in args))
@@ -186,6 +220,10 @@ def install(kb: str, sources: List[str], project: Path, at: str, runner=subproce
 
 
 def uninstall(kb: str, runner=subprocess.run, platform: str = sys.platform) -> str:
+    import soleon_message_budget as mb
+    waiver = mb.standing_waiver(kb, STATE_DIR)
+    if waiver.exists():
+        waiver.unlink()
     if not platform.startswith("win"):
         return "Remove the soleon_kb_refresh.py line with `crontab -e`."
     proc = runner(["schtasks", "/Delete", "/F", "/TN", _task_name(kb)], capture_output=True, text=True)
@@ -212,6 +250,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("--source", action="append", default=[])
     ap.add_argument("--project", type=Path)
     ap.add_argument("--at", default="06:30")
+    ap.add_argument("--waive-budget", action="store_true",
+                    help="install: every run has no token budget (Claude Code asks the person first)")
     opts = ap.parse_args(argv)
     if opts.command == "status":
         runs = [r for r in last_runs() if not opts.kb or r.get("kb") == opts.kb]
@@ -225,9 +265,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     if not opts.project:
         ap.error("--project is required")
     if opts.command == "install":
-        print(install(opts.kb, opts.source, opts.project, opts.at))
+        print(install(opts.kb, opts.source, opts.project, opts.at, waive_budget=opts.waive_budget))
         return 0
-    return run(opts.kb, opts.source, opts.project)
+    return run(opts.kb, opts.source, opts.project, waive_budget=opts.waive_budget)
 
 
 if __name__ == "__main__":

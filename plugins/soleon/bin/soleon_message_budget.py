@@ -94,9 +94,12 @@ def budget_of(agent_dir: Path) -> int:
     """The budget the agent works to now: an extraction job's own budget while
     it runs one (the platform enforces the source's ``tokenBudgetMax`` on an
     extraction, never the agent's per-message setting), else its Per Message
-    Token Budget."""
+    Token Budget. 0 (no budget) while it runs a job whose budget the person
+    waived (`prepare-extractor --waive-budget`, approved through `waiver_gate`)."""
     try:
         job = json.loads((agent_dir / EXTRACTION_FILE).read_text(encoding="utf-8"))
+        if isinstance(job, dict) and job.get("budgetWaived") is True:
+            return 0
         raw = job.get("tokenBudget") if isinstance(job, dict) else None
         if isinstance(raw, int) and not isinstance(raw, bool) and raw > 0:
             return raw
@@ -586,10 +589,128 @@ def _message_of(hook: Dict[str, Any], agent_dir: Path, agent_id: str, is_subagen
     return "agent:" + agent_id
 
 
+#: A command carrying either of these waives a local extraction job's budget:
+#: `soleon_kb_local_ingest.py prepare-extractor --waive-budget`, or the daily
+#: refresh task installed with `soleon_kb_refresh.py install --waive-budget`
+#: (which hands the waiver to its headless runs through WAIVER_ENV).
+WAIVER_FLAG = "--waive-budget"
+WAIVER_ENV = "SOLEON_KB_BUDGET_WAIVED"
+
+
+def _command_of(hook: Dict[str, Any]) -> str:
+    tool_input = hook.get("tool_input")
+    command = tool_input.get("command") if isinstance(tool_input, dict) else None
+    return command if isinstance(command, str) else ""
+
+
+def waiver_gate(hook: Dict[str, Any]) -> bool:
+    """The person's approval of a budget waiver, asked BEFORE the job starts
+    (Dan 2026-11-22: waive the budget locally with human approval). Asked at
+    85% instead, it never reached him: an extraction's helpers spend the budget
+    and cannot ask, and the agent, told the budget is spent, writes instead of
+    reading on (two refreshes that day each ended short with no prompt shown).
+
+    A shell command of the main conversation that carries the waiver goes to
+    Claude Code's approval prompt, which nothing but the person answers (bypass
+    mode, allow rules and --allowedTools do not; `claude -p` denies it). True
+    when this hook decided."""
+    if hook.get("agent_id") or hook.get("tool_name") not in ("Bash", "PowerShell"):
+        return False
+    command = _command_of(hook)
+    if WAIVER_FLAG not in command and WAIVER_ENV not in command:
+        return False
+    daily = "soleon_kb_refresh" in command and "install" in command
+    if not daily and "prepare-extractor" not in command and not (
+            "soleon_kb_refresh" in command and " run" in command):
+        return False  # merely mentions the flag (a search, a log read): not a waiver
+    reason = (
+        "Soleon token budget: this command waives the token budget of {what}. Approve it and the "
+        "kb-extractor and every helper it starts run with no token limit ({where}); the run spends "
+        "this machine's Claude Code usage, not Soleon tokens. Refuse it and run the command again "
+        "without {flag}: the job keeps its budget."
+    ).format(what=("every daily refresh this task runs" if daily else "this knowledge-base extraction job"),
+             where=("every day, until the task is reinstalled without it" if daily else "for this job only"),
+             flag=WAIVER_FLAG)
+    if hook.get("permission_mode") == "dontAsk":
+        _deny("A budget waiver needs a person's approval, and this session cannot ask: run the "
+              "command without " + WAIVER_FLAG + ".")
+    else:
+        # The command checks this before it waives anything: without it the
+        # prompt was never shown (a conversation that started before this hook
+        # existed runs the old hook list), and the waiver is refused.
+        write_waiver_ask(command)
+        _ask(reason)
+    return True
+
+
+#: Written by `waiver_gate` when it asks the person; consumed by the command
+#: it asked about (`take_waiver_ask`). A command runs only once approved.
+WAIVER_ASK_FILE = Path.home() / ".claude" / "soleon" / "budget-waiver-ask.json"
+#: A prompt can wait hours for its answer (2026-11-22: one was answered 2 h later).
+WAIVER_ASK_TTL_S = 12 * 3600.0
+
+
+def write_waiver_ask(command: str, path: Optional[Path] = None) -> None:
+    path = path or WAIVER_ASK_FILE
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with _file_lock(str(path) + ".lock"):
+        now = time.time()
+        asks = [a for a in _read_asks(path) if now - a["at"] <= WAIVER_ASK_TTL_S]
+        asks.append({"at": now, "command": command})
+        tmp = "{}.{}.tmp".format(path, os.getpid())
+        with open(tmp, "w", encoding="utf-8") as fh:
+            json.dump(asks, fh)
+        _retrying(lambda: os.replace(tmp, path))
+
+
+def _read_asks(path: Path) -> list:
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return []
+    return [a for a in data if isinstance(a, dict) and isinstance(a.get("at"), (int, float))] \
+        if isinstance(data, list) else []
+
+
+def standing_waiver(kb: str, root: Optional[Path] = None) -> Path:
+    """The record of a daily refresh task installed with --waive-budget
+    (soleon_kb_refresh.STATE_DIR): its headless runs waive only while it exists."""
+    # Not *.json: soleon_kb_refresh.last_runs reads every .json there as a run.
+    return (root or (Path.home() / ".claude" / "soleon" / "kb-refresh")) / "{}.budget-waiver".format(kb)
+
+
+def take_waiver_ask(what: str, path: Optional[Path] = None, now: Optional[float] = None,
+                    naming: Iterable[str] = ()) -> bool:
+    """True, once, when the approval prompt was shown for a command naming
+    `what` (`prepare-extractor`, `install`) with the waiver; the record is
+    consumed. False when no prompt was shown: the caller must not waive."""
+    path = path or WAIVER_ASK_FILE
+    now = time.time() if now is None else now
+    with _file_lock(str(path) + ".lock") if path.parent.is_dir() else contextlib.nullcontext():
+        asks = _read_asks(path)
+        for i in range(len(asks) - 1, -1, -1):
+            a = asks[i]
+            command = a.get("command") or ""
+            # `naming`: the job / knowledge base this command acts on — a prompt
+            # shown for another one (a refused one left behind) approves nothing here.
+            if now - a["at"] <= WAIVER_ASK_TTL_S and what in command and WAIVER_FLAG in command \
+                    and all(n and n in command for n in naming):
+                del asks[i]
+                tmp = "{}.{}.tmp".format(path, os.getpid())
+                with open(tmp, "w", encoding="utf-8") as fh:
+                    json.dump(asks, fh)
+                _retrying(lambda: os.replace(tmp, path))
+                return True
+    return False
+
+
 def agent_pretool(hook: Dict[str, Any]) -> int:
-    """PreToolUse for the whole session: acts only inside a run of a pulled
-    agent or one of its configured subagents (every other agent, and the main
-    conversation, pass)."""
+    """PreToolUse for the whole session: the budget-waiver gate for the main
+    conversation's commands (`waiver_gate`), else acts only inside a run of a
+    pulled agent or one of its configured subagents (every other agent, and the
+    main conversation, pass)."""
+    if waiver_gate(hook):
+        return 0
     agent_id = hook.get("agent_id")
     found = _pulled_agent_of(hook) if agent_id else None
     if found is None:

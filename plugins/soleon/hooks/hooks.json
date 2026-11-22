@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "i=$(cat); case \"$i\" in *'\"agent_id\"'*) ;; *) exit 0 ;; esac; p=python3; \"$p\" -c \"\" 2>/dev/null || p=python; printf '%s' \"$i\" | \"$p\" \"${CLAUDE_PLUGIN_ROOT}/bin/soleon_newest.py\" \"${CLAUDE_PLUGIN_ROOT}/bin/soleon_message_budget.py\" agent-pretool",
+            "command": "i=$(cat); case \"$i\" in *'\"agent_id\"'*|*waive-budget*|*SOLEON_KB_BUDGET_WAIVED*) ;; *) exit 0 ;; esac; p=python3; \"$p\" -c \"\" 2>/dev/null || p=python; printf '%s' \"$i\" | \"$p\" \"${CLAUDE_PLUGIN_ROOT}/bin/soleon_newest.py\" \"${CLAUDE_PLUGIN_ROOT}/bin/soleon_message_budget.py\" agent-pretool",
             "timeout": 10
           }
         ]
