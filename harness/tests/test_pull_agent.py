@@ -163,6 +163,11 @@ def test_local_tool_routing_section(pulled):
     assert "custom_echo_server_read" not in missing_line and "read_file" not in missing_line
     assert "channels, the daily token budgets, schedules, guardrails, online eval sampling" in routing
     assert "The Per Message Token Budget IS enforced" in routing
+    # Claude Code's own subagent note (share relevant file paths in the final response) is not a
+    # Soleon instruction; the local copy must say so, or its replies list files the platform agent
+    # never mentions (the Flyer Builder reported its scratch notes, 2026-11-22).
+    reply_line = next(l for l in routing.splitlines() if "**Your final response is the reply Soleon would send" in l)
+    assert "to the person" in reply_line and "does not apply" in reply_line
     assert summary["approvalGated"] == ["custom_echo-server_write"]
     assert summary["externalTools"] == ["custom_echo-server_read", "custom_echo-server_write", "web_search"]
 
@@ -246,6 +251,7 @@ def test_helper_subagents_and_workflows(pulled):
     assert set(d["subagent_res1"]["external"]) == {"custom_echo-server_read", "web_search"}
     assert d["subagent_wri1"]["external"] == []
     assert "Research carefully." in d["subagent_res1"]["system"]
+    assert "the reply Soleon would send to the agent that called you" in d["subagent_res1"]["system"]
     assert d["subagent_res1"]["description"].startswith("Researcher. Hand off when: Look things up")
     assert d["workflow_mgr1"]["kind"] == "workflow" and d["workflow_mgr1"]["members"] == ["subagent_res1", "subagent_wri1"]
     assert d["workflow_mgr1"]["system"].startswith("# Workflow `workflow_mgr1`")  # frontmatter stripped
