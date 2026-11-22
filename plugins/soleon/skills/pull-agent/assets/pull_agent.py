@@ -509,7 +509,20 @@ def routing_section(display_name: str, slug: str, tools: List[Dict[str, Any]], a
         "- **The Per Message Token Budget IS enforced**: you, your configured subagents and every integration "
         "helper share it for each message. Once a message reaches 85% of it, further tool calls are refused "
         "with the reason — then answer from what you already have and say what you could not get to.")
+    lines.append(final_reply_rule("the person"))
     return "\n".join(lines) + "\n"
+
+
+def final_reply_rule(reader: str) -> str:
+    """Claude Code tells every subagent to share the file paths relevant to its task in its final
+    response. Soleon gives the agent no such instruction, so a local run that obeys it reports files
+    (scratch notes, downloads) the platform agent never mentions: the local run must behave as the
+    agent does on Soleon, where only its own instructions decide what the reply says."""
+    return (
+        "- **Your final response is the reply Soleon would send to {}**: write it exactly as your "
+        "instructions above say. Claude Code also asks every subagent to share the file paths relevant to "
+        "its task in its final response; Soleon gives this agent no such instruction, so it does not apply "
+        "here. Name a file or a path in the reply only when your own instructions call for it.".format(reader))
 
 
 # ---------------------------------------------------------------------------
@@ -695,6 +708,7 @@ def helper_body(sub: Dict[str, Any], slug: str, display_name: str, external: Lis
         "- Context mode `{}`, thread mode `{}` — the driving session hands you the task text; you do not "
         "see the parent's conversation unless it is quoted in the task.".format(
             sub.get("contextMode", "summary"), sub.get("threadMode", "fresh")),
+        final_reply_rule("the agent that called you"),
         "",
     ]
     return "\n".join(parts)
