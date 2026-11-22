@@ -135,6 +135,60 @@ def test_without_a_feed_a_call_is_unchanged(tmp_path, monkeypatch):
     assert not list(tmp_path.iterdir())
 
 
+@pytest.mark.parametrize("tool,args,expected", [
+    # The SAME table as agent-infra tests/test_trace_stream_router_live_activity.py: one rule set, two copies.
+    ("web_search", {"query": "speeders car wash photos"}, "Searching “speeders car wash photos”"),
+    ("web_fetch", {"url": "https://www.speeders.com/locations?token=SECRET#x"}, "Reading speeders.com/locations"),
+    ("web_fetch", {"url": "https://cdn.example.com/img/hero.JPG?w=2000"}, "Downloading a picture from cdn.example.com"),
+    ("web_fetch", {"url": "https://fonts.example.com/Inter-Bold.woff2"}, "Downloading the Inter font"),
+    ("web_fetch", {"url": "https://fonts.example.com/a1b2c3d4e5f6.woff2"}, "Downloading a font from fonts.example.com"),
+    ("web_fetch", {"url": "https://www.speeders.com/assets/site.css"}, "Reading a stylesheet from speeders.com"),
+    ("web_fetch", {"url": "https://user:pass@example.com/"}, "Reading a site"),
+    ("browser_navigate", {"url": "https://speeders.com/?q=1"}, "Opening speeders.com"),
+    ("browser_screenshot", {"full_page": True}, "Taking a screenshot of the page"),
+    ("read_file", {"path": "skills/company-flyer-builder/references/5-design.md"}, "Reading 5-design.md"),
+    ("write_file", {"path": "studio/notes/001.json", "content": "{\"kind\": \"name\"}"}, "Saving 001.json"),
+    ("write_and_run_code", {"request_id": "flyer/build-two-options", "code": "print(1)"},
+     "Running code: build two options"),
+    ("run_code_file", {"path": "skills/x/engine/flyer_builder.py"}, "Running flyer_builder.py"),
+    ("attach_file", {"path": "out/a-front.svg", "filename": "a-front.svg"}, "Handing over a-front.svg"),
+    ("spawn_worker", {"task": "secret plan"}, None),
+    ("web_search", {}, None),
+])
+def test_a_calls_detail_follows_the_platforms_rules(tool, args, expected):
+    assert activity.detail_for(tool, args) == expected
+
+
+@pytest.mark.parametrize("tool,url,expected", [
+    # The platform's security cases (agent-infra #3832): no path secret, no login.
+    ("web_fetch", "https://hooks.slack.com/" + "/".join(["services", "T0FAKETEAM", "B0FAKEHOOK", "x" * 24]),
+     "Reading hooks.slack.com/services"),
+    ("browser_navigate", "https://api.telegram.org/bot123456789:AAHdqTcvCH1vGWJxfSeofSAs0K5PALDsaw/getMe",
+     "Opening api.telegram.org"),
+    ("web_fetch", "https://share.example.com/s/9f8e7d6c5b4a39281706f5e4d3c2b1a0", "Reading share.example.com/s"),
+    ("web_fetch", "https://user:p?ss@host.com/x", "Reading a site"),
+    ("web_fetch", "https://user:pa#ss@host.com/x", "Reading a site"),
+    ("web_fetch", "https://user:pa/ss@host.com/x", "Reading a site"),
+])
+def test_a_url_shows_only_its_site_and_plain_path_parts(tool, url, expected):
+    assert activity.detail_for(tool, {"url": url}) == expected
+
+
+def test_an_integrations_tool_and_hidden_characters_get_nothing():
+    assert activity.detail_for("mcp_am_eb204f248a304985_web_search", {"query": "SELECT 1"}) is None
+    d = activity.detail_for("web_search", {"query": "a‮gnp.exe​ b\x85c"})
+    assert all(ch not in d for ch in "‮​ \x85")
+
+
+def test_a_feed_line_carries_the_calls_detail(tmp_path):
+    s = _spec(tmp_path)
+    line = activity.build_entry(s, seq=1, platform_name="web_search", entry={}, saved=[], turn="t", at=0,
+                                args={"query": "car wash photos"})
+    assert line["detail"] == "Searching “car wash photos”"
+    assert "detail" not in activity.build_entry(s, seq=2, platform_name="spawn_worker", entry={}, saved=[],
+                                                turn="t", at=0, args={"task": "x"})
+
+
 def test_saved_files_are_read_from_the_reply():
     assert activity.saved_files_of({"state": "done", "result": {"savedFiles": [{"path": "a"}]}}) == [{"path": "a"}]
     assert activity.saved_files_of({"state": "done", "result": {"result": 1}}) == []
