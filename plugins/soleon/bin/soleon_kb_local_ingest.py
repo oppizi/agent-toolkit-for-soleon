@@ -51,6 +51,9 @@ from soleon_mcp_client import (  # noqa: E402
 
 #: The file the agent-tools server and the turn hooks read (soleon_agent_tools_mcp.EXTRACTION_FILE).
 EXTRACTION_FILE = ".local-extraction.json"
+#: soleon_message_budget.WAIVER_ENV — set by a daily refresh task installed with
+#: --waive-budget, for its headless runs.
+WAIVER_ENV = "SOLEON_KB_BUDGET_WAIVED"
 KB_EXTRACTOR = "kb-extractor"
 #: Answers sent per call: each completion can be large, and the wire has a size cap.
 ANSWERS_PER_CALL = 4
@@ -226,14 +229,45 @@ def job_budget(client, kb_id: str, call_id: str, job_id: str) -> Optional[int]:
     return int(raw) if isinstance(raw, (int, float)) and not isinstance(raw, bool) and raw > 0 else None
 
 
+def budget_waived(flag: bool, kb_id: Optional[str], environ=None, take_ask=None, standing=None,
+                  job_id: Optional[str] = None) -> bool:
+    """The person waived this job's budget, either way:
+      * `--waive-budget` — Claude Code asked them first
+        (soleon_message_budget.waiver_gate). Refused unless the gate's record of
+        that prompt is there: a conversation that started before the gate
+        existed never shows it, and must not waive silently;
+      * a daily refresh task they installed with --waive-budget (approved the
+        same way), which hands its headless runs WAIVER_ENV; honoured only while
+        that task's waiver record exists."""
+    import soleon_message_budget as mb
+    env = os.environ if environ is None else environ
+    take_ask = take_ask or mb.take_waiver_ask
+    standing = standing or mb.standing_waiver
+    if flag:
+        if not take_ask("prepare-extractor", naming=[job_id] if job_id else ()):
+            raise SoleonClientError(
+                "--waive-budget was not approved: Claude Code never showed the approval prompt for it in "
+                "this conversation, so the budget stays. Run prepare-extractor without --waive-budget.")
+        return True
+    if env.get(WAIVER_ENV) == "1":
+        if kb_id and standing(kb_id).is_file():
+            return True
+        raise SoleonClientError("{} is set, but no daily refresh task of this knowledge base was installed "
+                                "with --waive-budget: the budget stays.".format(WAIVER_ENV))
+    return False
+
+
 def prepare_extractor(client, project: Path, call_id: str, job_id: str, runner=subprocess.run,
-                      kb_id: Optional[str] = None) -> Path:
+                      kb_id: Optional[str] = None, waive_budget: bool = False) -> Path:
     agent_dir = _agent_dir(project)
     if not (agent_dir / "pull.json").is_file():
         raise SoleonClientError("kb-extractor is not pulled into this project: run the pull-agent "
                                 "skill for kb-extractor first")
     extraction: Dict[str, Any] = {"callId": call_id, "jobId": job_id}
-    if kb_id:
+    if waive_budget:
+        # Read by soleon_message_budget.budget_of: no budget for the agent or its helpers.
+        extraction["budgetWaived"] = True
+    elif kb_id:
         budget = job_budget(client, kb_id, call_id, job_id)
         if budget:
             # Read by soleon_message_budget.budget_of while the agent runs the job.
@@ -276,6 +310,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     prep.add_argument("--job", required=True)
     prep.add_argument("--kb", help="the knowledge base: the agent then works to the job's own token budget")
     prep.add_argument("--project", default=".")
+    prep.add_argument("--waive-budget", action="store_true",
+                      help="run the job with no token budget (Claude Code asks the person first)")
     rel = sub.add_parser("release-extractor")
     rel.add_argument("--project", default=".")
     fin = sub.add_parser("finish")
@@ -292,8 +328,11 @@ def main(argv: Optional[List[str]] = None) -> int:
             answerer = LocalModelAnswerer(args.model, _binary, log=lambda m: print(m, file=sys.stderr))
             return LocalIngestRun(client, args.kb, args.call, answerer.answer, interval_s=args.interval).run()
         if args.cmd == "prepare-extractor":
-            path = prepare_extractor(client, Path(args.project).resolve(), args.call, args.job, kb_id=args.kb)
-            _out("kb-extractor at {} now runs under job {}".format(path, args.job))
+            waived = budget_waived(args.waive_budget, args.kb, job_id=args.job)
+            path = prepare_extractor(client, Path(args.project).resolve(), args.call, args.job, kb_id=args.kb,
+                                     waive_budget=waived)
+            _out("kb-extractor at {} now runs under job {}{}".format(
+                path, args.job, ", with no token budget (waived)" if waived else ""))
             return 0
         if args.cmd == "release-extractor":
             path = release_extractor(client, Path(args.project).resolve())

@@ -96,9 +96,15 @@ used instead.
 
 ## Step 4 — MCP sources: run the kb-extractor here
 For each `EXTRACTION_JOB_WAITING job=<job_id> source=<source_id>` line:
-1. `$RUN prepare-extractor --kb <kb_id> --call <local_call_id> --job <job_id>` — the
+1. `$RUN prepare-extractor --kb <kb_id> --call <local_call_id> --job <job_id> --waive-budget` — the
    kb-extractor's tools become the integration's (read-only, the source's
    allow-list) plus `emit_document`, and its calls run under the job.
+   `--waive-budget` makes Claude Code ask the person, before the job starts,
+   whether to run it with no token budget (a local run spends this machine's
+   Claude Code usage, not Soleon tokens). Approved: the kb-extractor and every
+   helper it starts run uncapped. Refused: run the same command WITHOUT
+   `--waive-budget`, and the job keeps its budget. Never pass the flag in a
+   run with no one to ask (the daily task has its own waiver, below).
 2. Read the job's prompt: `local_kb_ingest(kb_id, call_id)` →
    `extraction_jobs[]` entry with that `job_id` → `prompt`.
 3. Run the `kb-extractor` subagent with that prompt, verbatim. It researches
@@ -113,16 +119,14 @@ For each `EXTRACTION_JOB_WAITING job=<job_id> source=<source_id>` line:
    `--incomplete`: its documents are kept, but a refresh then reads the same
    changes again next time instead of skipping past them.
 5. `$RUN release-extractor` — the kb-extractor gets its own tools back.
-The local kb-extractor works to the job's own token budget, as on the
-platform: the source's `tokenBudgetMax` (`--kb` on prepare-extractor reads it;
-without `--kb` it falls back to the agent's Per Message Token Budget, 500,000).
-The agent and every helper it starts share it; `emit_document` always passes.
-At 85% of it Claude Code asks the person to approve the next tool call: an
-approval waives the budget for the rest of the job (a local run spends no
-Soleon tokens), a refusal makes the kb-extractor save what it has and stop.
-Only a person can approve; a run with no one to ask (the daily refresh task,
-any `claude -p`) keeps the budget and ends incomplete.
-Large reads still spend it fast (one pull request diff can be hundreds of
+Without a waiver the local kb-extractor works to the job's own token budget,
+as on the platform: the source's `tokenBudgetMax` (`--kb` on prepare-extractor
+reads it; without `--kb` it falls back to the agent's Per Message Token Budget,
+500,000). The agent and every helper it starts share it; `emit_document`
+always passes. Ask for the waiver up front: past 85% the helpers, which do
+most of the reading, are refused without anyone being asked, and the agent then
+writes from what it has (2026-11-22: two refreshes ended short that way).
+Large reads spend fast either way (one pull request diff can be hundreds of
 thousands of characters), so an update prompt should name what to read and
 what never to fetch.
 
@@ -139,8 +143,14 @@ To keep a base current without anyone at the machine, install a daily task:
 
 ```
 python3 "$PLUGIN/bin/soleon_kb_refresh.py" install --kb <kb_id> --source <source_id> [--source …] \
-    --project <the project folder where kb-extractor is pulled> --at 06:30
+    --project <the project folder where kb-extractor is pulled> --at 06:30 [--waive-budget]
 ```
+
+A headless run cannot ask anyone, so without `--waive-budget` every run keeps
+each job's budget, and a backlog larger than one budget never catches up.
+With it, Claude Code asks the person once, at install; approved, every daily
+run's extraction jobs run with no token budget until the task is reinstalled
+without it or uninstalled. Offer it when installing, and say what it means.
 
 Each morning it starts Claude Code headless in that project and runs this
 skill's refresh for the named sources (Steps 2 to 5, `refresh=true`,
