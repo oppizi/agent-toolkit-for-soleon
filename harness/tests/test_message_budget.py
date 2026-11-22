@@ -586,3 +586,47 @@ def test_the_plugin_runs_the_approval_hook_after_every_tool_call():
     assert any('soleon_message_budget.py" agent-posttool' in c for c in post)
     pre = [h["command"] for e in hooks["PreToolUse"] if not e.get("matcher") for h in e["hooks"]]
     assert any('soleon_message_budget.py" agent-pretool' in c for c in pre)
+
+
+def _result_in_transcript(tmp_path, tool_use_id, is_error, agent_id="a1"):
+    path = tmp_path / "sessions" / "s1" / "subagents" / "agent-{}.jsonl".format(agent_id)
+    with open(path, "a", encoding="utf-8") as fh:
+        fh.write(json.dumps({"type": "user", "message": {"role": "user", "content": [
+            {"type": "tool_result", "tool_use_id": tool_use_id, "is_error": is_error,
+             "content": "the person refused" if is_error else "(Bash completed with no output)"}]}}) + "\n")
+
+
+def test_an_approval_is_seen_in_the_transcript_without_the_posttool_hook(tmp_path, capsys):
+    """Claude Code reads a plugin's hook list only when a conversation starts:
+    a conversation begun before agent-posttool existed never runs it. The asked
+    call's SUCCESSFUL result in the agent's transcript is the approval too."""
+    agent_dir = _pulled(tmp_path, budget=100000)
+    _agent_spend(tmp_path, 85000)
+    _run_agent_hook(_hook(tmp_path, tool_use_id="t1", mode="default"), capsys)
+    _result_in_transcript(tmp_path, "t1", is_error=False)
+    assert _run_agent_hook(_hook(tmp_path, tool_use_id="t2", mode="default"), capsys) == (0, "")
+    assert mb.Ledger(agent_dir)._load()["waived"] is True
+    assert _helper_decision(agent_dir, capsys) is None
+
+
+def test_a_refusal_in_the_transcript_waives_nothing(tmp_path, capsys):
+    agent_dir = _pulled(tmp_path, budget=100000)
+    _agent_spend(tmp_path, 85000)
+    _run_agent_hook(_hook(tmp_path, tool_use_id="t1", mode="default"), capsys)
+    _result_in_transcript(tmp_path, "t1", is_error=True)
+    _, out = _run_agent_hook(_hook(tmp_path, tool_use_id="t2", mode="default"), capsys)
+    assert json.loads(out)["hookSpecificOutput"]["permissionDecision"] == "ask"
+    assert not mb.Ledger(agent_dir)._load()["waived"]
+
+
+def test_a_successful_call_that_was_never_asked_about_waives_nothing(tmp_path, capsys):
+    agent_dir = _pulled(tmp_path, budget=100000)
+    _agent_spend(tmp_path, 85000)
+    _result_in_transcript(tmp_path, "t0", is_error=False)
+    transcript = mb.subagent_transcript(str(tmp_path / "sessions" / "s1.jsonl"), "a1")
+    assert mb.approved_in_transcripts([transcript], ["t1"]) is None
+    assert mb.approved_in_transcripts([transcript], ["t0"]) == "t0"
+    _run_agent_hook(_hook(tmp_path, tool_use_id="t1", mode="default"), capsys)
+    _, out = _run_agent_hook(_hook(tmp_path, tool_use_id="t2", mode="default"), capsys)
+    assert json.loads(out)["hookSpecificOutput"]["permissionDecision"] == "ask"
+    assert not mb.Ledger(agent_dir)._load()["waived"]
