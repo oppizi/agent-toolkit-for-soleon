@@ -94,11 +94,16 @@ MSG = "prompt:p1:a1"
 
 
 def _hook(tmp_path, agent_id="a1", agent_type=SLUG, tool="mcp__soleon-agent-tools__mcp_gmail_read",
-          prompt_id="p1"):
+          prompt_id="p1", tool_use_id=None, mode=None, event="PreToolUse"):
     session = tmp_path / "sessions" / "s1.jsonl"
-    return {"session_id": "s1", "transcript_path": str(session), "cwd": str(tmp_path),
-            "agent_id": agent_id, "agent_type": agent_type, "hook_event_name": "PreToolUse",
+    hook = {"session_id": "s1", "transcript_path": str(session), "cwd": str(tmp_path),
+            "agent_id": agent_id, "agent_type": agent_type, "hook_event_name": event,
             "tool_name": tool, "prompt_id": prompt_id}
+    if tool_use_id:
+        hook["tool_use_id"] = tool_use_id
+    if mode:
+        hook["permission_mode"] = mode
+    return hook
 
 
 def _agent_spend(tmp_path, tokens_per_call, calls=1, agent_id="a1"):
@@ -433,17 +438,25 @@ def test_a_worker_server_told_its_turn_never_mints_its_own(tmp_path):
     assert json.loads(path.read_text())["turn"] == "hook-turn"     # the agent's file is not overwritten
 
 
-def test_an_extraction_job_is_not_held_to_the_message_budget(tmp_path, capsys):
-    """2026-11-18: a knowledge-base extraction job runs on the job's budget on
-    Soleon and on none locally; the chat message budget refusing past 85% would
-    block emit_document and the job would save nothing."""
+def test_an_extraction_jobs_save_tool_always_passes_and_its_reads_ask(tmp_path, capsys):
+    """An extraction job works to its own budget, the agent's spend included
+    (the platform counts it). Past 85% its reads go to the person for a waiver,
+    but emit_document always passes: holding it back would save nothing."""
     agent_dir = _pulled(tmp_path, budget=100000)
     _agent_spend(tmp_path, 90000)
     (agent_dir / mb.EXTRACTION_FILE).write_text(json.dumps({"callId": "lc_x", "jobId": "ext_y"}))
-    assert _run_agent_hook(_hook(tmp_path), capsys) == (0, "")
+    save = _hook(tmp_path, tool="mcp__soleon-agent-tools__emit_document", tool_use_id="t-save")
+    assert _run_agent_hook(save, capsys) == (0, "")
+    rc, out = _run_agent_hook(_hook(tmp_path, tool_use_id="t-read"), capsys)
+    decision = json.loads(out)["hookSpecificOutput"]
+    assert decision["permissionDecision"] == "ask"
+    assert "extraction job's token budget" in decision["permissionDecisionReason"]
+    assert "rest of this extraction job" in decision["permissionDecisionReason"]
     (agent_dir / mb.EXTRACTION_FILE).unlink()
-    rc, out = _run_agent_hook(_hook(tmp_path), capsys)
-    assert json.loads(out)["hookSpecificOutput"]["permissionDecision"] == "deny"
+    _, out = _run_agent_hook(_hook(tmp_path, tool="mcp__soleon-agent-tools__emit_document",
+                                   tool_use_id="t-save2"), capsys)
+    assert json.loads(out)["hookSpecificOutput"]["permissionDecision"] == "ask", \
+        "outside an extraction job emit_document is an ordinary tool"
 
 
 def test_the_extraction_file_name_matches_the_tools_server():
@@ -467,3 +480,109 @@ def test_an_extraction_job_works_to_its_own_budget_not_the_message_budget(tmp_pa
 
 def test_the_budget_and_the_extraction_scripts_share_one_file_name():
     assert mb.EXTRACTION_FILE == shim.EXTRACTION_FILE
+
+
+# --- waiving the budget, with the person's approval --------------------------------
+
+def _run_post_hook(hook, capsys):
+    rc = mb.main(["agent-posttool"], stream=io.StringIO(json.dumps(hook)))
+    return rc, capsys.readouterr().out.strip()
+
+
+def _helper_decision(agent_dir, capsys, message=MSG):
+    mb.main(["helper-pretool", "--agent-dir", str(agent_dir), "--message", message, "--run", "r1"],
+            stream=io.StringIO(json.dumps({"tool_name": "mcp__soleon-agent-tools__search_emails"})))
+    out = capsys.readouterr().out.strip()
+    return json.loads(out)["hookSpecificOutput"]["permissionDecision"] if out else None
+
+
+@pytest.mark.parametrize("mode", ["default", "bypassPermissions", "acceptEdits", None])
+def test_at_the_wind_down_point_the_person_is_asked_to_waive_the_budget(tmp_path, capsys, mode):
+    """Dan 2026-11-22: a local run may go past the budget, but only with a
+    person's approval. Claude Code's own prompt asks; nothing else answers it
+    (bypass mode, allow rules and --allowedTools were tested not to)."""
+    agent_dir = _pulled(tmp_path, budget=100000)
+    _agent_spend(tmp_path, 85000)
+    rc, out = _run_agent_hook(_hook(tmp_path, tool_use_id="t1", mode=mode), capsys)
+    decision = json.loads(out)["hookSpecificOutput"]
+    assert rc == 0 and decision["permissionDecision"] == "ask"
+    reason = decision["permissionDecisionReason"]
+    assert "85,000 of its 100,000-token Per Message Token Budget" in reason
+    assert "approve this call and the budget is off for the rest of this message" in reason
+    assert "do not call any more tools" in reason and "answer now" in reason, \
+        "a -p run denies the ask and the model reads this reason: it must say what to do"
+    assert mb.Ledger(agent_dir)._load()["asked"] == ["t1"]
+
+
+def test_with_no_one_to_ask_the_call_is_refused_outright(tmp_path, capsys):
+    """dontAsk denies an ask without the reason, so it gets the plain refusal."""
+    agent_dir = _pulled(tmp_path, budget=100000)
+    _agent_spend(tmp_path, 85000)
+    _, out = _run_agent_hook(_hook(tmp_path, tool_use_id="t1", mode="dontAsk"), capsys)
+    decision = json.loads(out)["hookSpecificOutput"]
+    assert decision["permissionDecision"] == "deny"
+    assert decision["permissionDecisionReason"].startswith("per-message token budget exhausted")
+    assert not mb.Ledger(agent_dir)._load().get("asked")
+
+
+def test_an_approved_call_waives_the_budget_for_the_rest_of_the_message(tmp_path, capsys):
+    """The asked call RAN (PostToolUse fires only for a call that ran), so the
+    person approved it: the agent and its helpers go on with no budget."""
+    agent_dir = _pulled(tmp_path, budget=100000)
+    _agent_spend(tmp_path, 85000)
+    _run_agent_hook(_hook(tmp_path, tool_use_id="t1", mode="default"), capsys)
+    assert _helper_decision(agent_dir, capsys) == "deny", "before the approval a helper is held"
+    rc, out = _run_post_hook(_hook(tmp_path, tool_use_id="t1", mode="default", event="PostToolUse"), capsys)
+    assert rc == 0 and "off for the rest of this run" in json.loads(out)["systemMessage"]
+    _agent_spend(tmp_path, 900000)
+    assert _run_agent_hook(_hook(tmp_path, tool_use_id="t2", mode="default"), capsys) == (0, "")
+    assert _helper_decision(agent_dir, capsys) is None
+
+
+def test_a_refused_ask_waives_nothing_and_the_next_call_asks_again(tmp_path, capsys):
+    agent_dir = _pulled(tmp_path, budget=100000)
+    _agent_spend(tmp_path, 85000)
+    _run_agent_hook(_hook(tmp_path, tool_use_id="t1", mode="default"), capsys)
+    # refused: the call never ran, so no PostToolUse for t1
+    _, out = _run_agent_hook(_hook(tmp_path, tool_use_id="t2", mode="default"), capsys)
+    assert json.loads(out)["hookSpecificOutput"]["permissionDecision"] == "ask"
+    assert not mb.Ledger(agent_dir)._load()["waived"]
+
+
+def test_a_call_that_was_never_asked_about_waives_nothing(tmp_path, capsys):
+    """Calls under the line run without a prompt; their PostToolUse is not an approval."""
+    agent_dir = _pulled(tmp_path, budget=100000)
+    _agent_spend(tmp_path, 1000)
+    _run_agent_hook(_hook(tmp_path, tool_use_id="t1", mode="default"), capsys)
+    assert _run_post_hook(_hook(tmp_path, tool_use_id="t1", event="PostToolUse"), capsys) == (0, "")
+    assert not mb.Ledger(agent_dir)._load()["waived"]
+    _agent_spend(tmp_path, 85000)
+    _, out = _run_agent_hook(_hook(tmp_path, tool_use_id="t2", mode="default"), capsys)
+    assert json.loads(out)["hookSpecificOutput"]["permissionDecision"] == "ask"
+
+
+def test_a_waiver_ends_with_its_message(tmp_path, capsys):
+    _pulled(tmp_path, budget=100000)
+    _agent_spend(tmp_path, 85000)
+    _run_agent_hook(_hook(tmp_path, tool_use_id="t1", mode="default"), capsys)
+    _run_post_hook(_hook(tmp_path, tool_use_id="t1", event="PostToolUse"), capsys)
+    _, out = _run_agent_hook(_hook(tmp_path, tool_use_id="t2", prompt_id="p2", mode="default"), capsys)
+    assert json.loads(out)["hookSpecificOutput"]["permissionDecision"] == "ask"
+
+
+def test_another_messages_approval_leaves_the_ledger_alone(tmp_path):
+    agent_dir = _pulled(tmp_path, budget=100000)
+    ledger = mb.Ledger(agent_dir)
+    ledger.note_helper(MSG, "r1", 70000)
+    ledger.note_ask(MSG, "t1")
+    assert ledger.confirm_ask("prompt:other:a9", "t1") is False
+    state = ledger._load()
+    assert state["message"] == MSG and state["helpers"] == {"r1": 70000} and not state["waived"]
+
+
+def test_the_plugin_runs_the_approval_hook_after_every_tool_call():
+    hooks = json.loads((BIN.parent / "hooks" / "hooks.json").read_text(encoding="utf-8"))["hooks"]
+    post = [h["command"] for e in hooks["PostToolUse"] if not e.get("matcher") for h in e["hooks"]]
+    assert any('soleon_message_budget.py" agent-posttool' in c for c in post)
+    pre = [h["command"] for e in hooks["PreToolUse"] if not e.get("matcher") for h in e["hooks"]]
+    assert any('soleon_message_budget.py" agent-pretool' in c for c in pre)

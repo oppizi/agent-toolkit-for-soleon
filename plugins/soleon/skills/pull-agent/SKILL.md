@@ -202,8 +202,11 @@ From the script's JSON summary tell the user, in plain words:
    Budget IS enforced** (`messageBudget`, 0 = off): everything done for one
    prompt — the agent, each configured subagent run for it (workflow members
    included) and every integration helper — shares it, and at 85% of it —
-   Soleon's wind-down point — further tool calls are refused and each answers
-   from what it has. Say so, with the number.
+   Soleon's wind-down point — Claude Code asks the person to approve the next
+   tool call. Approving waives the budget for the rest of that message (a
+   local run spends no Soleon tokens); refusing makes each answer from what it
+   has. Only the person can approve: bypass mode and allow rules do not, and a
+   run with no one to ask keeps the budget. Say so, with the number.
 5. **The edit loop**: editing `SOUL.md`, `config.json`, `skills/**`, or
    `evals/*.json` pushes to their Soleon draft on every save (the plugin's
    hook); a conflict with an edit made elsewhere stops and asks. Platform

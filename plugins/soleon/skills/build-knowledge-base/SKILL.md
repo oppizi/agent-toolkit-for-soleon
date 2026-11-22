@@ -116,6 +116,12 @@ For each `EXTRACTION_JOB_WAITING job=<job_id> source=<source_id>` line:
 The local kb-extractor works to the job's own token budget, as on the
 platform: the source's `tokenBudgetMax` (`--kb` on prepare-extractor reads it;
 without `--kb` it falls back to the agent's Per Message Token Budget, 500,000).
+The agent and every helper it starts share it; `emit_document` always passes.
+At 85% of it Claude Code asks the person to approve the next tool call: an
+approval waives the budget for the rest of the job (a local run spends no
+Soleon tokens), a refusal makes the kb-extractor save what it has and stop.
+Only a person can approve; a run with no one to ask (the daily refresh task,
+any `claude -p`) keeps the budget and ends incomplete.
 Large reads still spend it fast (one pull request diff can be hundreds of
 thousands of characters), so an update prompt should name what to read and
 what never to fetch.
