@@ -219,6 +219,14 @@ read-only snapshot of your platform workspace. You pick the local Claude model a
 pull time (default: the closest match to the agent's Bedrock model; non-Anthropic
 agents get a warning and no default).
 
+**A local run simulates the platform; nothing local-only.** The agent gets exactly
+what Soleon would give it, and an app that drives a local run reads only what Soleon
+would give it back (the answer, handed-over files, the live activity feed). Local
+infrastructure or code that makes the agent act differently than on the platform
+(app-added instructions, reading Claude Code's transcripts, local-only side channels)
+is an anti-pattern: when the platform lacks something, change the platform.
+`skills/pull-agent/SKILL.md` has the full rule.
+
 **The edit loop.** `/pull-agent` materializes the agent as files under
 `.soleon/agents/<slug>/` — `SOUL.md`, `config.json`, `skills/<id>/SKILL.md`,
 `evals/<id>.json`, `workspace/` — and the plugin's save hook pushes **every save**

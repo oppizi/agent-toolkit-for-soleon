@@ -16,6 +16,14 @@ from a platform run is the model provider.
 mean of its `subScores`) and `reasoning`. There is no threshold, no pass/fail
 tally, and you never word a result as "passed" or "failed". Report numbers.
 
+**A local run is a simulation of the platform: no local-only behaviour (Dan, 2026-11-22).** The point of running an agent locally is to build and test it exactly as it will behave on Soleon. A local result that came from something the platform would not do says nothing about the platform. So:
+
+- **The agent gets exactly what Soleon would give it:** the same request text, the same attachment listing, the same soul, skills, settings and tools. Never add instructions, notes, files or context that only a local run gets, whether from an app, a script, a hook or this session.
+- **Building local infrastructure or local code that makes the agent act differently than it would on the platform is an anti-pattern. Avoid it.** That includes app-side instructions, reading Claude Code's own transcripts or files in place of platform output, and local-only folders, shortcuts or side channels. Each one makes the test pass for a reason the platform does not have.
+- **What the agent should do belongs in the agent:** its skills or its soul, so it does the same on both. An app that drives a local run (for example Flyer Studio) reads only what Soleon would give it: the answer, the files the agent hands over, and the live activity feed (`SOLEON_ACTIVITY`, the same entries as the API's `soleon_activity`).
+- **When the platform cannot yet provide what a local run needs, do not fake it locally.** Raise it as a platform change, discuss it before building, and keep the local run identical to the platform until then.
+- **Only the transport may differ:** the model reasons on this machine, tools run on Soleon through the toolkit, and files reach this machine through the toolkit. Name every such difference. Never remove a working feature to remove a difference. Bring the platform up to the feature instead.
+
 **Error-presentation rule (every step):** one plain-English sentence, the
 verbatim error in a code block, the single next action.
 

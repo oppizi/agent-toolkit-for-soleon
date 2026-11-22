@@ -132,6 +132,70 @@ def label_for(platform_name: str, entry: Optional[Dict[str, Any]] = None) -> str
     return "Working…"
 
 
+_IMAGE_EXT = re.compile(r"\.(jpe?g|png|webp|gif|avif|svg)$")
+_FONT_EXT = re.compile(r"\.(ttf|otf|woff2?)$")
+_CONTROL = re.compile(r"[\x00-\x1f\x7f]+")
+DETAIL_MAX = 100
+
+
+def _where(url: str) -> str:
+    from urllib.parse import urlparse
+    p = urlparse(str(url or ""))
+    host = (p.netloc or "").split("@")[-1]
+    host = host[4:] if host.startswith("www.") else host
+    return (host + (p.path if p.path not in ("", "/") else ""))[:70] or "a page"
+
+
+def _leaf(value: Any) -> str:
+    return str(value or "").replace("\\", "/").rstrip("/").rsplit("/", 1)[-1][:70]
+
+
+def detail_for(tool: str, args: Any) -> Optional[str]:
+    """What one call did, by the SAME fixed rules as Soleon's live activity
+    (trace_stream_router/activity_feed.detail_for): the site a fetch read
+    (never its query string), the words a search used, the file a step read,
+    saved, ran or handed over. Never a prompt, code or file contents."""
+    from urllib.parse import unquote, urlparse
+    t = (tool or "").lower()
+    a = args if isinstance(args, dict) else {}
+    out = None
+    if t == "web_search" and a.get("query"):
+        out = "Searching “{}”".format(str(a["query"])[:70])
+    elif t == "web_fetch" and a.get("url"):
+        u = urlparse(str(a["url"]))
+        host = (u.netloc or "").split("@")[-1]
+        host = host[4:] if host.startswith("www.") else host
+        path = (u.path or "").lower()
+        if _IMAGE_EXT.search(path) or "special:filepath" in path:
+            out = "Downloading a picture from {}".format(host)
+        elif _FONT_EXT.search(path):
+            family = re.split(r"[-\[_]", _leaf(unquote(u.path)).rsplit(".", 1)[0])[0]
+            out = ("Downloading the {} font".format(family) if family and re.search(r"[g-z]", family, re.I)
+                   and not re.fullmatch(r"[0-9a-f]{8,}", family, re.I) else "Downloading a font from {}".format(host))
+        elif path.endswith(".css") or "/css/" in path:
+            out = "Reading a stylesheet from {}".format(host)
+        else:
+            out = "Reading {}".format(_where(a["url"]))
+    elif t == "browser_navigate" and a.get("url"):
+        out = "Opening {}".format(_where(a["url"]))
+    elif t == "browser_screenshot":
+        out = "Taking a screenshot of the page"
+    elif t in ("read_file", "read_skill") and (a.get("path") or a.get("file") or a.get("name")):
+        out = "Reading {}".format(_leaf(a.get("path") or a.get("file") or a.get("name")))
+    elif t in ("write_file", "edit_file") and a.get("path"):
+        out = "Saving {}".format(_leaf(a["path"]))
+    elif t == "write_and_run_code":
+        what = _leaf(a.get("request_id")).replace("-", " ").replace("_", " ").strip()
+        out = "Running code: {}".format(what) if what else "Running code"
+    elif t == "run_code_file" and (a.get("path") or a.get("file")):
+        out = "Running {}".format(_leaf(a.get("path") or a.get("file")))
+    elif t == "attach_file" and a.get("path"):
+        out = "Handing over {}".format(_leaf(a.get("filename") or a["path"]))
+    if not out:
+        return None
+    return _CONTROL.sub(" ", out).strip()[:DETAIL_MAX] or None
+
+
 def _safe(name: str) -> str:
     return (_NAME_RE.sub("_", str(name or "")).strip(". ") or "file")[:200]
 
@@ -161,7 +225,8 @@ def _download(url: str, target: Path, limit: int, opener: Optional[Callable[[str
 
 def build_entry(s: Dict[str, Any], *, seq: int, platform_name: str, entry: Optional[Dict[str, Any]],
                 saved: List[Dict[str, Any]], turn: str, at: float,
-                opener: Optional[Callable[[str], Any]] = None) -> Dict[str, Any]:
+                opener: Optional[Callable[[str], Any]] = None,
+                args: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """One feed line: the call's label and the files it saved that the run
     asked for, each saved next to the feed (`local_path`), or named without
     one when over the limit or not fetchable."""
@@ -184,8 +249,12 @@ def build_entry(s: Dict[str, Any], *, seq: int, platform_name: str, entry: Optio
         if len(files) >= MAX_FILES_PER_ENTRY:
             break
     key = "{}#{}#{}".format(turn, seq, platform_name)
-    return {"id": "act_" + hashlib.sha256(key.encode()).hexdigest()[:24], "created_at": float(at),
+    line = {"id": "act_" + hashlib.sha256(key.encode()).hexdigest()[:24], "created_at": float(at),
             "label": label_for(platform_name, entry), "tool": platform_name, "files": files}
+    detail = detail_for(platform_name, args or {})
+    if detail:
+        line["detail"] = detail
+    return line
 
 
 class Feed:
@@ -200,10 +269,10 @@ class Feed:
         self._thread: Optional[threading.Thread] = None
 
     def add(self, platform_name: str, entry: Optional[Dict[str, Any]], saved: List[Dict[str, Any]],
-            turn: str) -> None:
+            turn: str, args: Optional[Dict[str, Any]] = None) -> None:
         with self._lock:
             self._seq += 1
-            self._q.put((self._seq, platform_name, entry, list(saved or []), turn, time.time()))
+            self._q.put((self._seq, platform_name, entry, list(saved or []), turn, time.time(), dict(args or {})))
             if self._thread is None or not self._thread.is_alive():
                 # Not a daemon: the last entries are written before the process ends.
                 self._thread = threading.Thread(target=self._run, name="soleon-activity", daemon=False)
@@ -217,10 +286,10 @@ class Feed:
                 return
             if item is None:
                 return
-            seq, name, entry, saved, turn, at = item
+            seq, name, entry, saved, turn, at, args = item
             try:
                 line = build_entry(self.spec, seq=seq, platform_name=name, entry=entry, saved=saved,
-                                   turn=turn, at=at, opener=self.opener)
+                                   turn=turn, at=at, opener=self.opener, args=args)
                 feed = Path(self.spec["feed"])
                 feed.parent.mkdir(parents=True, exist_ok=True)
                 with open(str(feed), "a", encoding="utf-8") as fh:
