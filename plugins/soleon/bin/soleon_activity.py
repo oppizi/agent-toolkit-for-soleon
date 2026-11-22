@@ -134,66 +134,117 @@ def label_for(platform_name: str, entry: Optional[Dict[str, Any]] = None) -> str
 
 _IMAGE_EXT = re.compile(r"\.(jpe?g|png|webp|gif|avif|svg)$")
 _FONT_EXT = re.compile(r"\.(ttf|otf|woff2?)$")
-_CONTROL = re.compile(r"[\x00-\x1f\x7f]+")
+_HOST_RE = re.compile(r"^[a-z0-9.-]{1,80}(:\d{1,5})?$")
+_PLAIN_SEGMENT = re.compile(r"^[A-Za-z0-9._~-]{1,40}$")
 DETAIL_MAX = 100
+#: The built-in tools these rules were written for (their arguments' meaning
+#: is the platform's own). An integration's tool never gets a detail, even
+#: when it shares a name.
+DETAIL_TOOLS = frozenset({"web_search", "web_fetch", "browser_navigate", "browser_screenshot", "read_file",
+                          "read_skill", "write_file", "edit_file", "write_and_run_code", "run_code_file",
+                          "attach_file"})
+
+
+def _site(url: str) -> str:
+    """A URL's host, taken from the raw text (never through a parser that can
+    put a password in it): the authority after ``//`` up to the first ``/``,
+    ``?`` or ``#``, cut at its last ``@``; "a site" unless it is a plain host."""
+    raw = str(url or "")
+    rest = raw.split("//", 1)[1] if "//" in raw else raw
+    authority = re.split(r"[/?#]", rest, maxsplit=1)[0]
+    if "@" in rest.split("/", 1)[0] or "@" in authority:
+        return "a site"  # a login in the URL: name no part of it
+    host = authority.lower().removeprefix("www.")
+    return host if _HOST_RE.match(host) else "a site"
+
+
+def _token_like(segment: str) -> bool:
+    """A path part that may be a secret (a webhook key, a bot token, a share
+    link): long, or mixing letters and digits at length."""
+    return (len(segment) >= 24 or (len(segment) >= 8 and bool(re.search(r"\d", segment))
+                                   and bool(re.search(r"[A-Za-z]", segment))))
+
+
+def _path_parts(url: str, *, limit: int = 2) -> list[str]:
+    """Up to ``limit`` leading plain parts of a URL's path, stopping at the
+    first one that is not plain or may be a secret."""
+    raw = str(url or "")
+    rest = raw.split("//", 1)[1] if "//" in raw else raw
+    path = re.split(r"[?#]", rest, maxsplit=1)[0].split("/", 1)[1] if "/" in re.split(r"[?#]", rest, maxsplit=1)[0] else ""
+    out = []
+    for segment in [s for s in path.split("/") if s][:limit]:
+        if not _PLAIN_SEGMENT.match(segment) or _token_like(segment):
+            break
+        out.append(segment)
+    return out
 
 
 def _where(url: str) -> str:
-    from urllib.parse import urlparse
-    p = urlparse(str(url or ""))
-    host = (p.netloc or "").split("@")[-1]
-    host = host[4:] if host.startswith("www.") else host
-    return (host + (p.path if p.path not in ("", "/") else ""))[:70] or "a page"
+    """A URL as its site and its first plain path parts: never its query
+    string, fragment, a login, or a path part that may be a secret."""
+    site = _site(url)
+    parts = _path_parts(url) if site != "a site" else []
+    return (site + "".join("/" + p for p in parts))[:70]
 
 
-def _leaf(value: Any) -> str:
-    return str(value or "").replace("\\", "/").rstrip("/").rsplit("/", 1)[-1][:70]
+def _clean(text: str) -> str:
+    """No control, format (bidi, zero-width) or line-separator characters."""
+    import unicodedata
+    return "".join(" " if unicodedata.category(c) in ("Cc", "Cf", "Zl", "Zp") else c for c in text)
 
 
-def detail_for(tool: str, args: Any) -> Optional[str]:
-    """What one call did, by the SAME fixed rules as Soleon's live activity
-    (trace_stream_router/activity_feed.detail_for): the site a fetch read
-    (never its query string), the words a search used, the file a step read,
-    saved, ran or handed over. Never a prompt, code or file contents."""
-    from urllib.parse import unquote, urlparse
+def _leaf(value) -> str:
+    return _clean(str(value or "").replace("\\", "/").rstrip("/").rsplit("/", 1)[-1])[:70]
+
+
+def detail_for(tool: str, args: dict) -> str | None:
+    """A short line saying what one tool call did, from FIXED rules over its
+    arguments: the site it read, the words it searched, the file it saved. Never
+    a URL's query string, a prompt, file contents or an answer; None for a tool
+    with no rule. The SAME rules as Soleon's live activity (agent-infra trace_stream_router/activity_feed.py: copy them together)."""
+    from urllib.parse import unquote
     t = (tool or "").lower()
     a = args if isinstance(args, dict) else {}
+    if t not in DETAIL_TOOLS:
+        return None
     out = None
     if t == "web_search" and a.get("query"):
-        out = "Searching “{}”".format(str(a["query"])[:70])
+        out = f"Searching “{_clean(str(a['query']))[:70]}”"
     elif t == "web_fetch" and a.get("url"):
-        u = urlparse(str(a["url"]))
-        host = (u.netloc or "").split("@")[-1]
-        host = host[4:] if host.startswith("www.") else host
-        path = (u.path or "").lower()
+        url = str(a["url"])
+        host = _site(url)
+        original = re.split(r"[?#]", url.split("//", 1)[-1], maxsplit=1)[0]
+        path = original.lower()
         if _IMAGE_EXT.search(path) or "special:filepath" in path:
-            out = "Downloading a picture from {}".format(host)
+            out = f"Downloading a picture from {host}"
         elif _FONT_EXT.search(path):
-            family = re.split(r"[-\[_]", _leaf(unquote(u.path)).rsplit(".", 1)[0])[0]
-            out = ("Downloading the {} font".format(family) if family and re.search(r"[g-z]", family, re.I)
-                   and not re.fullmatch(r"[0-9a-f]{8,}", family, re.I) else "Downloading a font from {}".format(host))
+            family = re.split(r"[-\[_]", _leaf(unquote(original)).rsplit(".", 1)[0])[0]
+            out = (f"Downloading the {family} font"
+                   if family and _PLAIN_SEGMENT.match(family) and not _token_like(family)
+                   and re.search(r"[g-z]", family, re.I) and not re.fullmatch(r"[0-9a-f]{8,}", family, re.I)
+                   else f"Downloading a font from {host}")
         elif path.endswith(".css") or "/css/" in path:
-            out = "Reading a stylesheet from {}".format(host)
+            out = f"Reading a stylesheet from {host}"
         else:
-            out = "Reading {}".format(_where(a["url"]))
+            out = f"Reading {_where(a['url'])}"
     elif t == "browser_navigate" and a.get("url"):
-        out = "Opening {}".format(_where(a["url"]))
+        out = f"Opening {_where(a['url'])}"
     elif t == "browser_screenshot":
         out = "Taking a screenshot of the page"
     elif t in ("read_file", "read_skill") and (a.get("path") or a.get("file") or a.get("name")):
-        out = "Reading {}".format(_leaf(a.get("path") or a.get("file") or a.get("name")))
+        out = f"Reading {_leaf(a.get('path') or a.get('file') or a.get('name'))}"
     elif t in ("write_file", "edit_file") and a.get("path"):
-        out = "Saving {}".format(_leaf(a["path"]))
+        out = f"Saving {_leaf(a['path'])}"
     elif t == "write_and_run_code":
         what = _leaf(a.get("request_id")).replace("-", " ").replace("_", " ").strip()
-        out = "Running code: {}".format(what) if what else "Running code"
+        out = f"Running code: {what}" if what else "Running code"
     elif t == "run_code_file" and (a.get("path") or a.get("file")):
-        out = "Running {}".format(_leaf(a.get("path") or a.get("file")))
+        out = f"Running {_leaf(a.get('path') or a.get('file'))}"
     elif t == "attach_file" and a.get("path"):
-        out = "Handing over {}".format(_leaf(a.get("filename") or a["path"]))
+        out = f"Handing over {_leaf(a.get('filename') or a['path'])}"
     if not out:
         return None
-    return _CONTROL.sub(" ", out).strip()[:DETAIL_MAX] or None
+    return re.sub(r"\s+", " ", _clean(out)).strip()[:DETAIL_MAX] or None
 
 
 def _safe(name: str) -> str:

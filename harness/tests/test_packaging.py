@@ -77,8 +77,9 @@ STDLIB_OK = {
     "contextlib", "fcntl", "msvcrt", "shlex",
     # the slow-call stack dump in bin/soleon_agent_tools_mcp.py
     "faulthandler",
-    # bin/soleon_activity.py writes a local run's live activity feed in order
-    "queue",
+    # bin/soleon_activity.py writes a local run's live activity feed in order,
+    # and strips format characters from a detail
+    "queue", "unicodedata",
     # bin/soleon_kb_local_ingest.py answers model calls as they finish
     "concurrent",
     # write-skill-scripts: the local runner, the script template and its example fakes

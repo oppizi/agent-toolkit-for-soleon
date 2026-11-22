@@ -143,7 +143,7 @@ def test_without_a_feed_a_call_is_unchanged(tmp_path, monkeypatch):
     ("web_fetch", {"url": "https://fonts.example.com/Inter-Bold.woff2"}, "Downloading the Inter font"),
     ("web_fetch", {"url": "https://fonts.example.com/a1b2c3d4e5f6.woff2"}, "Downloading a font from fonts.example.com"),
     ("web_fetch", {"url": "https://www.speeders.com/assets/site.css"}, "Reading a stylesheet from speeders.com"),
-    ("web_fetch", {"url": "https://user:pass@example.com/"}, "Reading example.com"),
+    ("web_fetch", {"url": "https://user:pass@example.com/"}, "Reading a site"),
     ("browser_navigate", {"url": "https://speeders.com/?q=1"}, "Opening speeders.com"),
     ("browser_screenshot", {"full_page": True}, "Taking a screenshot of the page"),
     ("read_file", {"path": "skills/company-flyer-builder/references/5-design.md"}, "Reading 5-design.md"),
@@ -157,6 +157,27 @@ def test_without_a_feed_a_call_is_unchanged(tmp_path, monkeypatch):
 ])
 def test_a_calls_detail_follows_the_platforms_rules(tool, args, expected):
     assert activity.detail_for(tool, args) == expected
+
+
+@pytest.mark.parametrize("tool,url,expected", [
+    # The platform's security cases (agent-infra #3832): no path secret, no login.
+    ("web_fetch", "https://hooks.slack.com/" + "/".join(["services", "T0FAKETEAM", "B0FAKEHOOK", "x" * 24]),
+     "Reading hooks.slack.com/services"),
+    ("browser_navigate", "https://api.telegram.org/bot123456789:AAHdqTcvCH1vGWJxfSeofSAs0K5PALDsaw/getMe",
+     "Opening api.telegram.org"),
+    ("web_fetch", "https://share.example.com/s/9f8e7d6c5b4a39281706f5e4d3c2b1a0", "Reading share.example.com/s"),
+    ("web_fetch", "https://user:p?ss@host.com/x", "Reading a site"),
+    ("web_fetch", "https://user:pa#ss@host.com/x", "Reading a site"),
+    ("web_fetch", "https://user:pa/ss@host.com/x", "Reading a site"),
+])
+def test_a_url_shows_only_its_site_and_plain_path_parts(tool, url, expected):
+    assert activity.detail_for(tool, {"url": url}) == expected
+
+
+def test_an_integrations_tool_and_hidden_characters_get_nothing():
+    assert activity.detail_for("mcp_am_eb204f248a304985_web_search", {"query": "SELECT 1"}) is None
+    d = activity.detail_for("web_search", {"query": "a‮gnp.exe​ b\x85c"})
+    assert all(ch not in d for ch in "‮​ \x85")
 
 
 def test_a_feed_line_carries_the_calls_detail(tmp_path):
