@@ -74,7 +74,7 @@ STDLIB_OK = {
     "select", "stat", "tempfile", "uuid", "base64", "mimetypes", "fnmatch",
     "dataclasses", "functools", "textwrap", "difflib",
     # the local message budget (bin/soleon_message_budget.py)
-    "contextlib", "fcntl", "shlex",
+    "contextlib", "fcntl", "msvcrt", "shlex",
     # the slow-call stack dump in bin/soleon_agent_tools_mcp.py
     "faulthandler",
     # bin/soleon_kb_local_ingest.py answers model calls as they finish

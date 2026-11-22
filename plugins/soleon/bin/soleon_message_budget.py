@@ -30,8 +30,8 @@ Where the numbers come from (each verified against Claude Code 2.1.x):
   * a helper once it finished — `modelUsage` of its result (the `usage` block
     covers only its LAST model call).
 
-The ledger (`<agent dir>/.local-budget.json`) holds one message's state — see
-`Ledger` for what a message covers.
+The ledger (`<agent dir>/.local-budget.json`) holds each live message's state
+— see `Ledger` for what a message covers.
 
 Not mirrored: Soleon can lower the wind-down point for a simple request (its
 per-turn "soft budget" comes from a complexity estimate this run cannot
@@ -49,6 +49,7 @@ import contextlib
 import json
 import os
 import sys
+import time
 from pathlib import Path
 from typing import Any, Dict, Iterable, Optional, Tuple
 
@@ -208,10 +209,71 @@ def stream_call_tokens(event: Any) -> Optional[Tuple[str, int]]:
 JOIN_WINDOW_S = 30.0
 
 
+#: A message nothing has touched for this long is dropped from the ledger.
+KEEP_S = 24 * 3600.0
+#: How long a hook waits for the ledger's lock, or for a file Windows holds
+#: open in another process, before it gives up (the plugin's hook timeout is
+#: longer).
+LOCK_WAIT_S = 5.0
+_RETRY_S = 0.02
+
+
+@contextlib.contextmanager
+def _file_lock(path: str):
+    """An exclusive lock across processes. Every tool call of a run starts its
+    own hook process, and Claude Code runs a turn's parallel calls at once: on
+    Windows an unlocked read-modify-write lost updates and collided in
+    `os.replace` (2026-11-22, `[WinError 32]` on most calls of one extraction
+    job, so the budget went unchecked)."""
+    with open(path, "a+") as fh:
+        if os.name == "nt":
+            import msvcrt
+            deadline = time.monotonic() + LOCK_WAIT_S
+            while True:
+                fh.seek(0)
+                try:
+                    msvcrt.locking(fh.fileno(), msvcrt.LK_NBLCK, 1)
+                    break
+                except OSError:
+                    if time.monotonic() >= deadline:
+                        raise
+                    time.sleep(_RETRY_S)
+            try:
+                yield
+            finally:
+                fh.seek(0)
+                msvcrt.locking(fh.fileno(), msvcrt.LK_UNLCK, 1)
+        else:
+            import fcntl
+            fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
+
+
+def _retrying(fn):
+    """`fn()`, retried while Windows refuses a file another process holds open
+    (a reader outside the lock while a writer replaces the file)."""
+    deadline = time.monotonic() + LOCK_WAIT_S
+    while True:
+        try:
+            return fn()
+        except PermissionError:
+            if time.monotonic() >= deadline:
+                raise
+            time.sleep(_RETRY_S)
+
+
+def _fresh(message: str) -> Dict[str, Any]:
+    return {"message": message, "runs": {}, "helpers": {}, "touchedAt": None,
+            "asked": [], "waived": False}
+
+
 class Ledger:
-    """One message's spend, shared by the agents' hooks, the runner and each
+    """Each message's spend, shared by the agents' hooks, the runner and each
     helper's hook — separate processes, so every change is read-modify-write
-    under an exclusive lock.
+    under an exclusive lock (`_file_lock`).
 
     A MESSAGE is one run of the pulled agent for one prompt of the person
     (resumes included), every configured subagent the conversation runs for
@@ -220,47 +282,78 @@ class Ledger:
     tool call of a prompt, subagents' included; the key is that id plus the
     agent run's id (`_message_of`).
 
-    State: `{message, runs: {agent_id: transcript}, helpers: {run: tokens},
-    touchedAt}`."""
+    The file holds every live message (`{messages: {key: state}}`), so two runs
+    of one agent at once — an eval suite, a refresh's two extraction jobs —
+    never reset each other. State: `{message, runs: {agent_id: transcript},
+    helpers: {run: tokens}, touchedAt, seenAt, asked, waived}`."""
 
     def __init__(self, agent_dir: Path, now=None):
         self.path = Path(agent_dir) / LEDGER_NAME
-        self._now = now or __import__("time").time
+        self._now = now or time.time
 
-    def _load(self) -> Dict[str, Any]:
+    def _read(self) -> Any:
         try:
-            state = json.loads(self.path.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            state = {}
-        return state if isinstance(state, dict) else {}
+            return json.loads(_retrying(lambda: self.path.read_text(encoding="utf-8")))
+        except FileNotFoundError:
+            return {}
+        except ValueError:
+            return {}
+
+    def _load(self) -> Dict[str, Dict[str, Any]]:
+        """Every message's state, by key. A file of 1.0.34 or earlier held one
+        message's state at its top level; it reads as that one message."""
+        raw = self._read()
+        if not isinstance(raw, dict):
+            return {}
+        messages = raw.get("messages")
+        if isinstance(messages, dict):
+            return {k: v for k, v in messages.items() if isinstance(k, str) and isinstance(v, dict)}
+        if isinstance(raw.get("message"), str):
+            return {raw["message"]: raw}
+        return {}
+
+    def _peek(self) -> Dict[str, Dict[str, Any]]:
+        """`_load` for a reader outside the lock: a ledger it cannot read
+        right now reads as empty."""
+        try:
+            return self._load()
+        except OSError:
+            return {}
+
+    def state(self, message: str) -> Dict[str, Any]:
+        """One message's state (a fresh one when the ledger has none)."""
+        return dict(self._peek().get(message) or _fresh(message))
+
+    def _write(self, messages: Dict[str, Dict[str, Any]]) -> None:
+        tmp = "{}.{}.tmp".format(self.path, os.getpid())
+        with open(tmp, "w", encoding="utf-8") as fh:
+            json.dump({"messages": messages}, fh)
+        _retrying(lambda: os.replace(tmp, self.path))
 
     @contextlib.contextmanager
-    def _locked(self, message: str, touch: bool = False, reset: bool = True):
-        with open(str(self.path) + ".lock", "a+") as lock:
-            try:
-                import fcntl
-                fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
-            except ImportError:  # Windows: best effort, same-process safety only
-                pass
-            state = self._load()
-            if state.get("message") != message:
-                if not reset:  # another message owns the ledger: leave it be
+    def _locked(self, message: str, touch: bool = False, create: bool = True):
+        with _file_lock(str(self.path) + ".lock"):
+            messages = self._load()
+            state = messages.get(message)
+            if state is None:
+                if not create:  # no such message: nothing to change
                     yield None
                     return
-                state = {"message": message, "runs": {}, "helpers": {}, "touchedAt": None,
-                         "asked": [], "waived": False}
+                state = _fresh(message)
+            now = self._now()
             if touch:
-                state["touchedAt"] = self._now()
+                state["touchedAt"] = now
+            state["seenAt"] = now
             yield state
-            tmp = str(self.path) + ".tmp"
-            with open(tmp, "w", encoding="utf-8") as fh:
-                json.dump(state, fh)
-            os.replace(tmp, self.path)
+            messages[message] = state
+            self._write({k: v for k, v in messages.items()
+                         if k == message or now - _seen(v, now) <= KEEP_S})
 
     def note_run(self, message: str, agent_id: str, transcript: Optional[str]) -> Dict[str, Any]:
         with self._locked(message, touch=True) as state:
-            if transcript:
-                state["runs"][agent_id] = transcript
+            # The run is recorded even without a transcript: `_message_of`
+            # finds the message a run belongs to by its id.
+            state["runs"][agent_id] = transcript or state["runs"].get(agent_id)
             return dict(state)
 
     def note_helper(self, message: str, run: str, tokens: int) -> Dict[str, Any]:
@@ -284,7 +377,7 @@ class Ledger:
         """The asked call RAN, so the person approved it: the budget is waived
         for the rest of this message. A call the hook never asked about (or one
         of another message) waives nothing."""
-        with self._locked(message, reset=False) as state:
+        with self._locked(message, create=False) as state:
             if state is None:
                 return False
             if tool_use_id in (state.get("asked") or []):
@@ -295,12 +388,43 @@ class Ledger:
         """The message a helper starting NOW belongs to: the one a pulled
         agent's tool call just touched, else `fallback` (hooks not installed —
         the helper then only answers to its own spend)."""
-        state = self._load()
-        touched = state.get("touchedAt")
-        if isinstance(state.get("message"), str) and isinstance(touched, (int, float)) \
-                and self._now() - touched <= JOIN_WINDOW_S:
-            return state["message"]
-        return fallback
+        best: Optional[Tuple[str, float]] = None
+        for key, state in self._peek().items():
+            touched = state.get("touchedAt")
+            if isinstance(touched, (int, float)) and self._now() - touched <= JOIN_WINDOW_S \
+                    and (best is None or touched > best[1]):
+                best = (key, touched)
+        return best[0] if best else fallback
+
+    def message_of_run(self, agent_id: str) -> Optional[str]:
+        """The message an agent run already belongs to, if any (the most
+        recently touched one, should several name it)."""
+        best: Optional[Tuple[str, float]] = None
+        for key, state in self._peek().items():
+            if agent_id in (state.get("runs") or {}):
+                touched = state.get("touchedAt")
+                touched = touched if isinstance(touched, (int, float)) else 0.0
+                if best is None or touched > best[1]:
+                    best = (key, touched)
+        return best[0] if best else None
+
+    def latest_with_prefix(self, prefix: str) -> Optional[str]:
+        best: Optional[Tuple[str, float]] = None
+        for key, state in self._peek().items():
+            if key.startswith(prefix):
+                touched = state.get("touchedAt")
+                touched = touched if isinstance(touched, (int, float)) else 0.0
+                if best is None or touched > best[1]:
+                    best = (key, touched)
+        return best[0] if best else None
+
+
+def _seen(state: Dict[str, Any], default: float) -> float:
+    for key in ("seenAt", "touchedAt"):
+        value = state.get(key)
+        if isinstance(value, (int, float)):
+            return float(value)
+    return default
 
 
 def approved_in_transcripts(paths: Iterable[Optional[str]], asked: Iterable[str]) -> Optional[str]:
@@ -341,13 +465,20 @@ def spent(state: Dict[str, Any]) -> int:
     return runs + sum(int(v) for v in (state.get("helpers") or {}).values())
 
 
-def refusal(used: int, budget: int, *, who: str) -> str:
-    return (
+def refusal(used: int, budget: int, *, who: str, helper: bool = False) -> str:
+    text = (
         "per-message token budget exhausted: used={used} budget={budget} — this message has used "
         "{used:,} of its {budget:,}-token Per Message Token Budget (the agent, its subagents and every "
         "helper share it), and Soleon stops tool use at {pct}% of it. Do not call any more tools: {who} "
         "must answer now from what it has already gathered, and say plainly what it could not get to."
     ).format(used=used, budget=budget, pct=int(WIND_DOWN_FRACTION * 100), who=who)
+    if helper:
+        # A helper runs headless and cannot ask the person; the agent's next
+        # tool call does, and an approval lets the agent hand the rest out again.
+        text += (" Say that the local token budget stopped you and list what is left: the person can "
+                 "waive the budget when the agent's next tool call asks, and the agent can then hand "
+                 "the rest out again.")
+    return text
 
 
 def waiver_request(used: int, budget: int, *, extraction: bool, who: str) -> str:
@@ -360,7 +491,8 @@ def waiver_request(used: int, budget: int, *, extraction: bool, who: str) -> str
         "Soleon token budget: this {scope} has used {used:,} of its {budget:,}-token {what} "
         "(used={used} budget={budget}; the agent, its subagents and every helper share it), and "
         "Soleon stops tool use at {pct}% of it. This run is local, so you may waive the budget: "
-        "approve this call and the budget is off for the rest of this {scope}. If this call is "
+        "approve this call and the budget is off for the rest of this {scope}, and any task a helper "
+        "left unfinished because of the budget can be handed out again. If this call is "
         "refused, do not call any more tools: {who} must answer now from what it has already "
         "gathered, and say plainly what it could not get to."
     ).format(used=used, budget=budget, what=what, scope=scope,
@@ -427,14 +559,24 @@ def _message_of(hook: Dict[str, Any], agent_dir: Path, agent_id: str, is_subagen
     prompt were each refused after ~98k tokens, together past the 85% mark).
     A resumed run keeps its agent id, so it stays in its message. A configured
     subagent (`<slug>--<id>`) is run by the conversation FOR the agent, so it
-    joins the agent run of the same prompt the ledger holds."""
+    joins the agent run of the same prompt the ledger holds.
+
+    A run stays in the message it started in. Claude Code stamps a call with
+    the conversation's CURRENT prompt id, so a run that outlives its prompt —
+    one in the background while the person writes again, or one whose
+    approval prompt was answered later — would otherwise start a new message
+    at zero and lose its approval (2026-11-22: an extraction job's approved
+    call came back under a new prompt id; the waiver was never recorded)."""
     prompt_id = hook.get("prompt_id")
     if isinstance(prompt_id, str) and prompt_id:
+        ledger = Ledger(agent_dir)
+        known = ledger.message_of_run(agent_id)
+        if known:
+            return known
         prompt = "prompt:" + prompt_id
         if not is_subagent:
             return prompt + ":" + agent_id
-        current = Ledger(agent_dir)._load().get("message")
-        return current if isinstance(current, str) and current.startswith(prompt + ":") else prompt
+        return ledger.latest_with_prefix(prompt + ":") or prompt
     try:
         data = json.loads((agent_dir / TURN_FILE_NAME).read_text(encoding="utf-8"))
     except (OSError, ValueError):
@@ -498,8 +640,19 @@ def agent_posttool(hook: Dict[str, Any]) -> int:
     ledger = Ledger(agent_dir)
     message = _message_of(hook, agent_dir, str(agent_id), is_subagent)
     if ledger.confirm_ask(message, tool_use_id):
-        sys.stdout.write(json.dumps({"systemMessage": "Soleon: you approved going past the local token "
-                                     "budget, so it is off for the rest of this run."}) + "\n")
+        sys.stdout.write(json.dumps({
+            "systemMessage": "Soleon: you approved going past the local token budget, so it is off for "
+                             "the rest of this run.",
+            # The model's copy: without it the agent still believes the budget
+            # is spent and stops researching (2026-11-22).
+            "hookSpecificOutput": {
+                "hookEventName": "PostToolUse",
+                "additionalContext": "The person approved going past the local token budget: it is off "
+                                     "for the rest of this run, for you and every helper. Carry on with "
+                                     "the work, and hand out again any task a helper left unfinished "
+                                     "because of the budget.",
+            },
+        }) + "\n")
     return 0
 
 
@@ -516,7 +669,7 @@ def helper_pretool(hook: Dict[str, Any], agent_dir: Path, message: str, run: str
         return 0
     used = spent(state)
     if used >= wind_down_at(budget):
-        _deny(refusal(used, budget, who="this helper"))
+        _deny(refusal(used, budget, who="this helper", helper=True))
     return 0
 
 
