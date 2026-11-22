@@ -55,6 +55,42 @@ def test_a_rebuild_drops_files_the_plugin_no_longer_has(tmp_path):
     assert not stale.exists()
 
 
+def _installed(tmp_path, install_path):
+    installed = tmp_path / "installed_plugins.json"
+    installed.write_text(json.dumps({"version": 2, "plugins": {"soleon-prod@soleon-prod": [
+        {"scope": "user", "installPath": str(install_path), "version": "1.0.31"}]}}), encoding="utf-8")
+    return installed
+
+
+def test_the_installed_prod_copy_is_refreshed_from_the_rebuild(tmp_path):
+    """Claude Code runs the copy in its install cache; a same-version rebuild
+    never reached it, so the stale copy's hooks pushed every save twice
+    (2026-11-22)."""
+    built = dev_live.build_prod_copy(tmp_path / "market")
+    cache = tmp_path / "cache"
+    stale = cache / "soleon-prod" / "soleon-prod" / "1.0.31"
+    (stale / "hooks").mkdir(parents=True)
+    (stale / "hooks" / "hooks.json").write_text("{}", encoding="utf-8")
+    refreshed = dev_live.refresh_installed_prod(built, _installed(tmp_path, stale), cache)
+    assert refreshed == [str(stale)]
+    assert not (stale / "hooks").exists()
+    assert _files(stale) == _files(built)
+
+
+def test_a_folder_outside_the_plugin_cache_is_never_touched(tmp_path):
+    built = dev_live.build_prod_copy(tmp_path / "market")
+    elsewhere = tmp_path / "somewhere-else"
+    (elsewhere / "keep.txt").parent.mkdir(parents=True)
+    (elsewhere / "keep.txt").write_text("mine", encoding="utf-8")
+    assert dev_live.refresh_installed_prod(built, _installed(tmp_path, elsewhere), tmp_path / "cache") == []
+    assert (elsewhere / "keep.txt").read_text(encoding="utf-8") == "mine"
+
+
+def test_no_installed_prod_copy_is_fine(tmp_path):
+    built = dev_live.build_prod_copy(tmp_path / "market")
+    assert dev_live.refresh_installed_prod(built, tmp_path / "missing.json", tmp_path / "cache") == []
+
+
 @pytest.mark.parametrize("state, says", [
     ({"branch": "feat/x", "local_changes": False}, "not 'live'"),
     ({"branch": "live", "local_changes": True}, "local changes"),

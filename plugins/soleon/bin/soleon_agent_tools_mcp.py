@@ -1401,7 +1401,21 @@ class AgentToolsServer:
             return _text_result("Could not reach Soleon: {}. Retry once the platform is reachable.".format(exc), True)
         finally:
             faulthandler.cancel_dump_traceback_later()
+        self._record_activity(platform_name, entry, envelope)
         return self._with_identity_hint(name, args, self.render(name, envelope))
+
+    def _record_activity(self, platform_name: str, entry: Dict[str, Any], envelope: Any) -> None:
+        """Live activity (soleon_activity.py): when the app that started this
+        run asked for it, the finished call and the files it saved go to the
+        app's feed, on a background thread. Never fails or slows the call."""
+        import soleon_activity
+        try:
+            feed = soleon_activity.current()
+            if feed is None or not isinstance(envelope, dict) or envelope.get("state") not in ("done", "error"):
+                return
+            feed.add(platform_name, entry, soleon_activity.saved_files_of(envelope), self.turn.current() or "")
+        except Exception as exc:  # noqa: BLE001 — the feed is best effort; the call's own result stands
+            _log("live activity entry for {} not written: {}".format(platform_name, exc))
 
     def _schema_for(self, name: str) -> Dict[str, Any]:
         for t in self.published:
