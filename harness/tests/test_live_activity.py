@@ -20,8 +20,15 @@ import soleon_activity as activity  # noqa: E402
 import soleon_agent_tools_mcp as shim  # noqa: E402
 
 
+def test_an_svg_is_matched_only_when_named(tmp_path):
+    assert not activity.type_matches("image/svg+xml", ["image/*"])
+    assert not activity.type_matches("text/html", ["*/*"])
+    assert activity.type_matches("image/svg+xml", ["image/svg+xml"])
+    assert activity.type_matches("image/png", ["image/*"])
+
+
 def _spec(tmp_path, **over):
-    value = {"feed": str(tmp_path / "run-1.jsonl"), "files": ["image/*", "application/json"],
+    value = {"feed": str(tmp_path / "run-1.jsonl"), "files": ["image/*", "image/svg+xml", "application/json"],
              "max_file_bytes": 1000, **over}
     return activity.spec({activity.ENV: json.dumps(value)})
 
