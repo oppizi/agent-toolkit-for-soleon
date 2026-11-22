@@ -112,6 +112,12 @@ def _agent_spend(tmp_path, tokens_per_call, calls=1, agent_id="a1"):
                        for i in range(calls)])
 
 
+def _only_state(agent_dir):
+    messages = mb.Ledger(agent_dir)._load()
+    assert len(messages) == 1, messages
+    return next(iter(messages.values()))
+
+
 def _run_agent_hook(hook, capsys):
     rc = mb.main(["agent-pretool"], stream=io.StringIO(json.dumps(hook)))
     return rc, capsys.readouterr().out.strip()
@@ -320,7 +326,7 @@ def test_a_helpers_calls_are_booked_as_they_stream_and_settled_from_its_total(tm
     finally:
         mb.Ledger.note_helper = orig
     assert seen == [30000, 30000, 65000, 64500 - 54000 + 875 + 500]  # settled: FINAL, cache-weighted
-    state = json.loads((agent_dir / mb.LEDGER_NAME).read_text())
+    state = _only_state(agent_dir)
     assert list(state["helpers"].values()) == [11875]
     # The ledger names the helper that spent it.
     assert re.fullmatch(re.escape(WRAPPER["name"]) + r"-[0-9a-f]{12}", list(state["helpers"])[0])
@@ -331,7 +337,7 @@ def test_a_helper_that_dies_keeps_the_spend_it_streamed(tmp_path):
     runner, _ = _runner(agent_dir, events=[_assistant("m1", 42000)])
     out = runner.run(WRAPPER, "x", approved=False, turn="t1")
     assert out.get("isError")
-    assert list(json.loads((agent_dir / mb.LEDGER_NAME).read_text())["helpers"].values()) == [42000]
+    assert list(_only_state(agent_dir)["helpers"].values()) == [42000]
 
 
 def test_with_the_budget_off_a_helper_runs_as_before(tmp_path):
@@ -365,7 +371,7 @@ def test_a_helper_joins_the_message_of_the_call_that_started_it(tmp_path, capsys
     runner.run(WRAPPER, "x", approved=False, turn="t1")
     hook_cmd = json.loads(dict(zip(calls[0][0], calls[0][0][1:]))["--settings"])["hooks"]["PreToolUse"][0]["hooks"][0]["command"]
     assert "--message prompt:p1" in hook_cmd
-    assert json.loads((agent_dir / mb.LEDGER_NAME).read_text())["helpers"]
+    assert _only_state(agent_dir)["helpers"]
 
 
 def test_a_stale_message_is_not_joined(tmp_path):
@@ -511,7 +517,7 @@ def test_at_the_wind_down_point_the_person_is_asked_to_waive_the_budget(tmp_path
     assert "approve this call and the budget is off for the rest of this message" in reason
     assert "do not call any more tools" in reason and "answer now" in reason, \
         "a -p run denies the ask and the model reads this reason: it must say what to do"
-    assert mb.Ledger(agent_dir)._load()["asked"] == ["t1"]
+    assert mb.Ledger(agent_dir).state(MSG)["asked"] == ["t1"]
 
 
 def test_with_no_one_to_ask_the_call_is_refused_outright(tmp_path, capsys):
@@ -522,7 +528,7 @@ def test_with_no_one_to_ask_the_call_is_refused_outright(tmp_path, capsys):
     decision = json.loads(out)["hookSpecificOutput"]
     assert decision["permissionDecision"] == "deny"
     assert decision["permissionDecisionReason"].startswith("per-message token budget exhausted")
-    assert not mb.Ledger(agent_dir)._load().get("asked")
+    assert not mb.Ledger(agent_dir).state(MSG).get("asked")
 
 
 def test_an_approved_call_waives_the_budget_for_the_rest_of_the_message(tmp_path, capsys):
@@ -546,7 +552,7 @@ def test_a_refused_ask_waives_nothing_and_the_next_call_asks_again(tmp_path, cap
     # refused: the call never ran, so no PostToolUse for t1
     _, out = _run_agent_hook(_hook(tmp_path, tool_use_id="t2", mode="default"), capsys)
     assert json.loads(out)["hookSpecificOutput"]["permissionDecision"] == "ask"
-    assert not mb.Ledger(agent_dir)._load()["waived"]
+    assert not mb.Ledger(agent_dir).state(MSG)["waived"]
 
 
 def test_a_call_that_was_never_asked_about_waives_nothing(tmp_path, capsys):
@@ -555,7 +561,7 @@ def test_a_call_that_was_never_asked_about_waives_nothing(tmp_path, capsys):
     _agent_spend(tmp_path, 1000)
     _run_agent_hook(_hook(tmp_path, tool_use_id="t1", mode="default"), capsys)
     assert _run_post_hook(_hook(tmp_path, tool_use_id="t1", event="PostToolUse"), capsys) == (0, "")
-    assert not mb.Ledger(agent_dir)._load()["waived"]
+    assert not mb.Ledger(agent_dir).state(MSG)["waived"]
     _agent_spend(tmp_path, 85000)
     _, out = _run_agent_hook(_hook(tmp_path, tool_use_id="t2", mode="default"), capsys)
     assert json.loads(out)["hookSpecificOutput"]["permissionDecision"] == "ask"
@@ -566,7 +572,9 @@ def test_a_waiver_ends_with_its_message(tmp_path, capsys):
     _agent_spend(tmp_path, 85000)
     _run_agent_hook(_hook(tmp_path, tool_use_id="t1", mode="default"), capsys)
     _run_post_hook(_hook(tmp_path, tool_use_id="t1", event="PostToolUse"), capsys)
-    _, out = _run_agent_hook(_hook(tmp_path, tool_use_id="t2", prompt_id="p2", mode="default"), capsys)
+    _agent_spend(tmp_path, 85000, agent_id="a2")
+    _, out = _run_agent_hook(_hook(tmp_path, agent_id="a2", tool_use_id="t2", prompt_id="p2",
+                                   mode="default"), capsys)
     assert json.loads(out)["hookSpecificOutput"]["permissionDecision"] == "ask"
 
 
@@ -576,7 +584,8 @@ def test_another_messages_approval_leaves_the_ledger_alone(tmp_path):
     ledger.note_helper(MSG, "r1", 70000)
     ledger.note_ask(MSG, "t1")
     assert ledger.confirm_ask("prompt:other:a9", "t1") is False
-    state = ledger._load()
+    assert set(ledger._load()) == {MSG}
+    state = ledger.state(MSG)
     assert state["message"] == MSG and state["helpers"] == {"r1": 70000} and not state["waived"]
 
 
@@ -605,7 +614,7 @@ def test_an_approval_is_seen_in_the_transcript_without_the_posttool_hook(tmp_pat
     _run_agent_hook(_hook(tmp_path, tool_use_id="t1", mode="default"), capsys)
     _result_in_transcript(tmp_path, "t1", is_error=False)
     assert _run_agent_hook(_hook(tmp_path, tool_use_id="t2", mode="default"), capsys) == (0, "")
-    assert mb.Ledger(agent_dir)._load()["waived"] is True
+    assert mb.Ledger(agent_dir).state(MSG)["waived"] is True
     assert _helper_decision(agent_dir, capsys) is None
 
 
@@ -616,7 +625,7 @@ def test_a_refusal_in_the_transcript_waives_nothing(tmp_path, capsys):
     _result_in_transcript(tmp_path, "t1", is_error=True)
     _, out = _run_agent_hook(_hook(tmp_path, tool_use_id="t2", mode="default"), capsys)
     assert json.loads(out)["hookSpecificOutput"]["permissionDecision"] == "ask"
-    assert not mb.Ledger(agent_dir)._load()["waived"]
+    assert not mb.Ledger(agent_dir).state(MSG)["waived"]
 
 
 def test_a_successful_call_that_was_never_asked_about_waives_nothing(tmp_path, capsys):
@@ -629,4 +638,103 @@ def test_a_successful_call_that_was_never_asked_about_waives_nothing(tmp_path, c
     _run_agent_hook(_hook(tmp_path, tool_use_id="t1", mode="default"), capsys)
     _, out = _run_agent_hook(_hook(tmp_path, tool_use_id="t2", mode="default"), capsys)
     assert json.loads(out)["hookSpecificOutput"]["permissionDecision"] == "ask"
-    assert not mb.Ledger(agent_dir)._load()["waived"]
+    assert not mb.Ledger(agent_dir).state(MSG)["waived"]
+
+
+# --- the ledger across processes, prompts and runs (2026-11-22) ------------------------
+
+def test_a_run_keeps_its_message_when_a_later_call_carries_a_new_prompt_id(tmp_path, capsys):
+    """2026-11-22: an extraction job ran in the background; the person's
+    approval came back on a call stamped with the conversation's NEW prompt id.
+    Keyed by that id, the run started a new message at zero and the approval
+    was never recorded."""
+    agent_dir = _pulled(tmp_path, budget=100000)
+    _agent_spend(tmp_path, 85000)
+    _run_agent_hook(_hook(tmp_path, tool_use_id="t1", mode="default"), capsys)
+    _run_post_hook(_hook(tmp_path, tool_use_id="t1", prompt_id="p2", event="PostToolUse"), capsys)
+    assert mb.Ledger(agent_dir).state(MSG)["waived"] is True
+    _agent_spend(tmp_path, 900000)
+    assert _run_agent_hook(_hook(tmp_path, tool_use_id="t2", prompt_id="p3", mode="default"), capsys) == (0, "")
+    assert set(mb.Ledger(agent_dir)._load()) == {MSG}
+
+
+def test_two_runs_at_once_keep_their_own_state(tmp_path, capsys):
+    """Two runs of one agent at once (an eval suite, a refresh's two jobs)
+    used to reset each other's ledger on every call, dropping helpers' spend."""
+    agent_dir = _pulled(tmp_path, budget=100000)
+    ledger = mb.Ledger(agent_dir)
+    _agent_spend(tmp_path, 1000, agent_id="a1")
+    _agent_spend(tmp_path, 1000, agent_id="a2")
+    _run_agent_hook(_hook(tmp_path, agent_id="a1"), capsys)
+    ledger.note_helper(MSG, "r1", 84000)
+    _run_agent_hook(_hook(tmp_path, agent_id="a2"), capsys)
+    _, out = _run_agent_hook(_hook(tmp_path, agent_id="a1"), capsys)
+    assert "used=85000" in out
+    assert ledger.state("prompt:p1:a2")["helpers"] == {}
+
+
+def test_a_ledger_written_by_an_older_toolkit_still_reads(tmp_path, capsys):
+    agent_dir = _pulled(tmp_path, budget=100000)
+    (agent_dir / mb.LEDGER_NAME).write_text(json.dumps(
+        {"message": MSG, "runs": {}, "helpers": {"r1": 90000}, "touchedAt": None,
+         "asked": [], "waived": False}))
+    _agent_spend(tmp_path, 1000)
+    _, out = _run_agent_hook(_hook(tmp_path), capsys)
+    assert "used=91000" in out
+
+
+def test_an_old_message_is_dropped_from_the_ledger(tmp_path):
+    agent_dir = _pulled(tmp_path)
+    clock = [1000.0]
+    ledger = mb.Ledger(agent_dir, now=lambda: clock[0])
+    ledger.note_helper("prompt:old:a0", "r1", 5)
+    clock[0] += mb.KEEP_S + 1
+    ledger.note_helper(MSG, "r1", 5)
+    assert set(ledger._load()) == {MSG}
+
+
+_WRITER = """
+import sys
+sys.path.insert(0, sys.argv[1])
+import soleon_message_budget as mb
+ledger = mb.Ledger(sys.argv[2])
+for i in range(int(sys.argv[4])):
+    ledger.note_helper(sys.argv[3], "w{}-{}".format(sys.argv[5], i), 1)
+    ledger.state(sys.argv[3])
+"""
+
+
+def test_parallel_hook_processes_lose_no_update(tmp_path):
+    """Every tool call starts its own hook process, and a turn's parallel calls
+    run at once. 2026-11-22 on Windows: `[WinError 32]` from os.replace on most
+    calls of an extraction job, so the budget went unchecked."""
+    import subprocess
+    agent_dir = _pulled(tmp_path)
+    script = tmp_path / "writer.py"
+    script.write_text(_WRITER)
+    procs = [subprocess.Popen([sys.executable, str(script), str(BIN), str(agent_dir), MSG, "15", str(n)],
+                              stdout=subprocess.PIPE, stderr=subprocess.PIPE) for n in range(6)]
+    errors = [p.communicate(timeout=120)[1].decode("utf-8", "replace") for p in procs]
+    assert all(p.returncode == 0 for p in procs), errors
+    assert len(mb.Ledger(agent_dir).state(MSG)["helpers"]) == 90
+
+
+def test_a_helper_held_by_the_budget_says_the_person_can_waive_it(tmp_path, capsys):
+    agent_dir = _pulled(tmp_path, budget=100000)
+    mb.Ledger(agent_dir).note_helper(MSG, "r1", 90000)
+    mb.main(["helper-pretool", "--agent-dir", str(agent_dir), "--message", MSG, "--run", "r1"],
+            stream=io.StringIO(json.dumps({"tool_name": "x"})))
+    reason = json.loads(capsys.readouterr().out)["hookSpecificOutput"]["permissionDecisionReason"]
+    assert "the person can waive the budget" in reason and "hand the rest out again" in reason
+
+
+def test_an_approval_tells_the_agent_the_budget_is_off(tmp_path, capsys):
+    """2026-11-22: approved, the extractor still wrote "most of the shared
+    budget is spent, so I am moving to writing" — nothing told the model."""
+    _pulled(tmp_path, budget=100000)
+    _agent_spend(tmp_path, 85000)
+    _run_agent_hook(_hook(tmp_path, tool_use_id="t1", mode="default"), capsys)
+    _, out = _run_post_hook(_hook(tmp_path, tool_use_id="t1", event="PostToolUse"), capsys)
+    context = json.loads(out)["hookSpecificOutput"]
+    assert context["hookEventName"] == "PostToolUse"
+    assert "budget: it is off" in context["additionalContext"]
