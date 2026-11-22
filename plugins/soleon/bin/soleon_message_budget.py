@@ -303,6 +303,39 @@ class Ledger:
         return fallback
 
 
+def approved_in_transcripts(paths: Iterable[Optional[str]], asked: Iterable[str]) -> Optional[str]:
+    """The first asked call whose result a transcript holds as a SUCCESS, else
+    None. A call the person refused comes back `is_error: true` with the
+    refusal; one they approved ran and has its real result. A tool that failed
+    after an approval also reads as an error, so it waives nothing and the next
+    call asks again (never the other way round).
+
+    This is the approval's second witness, beside the PostToolUse hook: Claude
+    Code reads a plugin's hook LIST only when a conversation starts, so a
+    conversation that began before the hook was added never runs it."""
+    wanted = {a for a in asked if isinstance(a, str) and a}
+    if not wanted:
+        return None
+    for path in paths:
+        if not path or not os.path.isfile(path):
+            continue
+        with open(path, "r", encoding="utf-8") as fh:
+            for line in fh:
+                if '"tool_result"' not in line:
+                    continue
+                try:
+                    rec = json.loads(line)
+                except ValueError:
+                    continue
+                msg = rec.get("message") if isinstance(rec, dict) else None
+                content = msg.get("content") if isinstance(msg, dict) else None
+                for block in content if isinstance(content, list) else []:
+                    if isinstance(block, dict) and block.get("type") == "tool_result" \
+                            and block.get("tool_use_id") in wanted and block.get("is_error") is not True:
+                        return block["tool_use_id"]
+    return None
+
+
 def spent(state: Dict[str, Any]) -> int:
     runs = sum(transcript_tokens(p) for p in (state.get("runs") or {}).values())
     return runs + sum(int(v) for v in (state.get("helpers") or {}).values())
@@ -432,6 +465,9 @@ def agent_pretool(hook: Dict[str, Any]) -> int:
     transcript = subagent_transcript(hook.get("transcript_path"), str(agent_id))
     state = ledger.note_run(message, str(agent_id), transcript)
     if state.get("waived") or (extraction and _is_save_tool(hook.get("tool_name"))):
+        return 0
+    approved = approved_in_transcripts((state.get("runs") or {}).values(), state.get("asked") or [])
+    if approved and ledger.confirm_ask(message, approved):
         return 0
     used = spent(state)
     if used < wind_down_at(budget):
