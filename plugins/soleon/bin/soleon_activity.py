@@ -75,8 +75,14 @@ def spec(environ: Optional[Dict[str, str]] = None) -> Optional[Dict[str, Any]]:
 
 
 #: Types matched only when named exactly, as on Soleon: a wildcard never
-#: matches content that can run scripts when rendered.
-ACTIVE_TYPES = frozenset({"image/svg+xml", "text/html", "application/xhtml+xml", "text/xml", "application/xml"})
+#: matches content that can run scripts when rendered (HTML, script, and
+#: every XML type: SVG, XSLT, RSS...).
+ACTIVE_TYPES = frozenset({"text/html", "application/xhtml+xml", "text/javascript", "application/javascript",
+                          "application/ecmascript", "text/ecmascript", "text/xsl"})
+
+
+def is_active_type(ct: str) -> bool:
+    return ct in ACTIVE_TYPES or ct.endswith("+xml") or ct.endswith("/xml")
 
 
 def type_matches(content_type: str, patterns: List[str]) -> bool:
@@ -87,7 +93,7 @@ def type_matches(content_type: str, patterns: List[str]) -> bool:
     for p in patterns or []:
         if p == ct:
             return True
-        if ct not in ACTIVE_TYPES and (p == "*/*" or (p.endswith("/*") and ct.startswith(p[:-1]))):
+        if not is_active_type(ct) and (p == "*/*" or (p.endswith("/*") and ct.startswith(p[:-1]))):
             return True
     return False
 
