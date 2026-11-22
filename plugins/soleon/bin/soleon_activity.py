@@ -85,6 +85,7 @@ def type_matches(content_type: str, patterns: List[str]) -> bool:
     return False
 
 
+CODE_RUN_TOOLS = ("run_code_file", "write_and_run_code")
 _MCP_RE = re.compile(r"^(?:mcp|custom)_(?P<server>[a-z]{1,6}_[0-9a-f]{6,32}(?=_|\Z)|[^_:.\s]+)", re.I)
 
 
@@ -105,6 +106,10 @@ def label_for(platform_name: str, entry: Optional[Dict[str, Any]] = None) -> str
         return "Working with files…"
     if "browser" in low:
         return "Browsing…"
+    if low in CODE_RUN_TOOLS:
+        # On Soleon a code run's own steps read "Running Python…"; a local
+        # feed has only the call, so it carries that label.
+        return "Running Python…"
     server_name = str(entry.get("serverName") or "").strip()
     m = _MCP_RE.match(name)
     if m:

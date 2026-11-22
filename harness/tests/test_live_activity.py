@@ -86,6 +86,8 @@ def test_only_https_links_are_fetched(tmp_path):
     ("mcp_am_eb204f248a304985_read", {"serverName": "Google Drive"}, "Using Google Drive…"),
     ("github_read", {"serverName": "GitHub"}, "Using GitHub…"),
     ("web_fetch", {}, "Working…"),
+    ("write_and_run_code", {}, "Running Python…"),
+    ("run_code_file", {}, "Running Python…"),
 ])
 def test_labels_follow_the_status_lines_rules(name, entry, label):
     assert activity.label_for(name, entry) == label
