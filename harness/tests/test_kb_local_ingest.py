@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import json
 import sys
+import threading
+import time
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -41,11 +43,18 @@ LOOKUP = {"messages": [
 ], "tools": [_fn("emit_distill_plan"), _fn("search_wiki"), _fn("read_page")], "tool_choice": "required"}
 
 
+def _branches(schema):
+    assert "anyOf" not in schema, "claude -p refuses anyOf at a schema's top level"
+    assert schema["required"] == [lm.CHOICE_KEY]
+    return {b["properties"]["tool"]["enum"][0]: b["properties"]["arguments"]
+            for b in schema["properties"][lm.CHOICE_KEY]["anyOf"]}
+
+
 def test_several_tools_ask_for_one_named_choice():
     cmd = lm.command("claude", "sonnet", LOOKUP)
     flags = dict(zip(cmd[1:], cmd[2:]))
     schema = json.loads(flags["--json-schema"])
-    assert schema["properties"]["tool"]["enum"] == ["emit_distill_plan", "search_wiki", "read_page"]
+    assert list(_branches(schema)) == ["emit_distill_plan", "search_wiki", "read_page"]
     assert "emit_distill_plan: emit_distill_plan it" in flags["--system-prompt"]
     assert flags["--system-prompt"].startswith("You distill.")
     prompt = lm.prompt_of(LOOKUP)
@@ -60,20 +69,54 @@ def test_a_named_tool_choice_offers_only_that_tool():
     assert (form, name) == ("tool", "emit_distill_plan")
 
 
+def _chose(tool, arguments):
+    return {"structured_output": {lm.CHOICE_KEY: {"tool": tool, "arguments": arguments}}}
+
+
 def test_a_choice_answer_becomes_that_tools_call():
-    out = lm.completion(LOOKUP, {"structured_output": {"tool": "read_page",
-                                                        "arguments": {"path": "concepts/fees.md"}}})
+    out = lm.completion(LOOKUP, _chose("read_page", {"path": "concepts/fees.md"}))
     call, = out["choices"][0]["message"]["tool_calls"]
     assert call["function"]["name"] == "read_page"
     assert json.loads(call["function"]["arguments"]) == {"path": "concepts/fees.md"}
     assert out["choices"][0]["finish_reason"] == "tool_calls"
 
 
+PLAN_SCHEMA = {"type": "object", "properties": {"source_page": {"type": "object"},
+                                                "entity_touches": {"type": "array"}},
+               "required": ["source_page", "entity_touches"]}
+
+
+def test_each_choice_carries_its_tools_own_input_schema():
+    """2026-11-21: with `arguments` checked only as an object, the model called
+    emit_distill_plan without source_page and two sources failed."""
+    body = {**LOOKUP, "tools": [_fn("emit_distill_plan", PLAN_SCHEMA), _fn("search_wiki")]}
+    schema, form, _ = lm._schema(body)
+    assert form == "choose"
+    assert _branches(schema) == {"emit_distill_plan": PLAN_SCHEMA, "search_wiki": {"type": "object"}}
+
+
+def test_a_self_referencing_tool_schema_is_checked_as_an_object():
+    ref = {"type": "object", "properties": {"a": {"$ref": "#/$defs/A"}}, "$defs": {"A": {"type": "string"}}}
+    body = {**LOOKUP, "tools": [_fn("emit_distill_plan", ref), _fn("search_wiki")]}
+    assert _branches(lm._schema(body)[0])["emit_distill_plan"] == {"type": "object"}
+
+
+@pytest.mark.parametrize("value, needle", [
+    ({"tool": "read_page", "arguments": {}}, "names no tool"),            # the old, unwrapped shape
+    ({lm.CHOICE_KEY: {"tool": "read_page", "arguments": "{}"}}, "not an object"),
+    ({lm.CHOICE_KEY: {"tool": "delete_wiki", "arguments": {}}}, "did not offer"),
+    ({lm.CHOICE_KEY: {"tool": lm.REPLY_CHOICE, "arguments": {"text": "x"}}}, "did not offer"),
+])
+def test_a_malformed_choice_is_an_error_never_an_empty_call(value, needle):
+    with pytest.raises(ValueError, match=needle):
+        lm.completion(LOOKUP, {"structured_output": value})
+
+
 def test_auto_choice_may_reply_in_words():
     body = {**LOOKUP, "tool_choice": "auto"}
     schema, form, _ = lm._schema(body)
-    assert lm.REPLY_CHOICE in schema["properties"]["tool"]["enum"]
-    out = lm.completion(body, {"structured_output": {"tool": lm.REPLY_CHOICE, "arguments": {"text": "{}"}}})
+    assert _branches(schema)[lm.REPLY_CHOICE]["required"] == ["text"]
+    out = lm.completion(body, _chose(lm.REPLY_CHOICE, {"text": "{}"}))
     assert out["choices"][0]["message"]["content"] == "{}"
 
 
@@ -97,26 +140,83 @@ def _state(*, requests=(), sources=(), jobs=(), done=False):
             "sources": list(sources), "extraction_jobs": list(jobs)}
 
 
-def test_a_run_answers_every_waiting_request_and_stops_when_done():
-    reqs = [{"request_id": "%032x" % i, "model": "m", "body": {"messages": []}} for i in range(6)]
-    client = FakeClient([
-        _state(requests=reqs, sources=[{"sourceId": "s1", "status": "ingesting", "title": "Spain"}]),
-        _state(), _state(),
-        _state(sources=[{"sourceId": "s1", "status": "ready", "title": "Spain", "pagesContributed": 9}],
-               done=True),
-    ])
-    lines, answered = [], []
+class PlatformDouble:
+    """The poll as the platform answers it: a request waits until an answer
+    for it arrives, and the run is done once every request was answered."""
+
+    def __init__(self, requests, on_answer=lambda rid: None):
+        self.waiting = {r["request_id"]: r for r in requests}
+        self.batches, self.on_answer = [], on_answer
+        self.lock = threading.Lock()
+
+    def call_tool(self, name, args):
+        with self.lock:
+            for a in args.get("answers") or []:
+                self.waiting.pop(a["request_id"], None)
+                self.on_answer(a["request_id"])
+            if args.get("answers"):
+                self.batches.append([a["request_id"] for a in args["answers"]])
+            done = not self.waiting
+            source = {"sourceId": "s1", "status": "ready" if done else "ingesting", "title": "Spain"}
+            if done:
+                source["pagesContributed"] = 9
+            return {"status": 200, "body": _state(requests=list(self.waiting.values()),
+                                                  sources=[source], done=done)}
+
+
+def _req(i):
+    return {"request_id": "%032x" % i, "model": "m", "body": {"messages": []}}
+
+
+def test_a_run_answers_every_waiting_request_once_and_stops_when_done():
+    reqs = [_req(i) for i in range(6)]
+    client, lines, answered = PlatformDouble(reqs), [], []
 
     def answer(requests):
         answered.extend(r["request_id"] for r in requests)
         return [{"request_id": r["request_id"], "completion": {"choices": []}} for r in requests]
 
-    code = kli.LocalIngestRun(client, "kb1", CALL, answer, sleep=lambda s: None, out=lines.append).run()
+    code = kli.LocalIngestRun(client, "kb1", CALL, answer, sleep=lambda s: time.sleep(0.01),
+                              out=lines.append).run()
     assert code == 0
-    assert answered == [r["request_id"] for r in reqs]
-    sent = [len(args["answers"]) for name, args in client.calls if "answers" in args]
-    assert sent == [kli.ANSWERS_PER_CALL, 6 - kli.ANSWERS_PER_CALL], "answers go in small batches"
+    assert sorted(answered) == sorted(r["request_id"] for r in reqs), "each call answered exactly once"
+    assert all(len(b) <= kli.ANSWERS_PER_CALL for b in client.batches), "answers go in small batches"
+    assert sorted(sum(client.batches, [])) == sorted(answered)
     assert "SOURCE s1 ready Spain (9 pages)" in lines and lines[-1].startswith("DONE 1 source")
+
+
+def test_a_slow_call_never_holds_back_an_answer_that_is_ready():
+    """2026-11-21: answers went back only once the slowest call of a batch
+    returned, so a source's next call waited on other sources' largest
+    documents and two sources ran out of time."""
+    slow, fast = _req(1), _req(2)
+    fast_handed_back = threading.Event()
+    client = PlatformDouble([slow, fast],
+                            on_answer=lambda rid: rid == fast["request_id"] and fast_handed_back.set())
+
+    def answer(requests):
+        r, = requests
+        if r["request_id"] == slow["request_id"]:
+            assert fast_handed_back.wait(5), "the fast answer waited for the slow call"
+        return [{"request_id": r["request_id"], "completion": {"choices": []}}]
+
+    code = kli.LocalIngestRun(client, "kb1", CALL, answer, sleep=lambda s: time.sleep(0.01),
+                              out=lambda line: None).run()
+    assert code == 0
+    assert client.batches[0] == [fast["request_id"]]
+
+
+def test_an_answerer_that_raises_becomes_that_calls_error():
+    client, lines = PlatformDouble([_req(3)]), []
+    posted = []
+    client.on_answer = posted.append
+
+    def answer(requests):
+        raise RuntimeError("boom")
+
+    kli.LocalIngestRun(client, "kb1", CALL, answer, sleep=lambda s: time.sleep(0.01), out=lines.append).run()
+    assert posted == [_req(3)["request_id"]]
+    assert any("the local answerer failed: RuntimeError: boom" in l for l in lines)
 
 
 def test_a_waiting_job_is_announced_once_and_a_failed_source_fails_the_run():
@@ -196,3 +296,39 @@ def test_a_long_prompt_rides_stdin_never_the_command_line():
     cmd, kwargs = seen[0]
     assert sum(len(a) for a in cmd) < 2_000
     assert kwargs["input"] == "x" * 60_000
+
+
+@pytest.mark.parametrize("extra, flagged", [([], False), (["--incomplete"], True)])
+def test_finish_hands_the_job_back_and_says_when_it_is_incomplete(monkeypatch, capsys, extra, flagged):
+    """2026-11-21: a kb-extractor that stopped short finishes with
+    --incomplete, so a refresh reads the same changes again next time."""
+    client = FakeClient([{"sources": [{"sourceId": "s"}]}])
+    monkeypatch.setattr(kli, "SoleonMcpClient", lambda _url: client)
+    assert kli.main(["finish", "--kb", "kb1", "--call", CALL, "--job", JOB] + extra) == 0
+    (name, args), = client.calls
+    assert name == "local_kb_ingest"
+    assert args == {"kb_id": "kb1", "call_id": CALL, "finish_job_id": JOB,
+                    **({"incomplete": True} if flagged else {})}
+    assert ("as incomplete" in capsys.readouterr().out) is flagged
+
+
+def test_prepare_with_the_kb_gives_the_agent_the_jobs_own_budget(tmp_path, monkeypatch):
+    agent_dir = _pulled_extractor(tmp_path)
+    state = {"extraction_jobs": [{"job_id": JOB, "source_id": "src_mcp_gh"}]}
+    source = {"status": 200, "body": {"sourceId": "src_mcp_gh", "tokenBudgetMax": 2_000_000}}
+    done = {"state": "done", "call_id": CALL, "result": {"tools": [{"name": "emit_document"}]}}
+
+    class Client(FakeClient):
+        def call_tool(self, name, args):
+            self.calls.append((name, json.loads(json.dumps(args))))
+            return {"local_kb_ingest": {"status": 200, "body": state},
+                    "get_kb_source": source}.get(name, done)
+
+    client = Client([done])
+    monkeypatch.setattr(kli, "await_control", lambda c, slug, env, **kw: env)
+    kli.prepare_extractor(client, tmp_path, CALL, JOB, kb_id="kb1",
+                          runner=lambda cmd, **kw: SimpleNamespace(returncode=0))
+    assert [n for n, _ in client.calls] == ["local_kb_ingest", "get_kb_source", "list_agent_tools"]
+    assert client.calls[1][1] == {"kb_id": "kb1", "source_id": "src_mcp_gh"}
+    assert json.loads((agent_dir / kli.EXTRACTION_FILE).read_text()) == {
+        "callId": CALL, "jobId": JOB, "tokenBudget": 2_000_000}

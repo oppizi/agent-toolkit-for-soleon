@@ -8,9 +8,13 @@ output of every model call in the turn (`proxy._accumulate_dispatch_tokens`).
 The agent stops using tools once the turn has spent WIND_DOWN_FRACTION of the
 budget (`token_budget.wind_down_needed`, the loop's wind-down and fan-out
 gates) and writes its final answer from what it has. Locally that is a
-PreToolUse hook: once the message is at that point every further tool call is
-refused with the reason, and the model answers — a final answer needs no tool,
-so it is never blocked, exactly like Soleon's tool-free wind-down exemption.
+PreToolUse hook: once the message is at that point the next tool call goes to
+the PERSON as Claude Code's approval prompt (Dan 2026-11-22: a local run spends
+no Soleon tokens, so a person may waive the budget). Approving waives it for
+the rest of the message, helpers included (`agent_posttool` sees the asked
+call run); refusing — or a run with no one to ask — refuses the call with the
+reason, and the model answers. A final answer needs no tool, so it is never
+blocked, exactly like Soleon's tool-free wind-down exemption.
 
 Where the numbers come from (each verified against Claude Code 2.1.x):
   * the agent and each configured subagent run for it — its own transcript, `<session transcript minus .jsonl>/
@@ -80,7 +84,23 @@ def message_budget(config: Any) -> int:
     return value or DEFAULT_LIMIT
 
 
+#: Written by soleon_kb_local_ingest.prepare_extractor while the pulled
+#: kb-extractor runs an extraction job (its ``tokenBudget`` is the job's).
+EXTRACTION_FILE = ".local-extraction.json"
+
+
 def budget_of(agent_dir: Path) -> int:
+    """The budget the agent works to now: an extraction job's own budget while
+    it runs one (the platform enforces the source's ``tokenBudgetMax`` on an
+    extraction, never the agent's per-message setting), else its Per Message
+    Token Budget."""
+    try:
+        job = json.loads((agent_dir / EXTRACTION_FILE).read_text(encoding="utf-8"))
+        raw = job.get("tokenBudget") if isinstance(job, dict) else None
+        if isinstance(raw, int) and not isinstance(raw, bool) and raw > 0:
+            return raw
+    except (OSError, ValueError):
+        pass
     try:
         return message_budget(json.loads((agent_dir / "config.json").read_text(encoding="utf-8")))
     except (OSError, ValueError):
@@ -215,7 +235,7 @@ class Ledger:
         return state if isinstance(state, dict) else {}
 
     @contextlib.contextmanager
-    def _locked(self, message: str, touch: bool = False):
+    def _locked(self, message: str, touch: bool = False, reset: bool = True):
         with open(str(self.path) + ".lock", "a+") as lock:
             try:
                 import fcntl
@@ -224,7 +244,11 @@ class Ledger:
                 pass
             state = self._load()
             if state.get("message") != message:
-                state = {"message": message, "runs": {}, "helpers": {}, "touchedAt": None}
+                if not reset:  # another message owns the ledger: leave it be
+                    yield None
+                    return
+                state = {"message": message, "runs": {}, "helpers": {}, "touchedAt": None,
+                         "asked": [], "waived": False}
             if touch:
                 state["touchedAt"] = self._now()
             yield state
@@ -247,6 +271,25 @@ class Ledger:
     def read(self, message: str) -> Dict[str, Any]:
         with self._locked(message) as state:
             return dict(state)
+
+    def note_ask(self, message: str, tool_use_id: str) -> None:
+        """The hook asked the person to waive the budget on this tool call."""
+        with self._locked(message) as state:
+            asked = [a for a in (state.get("asked") or []) if isinstance(a, str)]
+            if tool_use_id not in asked:
+                asked.append(tool_use_id)
+            state["asked"] = asked
+
+    def confirm_ask(self, message: str, tool_use_id: str) -> bool:
+        """The asked call RAN, so the person approved it: the budget is waived
+        for the rest of this message. A call the hook never asked about (or one
+        of another message) waives nothing."""
+        with self._locked(message, reset=False) as state:
+            if state is None:
+                return False
+            if tool_use_id in (state.get("asked") or []):
+                state["waived"] = True
+            return bool(state.get("waived"))
 
     def message_for_helper(self, fallback: str) -> str:
         """The message a helper starting NOW belongs to: the one a pulled
@@ -274,13 +317,52 @@ def refusal(used: int, budget: int, *, who: str) -> str:
     ).format(used=used, budget=budget, pct=int(WIND_DOWN_FRACTION * 100), who=who)
 
 
-def _deny(reason: str) -> None:
+def waiver_request(used: int, budget: int, *, extraction: bool, who: str) -> str:
+    """The reason on the person's approval prompt. In a run nobody can answer
+    (`claude -p`) Claude Code denies the call and the model reads this text
+    instead, so it also says what to do when refused."""
+    what, scope = (("extraction job's token budget", "extraction job") if extraction
+                   else ("Per Message Token Budget", "message"))
+    return (
+        "Soleon token budget: this {scope} has used {used:,} of its {budget:,}-token {what} "
+        "(used={used} budget={budget}; the agent, its subagents and every helper share it), and "
+        "Soleon stops tool use at {pct}% of it. This run is local, so you may waive the budget: "
+        "approve this call and the budget is off for the rest of this {scope}. If this call is "
+        "refused, do not call any more tools: {who} must answer now from what it has already "
+        "gathered, and say plainly what it could not get to."
+    ).format(used=used, budget=budget, what=what, scope=scope,
+             pct=int(WIND_DOWN_FRACTION * 100), who=who)
+
+
+def _decide(decision: str, reason: str) -> None:
     sys.stdout.write(json.dumps({"hookSpecificOutput": {
         "hookEventName": "PreToolUse",
-        "permissionDecision": "deny",
+        "permissionDecision": decision,
         "permissionDecisionReason": reason,
     }}) + "\n")
     sys.stdout.flush()
+
+
+def _deny(reason: str) -> None:
+    _decide("deny", reason)
+
+
+def _ask(reason: str) -> None:
+    """Claude Code's own approval prompt: only the person can answer it. Tested
+    on Claude Code 2.1.328 (2026-11-22): a hook's "ask" is never approved by
+    bypassPermissions, an allow rule or --allowedTools, and a `-p` run with no
+    one to answer denies it."""
+    _decide("ask", reason)
+
+
+#: Tools an extraction job saves its work with: never held back by the budget,
+#: or a refused waiver would leave the job with nothing saved.
+EXTRACTION_SAVE_TOOLS = ("emit_document",)
+
+
+def _is_save_tool(tool_name: Any) -> bool:
+    name = tool_name if isinstance(tool_name, str) else ""
+    return any(name == t or name.endswith("__" + t) for t in EXTRACTION_SAVE_TOOLS)
 
 
 # ---------------------------------------------------------------------------
@@ -338,30 +420,65 @@ def agent_pretool(hook: Dict[str, Any]) -> int:
     if found is None:
         return 0
     agent_dir, is_subagent = found
-    if (agent_dir / EXTRACTION_FILE).exists():
-        # A knowledge-base extraction job is not a chat message: on Soleon it
-        # runs on the job's own budget, never the Per Message Token Budget,
-        # and locally it has none (build-knowledge-base Step 4). Refusing
-        # here would block emit_document and save nothing.
-        return 0
     budget = budget_of(agent_dir)
     if budget <= 0:
         return 0
+    # A knowledge-base extraction job works to the job's own budget
+    # (`budget_of`), shared by the agent and every helper it starts, as on
+    # Soleon. Its save tool always passes: holding it back saves nothing.
+    extraction = (agent_dir / EXTRACTION_FILE).exists()
+    ledger = Ledger(agent_dir)
+    message = _message_of(hook, agent_dir, str(agent_id), is_subagent)
     transcript = subagent_transcript(hook.get("transcript_path"), str(agent_id))
-    state = Ledger(agent_dir).note_run(_message_of(hook, agent_dir, str(agent_id), is_subagent), str(agent_id), transcript)
+    state = ledger.note_run(message, str(agent_id), transcript)
+    if state.get("waived") or (extraction and _is_save_tool(hook.get("tool_name"))):
+        return 0
     used = spent(state)
-    if used >= wind_down_at(budget):
-        _deny(refusal(used, budget, who="this subagent" if is_subagent else "the agent"))
+    if used < wind_down_at(budget):
+        return 0
+    who = "this subagent" if is_subagent else "the agent"
+    tool_use_id = hook.get("tool_use_id")
+    if isinstance(tool_use_id, str) and tool_use_id and hook.get("permission_mode") != "dontAsk":
+        # The person decides: approving waives the budget for the rest of the
+        # message (`agent_posttool` sees the call run). dontAsk would deny
+        # an ask without showing the reason, so it gets the plain refusal.
+        ledger.note_ask(message, tool_use_id)
+        _ask(waiver_request(used, budget, extraction=extraction, who=who))
+    else:
+        _deny(refusal(used, budget, who=who))
+    return 0
+
+
+def agent_posttool(hook: Dict[str, Any]) -> int:
+    """PostToolUse for the whole session: a call the budget hook asked about
+    ran, so the person approved it, and the budget is waived for the rest of
+    that message (its helpers included)."""
+    agent_id = hook.get("agent_id")
+    tool_use_id = hook.get("tool_use_id")
+    found = _pulled_agent_of(hook) if agent_id else None
+    if found is None or not isinstance(tool_use_id, str) or not tool_use_id:
+        return 0
+    agent_dir, is_subagent = found
+    ledger = Ledger(agent_dir)
+    message = _message_of(hook, agent_dir, str(agent_id), is_subagent)
+    if ledger.confirm_ask(message, tool_use_id):
+        sys.stdout.write(json.dumps({"systemMessage": "Soleon: you approved going past the local token "
+                                     "budget, so it is off for the rest of this run."}) + "\n")
     return 0
 
 
 def helper_pretool(hook: Dict[str, Any], agent_dir: Path, message: str, run: str) -> int:
     """PreToolUse inside a helper the runner started: the message's ledger —
-    which the runner keeps current with this helper's calls — decides."""
+    which the runner keeps current with this helper's calls — decides. A
+    helper runs headless, so it cannot ask; it follows a waiver the person
+    gave on the agent's own call."""
     budget = budget_of(agent_dir)
     if budget <= 0:
         return 0
-    used = spent(Ledger(agent_dir).read(message))
+    state = Ledger(agent_dir).read(message)
+    if state.get("waived"):
+        return 0
+    used = spent(state)
     if used >= wind_down_at(budget):
         _deny(refusal(used, budget, who="this helper"))
     return 0
@@ -390,7 +507,7 @@ def _read_hook(stream=None) -> Dict[str, Any]:
 
 def main(argv: Optional[Iterable[str]] = None, stream=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    ap.add_argument("mode", choices=("agent-pretool", "helper-pretool"))
+    ap.add_argument("mode", choices=("agent-pretool", "agent-posttool", "helper-pretool"))
     ap.add_argument("--agent-dir")
     ap.add_argument("--message")
     ap.add_argument("--run")
@@ -399,6 +516,8 @@ def main(argv: Optional[Iterable[str]] = None, stream=None) -> int:
     try:
         if args.mode == "agent-pretool":
             return agent_pretool(hook)
+        if args.mode == "agent-posttool":
+            return agent_posttool(hook)
         if not (args.agent_dir and args.message and args.run):
             sys.stderr.write("helper-pretool needs --agent-dir, --message and --run\n")
             return 0

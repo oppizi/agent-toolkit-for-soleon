@@ -19,7 +19,10 @@ def _files(root: Path):
 def test_the_prod_copy_is_the_plugin_renamed_and_pointed_at_prod(tmp_path):
     target = dev_live.build_prod_copy(tmp_path)
     assert target == tmp_path / "plugins" / "soleon-prod"
-    assert _files(target) == _files(PLUGIN)
+    # The copy is the plugin WITHOUT its hooks (they would act twice on every
+    # pulled agent); everything else is verbatim.
+    assert _files(target) == [f for f in _files(PLUGIN) if not f.startswith("hooks/")]
+    assert not (target / "hooks").exists()
 
     manifest = json.loads((target / ".claude-plugin/plugin.json").read_text(encoding="utf-8"))
     source = json.loads((PLUGIN / ".claude-plugin/plugin.json").read_text(encoding="utf-8"))
