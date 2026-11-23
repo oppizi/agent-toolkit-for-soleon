@@ -430,13 +430,20 @@ def session_start(hook: Dict[str, Any], data: Path, loaded: Path, env: Dict[str,
     return session
 
 
+#: Windows flags for the worker: its own process group and a console with no window
+#: (CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW). Never DETACHED_PROCESS: Windows ignores
+#: CREATE_NO_WINDOW beside it, the worker then has no console at all, and every `git` it runs
+#: opens a new VISIBLE console window (the bursts of windows on Dan's desktop, 2026-11-23).
+WORKER_CREATIONFLAGS = 0x00000200 | 0x08000000
+
+
 def spawn_worker(data: Path, session: str) -> None:
-    """Start `work` detached: the hook returns at once."""
+    """Start `work` in the background: the hook returns at once."""
     cmd = [sys.executable, os.path.abspath(__file__), "work", session, "--data", str(data)]
     kwargs: Dict[str, Any] = {"stdin": subprocess.DEVNULL, "stdout": subprocess.DEVNULL,
                               "stderr": subprocess.DEVNULL, "close_fds": True}
     if os.name == "nt":
-        kwargs["creationflags"] = 0x00000008 | 0x00000200 | 0x08000000  # detached, own group, no window
+        kwargs["creationflags"] = WORKER_CREATIONFLAGS
     else:
         kwargs["start_new_session"] = True
     subprocess.Popen(cmd, **kwargs)  # noqa: S603 — our own script, our own interpreter
