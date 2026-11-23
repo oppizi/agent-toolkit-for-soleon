@@ -336,6 +336,57 @@ def test_prepare_with_the_kb_gives_the_agent_the_jobs_own_budget(tmp_path, monke
 
 # --- status lines on a narrow console ----------------------------------------
 
+class BusyThenFine(PlatformDouble):
+    """The platform answers `HTTP 503: no capacity` for the first `busy` polls,
+    the way the platform's error envelope reports it (2026-11-23)."""
+
+    def __init__(self, requests, busy):
+        super().__init__(requests)
+        self.busy = busy
+
+    def call_tool(self, name, args):
+        if self.busy:
+            self.busy -= 1
+            return {"error": "The platform returned an error.", "detail": "HTTP 503: no capacity",
+                    "next_action": "Retry in a moment; if it persists, the platform may be degraded.",
+                    "stage": "platform"}
+        return super().call_tool(name, args)
+
+
+def test_a_transient_platform_error_is_retried_not_fatal():
+    """2026-11-23: one `HTTP 503: no capacity` ended the loop twice in one run,
+    and every model call it was answering would have failed 12 minutes later."""
+    client, lines, slept = BusyThenFine([_req(7)], busy=3), [], []
+    code = kli.LocalIngestRun(client, "kb1", CALL,
+                              lambda rs: [{"request_id": r["request_id"], "completion": {"choices": []}} for r in rs],
+                              sleep=slept.append, out=lines.append).run()
+    assert code == 0 and lines[-1].startswith("DONE 1 source")
+    assert sum(1 for l in lines if l.startswith("platform busy")) == 3
+    assert slept[:3] == [5.0, 10.0, 20.0], "backs off"
+
+
+def test_a_transient_error_that_outlasts_the_retry_window_still_ends_the_run(monkeypatch):
+    monkeypatch.setattr(kli, "TRANSIENT_RETRY_S", 12.0)
+    client = BusyThenFine([_req(8)], busy=100)
+    with pytest.raises(kli.SoleonClientError, match="no capacity"):
+        kli.LocalIngestRun(client, "kb1", CALL, lambda rs: [], sleep=lambda s: None, out=lambda l: None).run()
+
+
+def test_a_refusal_is_never_retried():
+    class Refuses(PlatformDouble):
+        calls = 0
+
+        def call_tool(self, name, args):
+            Refuses.calls += 1
+            return {"error": "Not authorized to perform this operation.",
+                    "detail": "operator access is revoked by the deployment owner", "stage": "platform"}
+
+    with pytest.raises(kli.SoleonClientError, match="operator access"):
+        kli.LocalIngestRun(Refuses([_req(9)]), "kb1", CALL, lambda rs: [], sleep=lambda s: None,
+                           out=lambda l: None).run()
+    assert Refuses.calls == 1
+
+
 def test_a_title_the_console_cannot_encode_never_kills_the_loop():
     """2026-11-22: a decision title with an arrow killed `run` on a Windows
     stdout redirected to a file (cp1252), and the model calls it was answering

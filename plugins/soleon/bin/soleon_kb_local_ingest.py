@@ -61,6 +61,21 @@ POLL_INTERVAL_S = 3.0
 #: Model calls answered at once. Soleon ingests a job's sources together, and
 #: each call is one headless Claude Code process.
 ANSWER_WORKERS = 12
+#: How long the loop keeps retrying a transient platform error (5xx gateway
+#: answers, "no capacity", a dropped connection) before it gives up: under the
+#: 12 minutes after which Soleon fails a model call nobody answered.
+TRANSIENT_RETRY_S = 600.0
+TRANSIENT_FIRST_DELAY_S = 5.0
+TRANSIENT_MAX_DELAY_S = 60.0
+_TRANSIENT_MARKERS = ("HTTP 502", "HTTP 503", "HTTP 504", "no capacity", "unreachable", "timed out", "Connection reset",
+                      "Connection aborted", "Connection refused", "Temporary failure", "Remote end closed")
+
+
+def _is_transient(exc: Exception) -> bool:
+    """A platform error worth retrying: the gateway or the server was briefly
+    unavailable, not a refusal of the request itself."""
+    text = str(exc)
+    return any(marker in text for marker in _TRANSIENT_MARKERS)
 
 
 def _out(line: str, stream=None) -> None:
@@ -107,8 +122,24 @@ class LocalIngestRun:
         self._pool = ThreadPoolExecutor(max_workers=workers, thread_name_prefix="local-answer")
 
     def poll(self, **extra) -> Dict[str, Any]:
-        return _body(self.client.call_tool("local_kb_ingest", {
-            "kb_id": self.kb_id, "call_id": self.call_id, **extra}), "local_kb_ingest")
+        """One `local_kb_ingest` call, retried while the platform answers a
+        TRANSIENT error. A single `HTTP 503: no capacity` killed the loop twice
+        in one run (2026-11-23), and with the loop gone every waiting model
+        call fails 12 minutes later. Re-sending answers is safe: one the
+        platform already took is reported stale. Any other error, or a
+        transient one that outlasts TRANSIENT_RETRY_S, still ends the run."""
+        waited, delay = 0.0, TRANSIENT_FIRST_DELAY_S
+        while True:
+            try:
+                return _body(self.client.call_tool("local_kb_ingest", {
+                    "kb_id": self.kb_id, "call_id": self.call_id, **extra}), "local_kb_ingest")
+            except SoleonClientError as exc:
+                if not _is_transient(exc) or waited >= TRANSIENT_RETRY_S:
+                    raise
+                self.out("platform busy ({}); retrying in {:.0f}s".format(str(exc)[:160], delay))
+                self.sleep(delay)
+                waited += delay
+                delay = min(delay * 2, TRANSIENT_MAX_DELAY_S)
 
     def report(self, state: Dict[str, Any]) -> None:
         for source in state.get("sources") or []:
