@@ -36,6 +36,8 @@ from typing import Any, Dict, List, Optional, Tuple
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+import soleon_parallel  # noqa: E402
+
 PROTOCOL_VERSION = "2025-03-26"
 SERVER_INFO = {"name": "soleon-workspace", "version": "0.4.15"}
 
@@ -491,8 +493,10 @@ def handle_message(ws: Workspace, msg: Dict[str, Any], platform: Optional[Platfo
     if method == "ping":
         return {"jsonrpc": "2.0", "id": msg_id, "result": {}}
     if method == "tools/list":
+        # Marked to run alongside the step's other calls, as on Soleon (soleon_parallel.py);
+        # a write and a later read of the same path still run in order.
         return {"jsonrpc": "2.0", "id": msg_id, "result": {
-            "tools": [t for t in TOOLS if tools is None or t["name"] in tools]}}
+            "tools": [soleon_parallel.mark_concurrent(t) for t in TOOLS if tools is None or t["name"] in tools]}}
     if method == "tools/call":
         name = params.get("name") or ""
         arguments = params.get("arguments") or {}
@@ -506,8 +510,20 @@ def handle_message(ws: Workspace, msg: Dict[str, Any], platform: Optional[Platfo
 
 def serve(ws: Workspace, stdin=None, stdout=None, platform: Optional[PlatformWorkspace] = None,
           tools: Optional[List[str]] = None) -> None:
+    """Every `tools/call` on its own thread, as the platform runs a step's
+    calls (soleon_parallel.py), a read waiting for an earlier write of its
+    path; everything else answered in turn."""
     inp = stdin or sys.stdin.buffer
-    out = stdout or sys.stdout.buffer
+    write = soleon_parallel.line_writer(stdout or sys.stdout.buffer)
+    calls = soleon_parallel.ParallelCalls(write, soleon_parallel.fanout_of(str(ws.root.parent)), log=_log)
+
+    def answer(msg: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        try:
+            return handle_message(ws, msg, platform, tools)
+        except Exception as exc:  # noqa: BLE001 — the loop must survive any single call
+            _log("internal error on {}: {}".format(msg.get("method"), exc))
+            return {"jsonrpc": "2.0", "id": msg.get("id"), "error": {"code": -32603, "message": str(exc)}}
+
     for raw in inp:
         line = raw.strip()
         if not line:
@@ -519,14 +535,13 @@ def serve(ws: Workspace, stdin=None, stdout=None, platform: Optional[PlatformWor
             continue
         if not isinstance(msg, dict):
             continue
-        try:
-            resp = handle_message(ws, msg, platform, tools)
-        except Exception as exc:  # noqa: BLE001 — the loop must survive any single call
-            _log("internal error on {}: {}".format(msg.get("method"), exc))
-            resp = {"jsonrpc": "2.0", "id": msg.get("id"), "error": {"code": -32603, "message": str(exc)}}
+        if msg.get("method") == "tools/call" and msg.get("id") is not None:
+            calls.submit(msg, answer)
+            continue
+        resp = answer(msg)
         if resp is not None:
-            out.write((json.dumps(resp) + "\n").encode("utf-8"))
-            out.flush()
+            write(resp)
+    calls.join()
 
 
 def main(argv: Optional[List[str]] = None) -> int:

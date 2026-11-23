@@ -37,6 +37,7 @@ import re
 import shutil
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -45,6 +46,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import soleon_background  # noqa: E402
 import soleon_message_budget as message_budget  # noqa: E402
+import soleon_parallel  # noqa: E402
 from soleon_local_model import LocalModelAnswerer  # noqa: E402
 from soleon_mcp_client import (  # noqa: E402
     AuthError,
@@ -321,7 +323,10 @@ class ConversationTracker:
         return data if isinstance(data, dict) else None
 
     def current(self) -> str:
-        """The id to send with the NEXT call (touching the last-call time)."""
+        """The id to send with the NEXT call (touching the last-call time).
+        Calls that ask together (soleon_parallel.py) settle on one id: the
+        check of `_id` follows the file read with nothing between it and the
+        assignment, and each save replaces the file whole."""
         now = self._now()
         data = self._load() or {}
         cid = data.get("conversation") if isinstance(data.get("conversation"), str) else None
@@ -340,10 +345,31 @@ class ConversationTracker:
         if not self.path:
             return
         try:
-            with open(self.path, "w", encoding="utf-8") as fh:
-                json.dump(data, fh)
+            _write_json_atomic(self.path, data)
         except OSError as exc:
             _log("could not persist the conversation id: {}".format(exc))
+
+
+def _write_json_atomic(path: str, data: Dict[str, Any]) -> None:
+    """A whole file or the old one, never half of one: the agent's other server
+    (and its other calls, now that a step's calls run together) read it too."""
+    tmp = "{}.{}.{}.tmp".format(path, os.getpid(), threading.get_ident())
+    with open(tmp, "w", encoding="utf-8") as fh:
+        json.dump(data, fh)
+    # Windows refuses to replace a file another process has open ("Access is
+    # denied"): the other server's read takes milliseconds, so try again briefly.
+    for attempt in range(20):
+        try:
+            os.replace(tmp, path)
+            return
+        except PermissionError:
+            if attempt == 19:
+                try:
+                    os.remove(tmp)
+                except OSError:
+                    pass
+                raise
+            time.sleep(0.005 * (attempt + 1))
 
 
 #: A hook-written turn file older than this (relative to the server's own
@@ -380,6 +406,8 @@ class TurnTracker:
         #: minutes into the agent's run, when the hook file already reads as
         #: stale, and minting its own id would split the message in two.
         self._id: Optional[str] = fixed or None
+        #: A step's first calls run together: only one of them settles the id.
+        self._lock = threading.Lock()
 
     def _load(self) -> Optional[Dict[str, Any]]:
         if not self.path or not os.path.isfile(self.path):
@@ -394,6 +422,10 @@ class TurnTracker:
     def current(self) -> str:
         if self._id is not None:
             return self._id
+        with self._lock:
+            return self._id if self._id is not None else self._settle()
+
+    def _settle(self) -> str:
         data = self._load() or {}
         turn = data.get("turn") if isinstance(data.get("turn"), str) else None
         started = data.get("startedAt") if isinstance(data.get("startedAt"), (int, float)) else None
@@ -410,8 +442,7 @@ class TurnTracker:
         if not self.path:
             return
         try:
-            with open(self.path, "w", encoding="utf-8") as fh:
-                json.dump(data, fh)
+            _write_json_atomic(self.path, data)
         except OSError as exc:
             _log("could not persist the turn id: {}".format(exc))
 
@@ -1233,6 +1264,27 @@ class AgentToolsServer:
         #: approval likewise covers the calls its worker makes, and a headless
         #: worker has nobody to ask.
         self.pre_approved = pre_approved
+        #: A step's calls run together (soleon_parallel.py); what they share
+        #: in this process (long-result pages, local hand-overs, the slow-call
+        #: stack dump) is changed under this lock.
+        self._state_lock = threading.RLock()
+        self._slow_calls = 0
+
+    def listed(self) -> List[Dict[str, Any]]:
+        """`tools/list`: every tool marked to run alongside the step's other
+        calls, as on Soleon, except one that needs the person's approval."""
+        return [t if self._platform_name.get(t["name"], t["name"]) in self._gated
+                else soleon_parallel.mark_concurrent(t) for t in self.published]
+
+    def _slow_watch(self, start: bool) -> None:
+        """The slow-call stack dump (SLOW_CALL_DUMP_S) is one timer per
+        process: armed while any platform call is running."""
+        with self._state_lock:
+            self._slow_calls += 1 if start else -1
+            if start and self._slow_calls == 1:
+                faulthandler.dump_traceback_later(SLOW_CALL_DUMP_S, repeat=True)
+            elif not start and self._slow_calls == 0:
+                faulthandler.cancel_dump_traceback_later()
 
     def call(self, name: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
         if self.stale_note:
@@ -1299,12 +1351,14 @@ class AgentToolsServer:
         text = "\n".join(p["text"] for p in parts)
         if len(text) <= RESULT_PAGE_CHARS:
             return out
-        page_id = "r{}".format(len(self._pages) + 1)
-        self._pages[page_id] = text
+        with self._state_lock:
+            page_id = "r{}".format(len(self._pages) + 1)
+            self._pages[page_id] = text
         return self._page(page_id, 0, out.get("isError", False))
 
     def _page(self, page_id: str, offset: int, is_error: bool = False) -> Dict[str, Any]:
-        text = self._pages[page_id]
+        with self._state_lock:
+            text = self._pages[page_id]
         end = min(offset + RESULT_PAGE_CHARS, len(text))
         tail = ("\n\n(Showing characters {}-{} of {}. Call read_result_page with id={!r} and offset={} for "
                 "the rest. This result is INCOMPLETE: read the rest before you answer.)".format(
@@ -1314,14 +1368,16 @@ class AgentToolsServer:
 
     def _read_page(self, args: Dict[str, Any]) -> Dict[str, Any]:
         page_id = str(args.get("id") or "")
-        if page_id not in self._pages:
+        with self._state_lock:
+            text = self._pages.get(page_id)
+        if text is None:
             return _text_result("No long result {!r} in this session; call the tool again.".format(page_id), True)
         try:
             offset = int(args.get("offset") or 0)
         except (TypeError, ValueError):
             return _text_result("offset must be a whole number.", True)
-        if not 0 <= offset < len(self._pages[page_id]):
-            return _text_result("offset must be between 0 and {}.".format(len(self._pages[page_id]) - 1), True)
+        if not 0 <= offset < len(text):
+            return _text_result("offset must be between 0 and {}.".format(len(text) - 1), True)
         return self._page(page_id, offset)
 
     def _call(self, name: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
@@ -1349,8 +1405,9 @@ class AgentToolsServer:
             if entry.get("approval") and not approved:
                 return self.render(name, {"state": "error", "error": "approval_required"})
             import soleon_progress
-            handled, text = soleon_progress.stage_local_file(
-                Path(self.agent_dir), self.turn.current(), str(args.get("path") or ""), args.get("filename"))
+            with self._state_lock:  # one hand-over list per turn, appended to by each call
+                handled, text = soleon_progress.stage_local_file(
+                    Path(self.agent_dir), self.turn.current(), str(args.get("path") or ""), args.get("filename"))
             if handled:
                 _log("attach_file {} handled locally".format(args.get("path")))
                 return _text_result(text, text.startswith("Error"))
@@ -1373,7 +1430,7 @@ class AgentToolsServer:
         # A platform call normally answers within the wire's ~25 s limit (pending after that). Two local
         # workers went silent inside one web_fetch for 20 minutes with no error (2026-11-02): past
         # SLOW_CALL_DUMP_S every thread's stack goes to stderr, which Claude Code keeps in its MCP log.
-        faulthandler.dump_traceback_later(SLOW_CALL_DUMP_S, repeat=True)
+        self._slow_watch(True)
         try:
             envelope = self.client.call_tool("call_agent_tool", {
                 "slug": self.slug, "app_env": self.app_env,
@@ -1400,7 +1457,7 @@ class AgentToolsServer:
         except TransportError as exc:
             return _text_result("Could not reach Soleon: {}. Retry once the platform is reachable.".format(exc), True)
         finally:
-            faulthandler.cancel_dump_traceback_later()
+            self._slow_watch(False)
         self._record_activity(platform_name, entry, envelope, args)
         return self._with_identity_hint(name, args, self.render(name, envelope))
 
@@ -1483,7 +1540,7 @@ def handle_message(server: AgentToolsServer, msg: Dict[str, Any]) -> Optional[Di
     if method == "ping":
         return {"jsonrpc": "2.0", "id": msg_id, "result": {}}
     if method == "tools/list":
-        return {"jsonrpc": "2.0", "id": msg_id, "result": {"tools": server.published}}
+        return {"jsonrpc": "2.0", "id": msg_id, "result": {"tools": server.listed()}}
     if method == "tools/call":
         arguments = params.get("arguments") or {}
         if not isinstance(arguments, dict):
@@ -1495,8 +1552,19 @@ def handle_message(server: AgentToolsServer, msg: Dict[str, Any]) -> Optional[Di
 
 
 def serve(server: AgentToolsServer, stdin=None, stdout=None) -> None:
+    """Every `tools/call` on its own thread, as the platform runs a step's
+    calls (soleon_parallel.py); everything else answered in turn."""
     inp = stdin or sys.stdin.buffer
-    out = stdout or sys.stdout.buffer
+    write = soleon_parallel.line_writer(stdout or sys.stdout.buffer)
+    calls = soleon_parallel.ParallelCalls(write, soleon_parallel.fanout_of(server.agent_dir), log=_log)
+
+    def answer(msg: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        try:
+            return handle_message(server, msg)
+        except Exception as exc:  # noqa: BLE001 — one bad call must not kill the server
+            _log("internal error on {}: {}".format(msg.get("method"), type(exc).__name__))
+            return {"jsonrpc": "2.0", "id": msg.get("id"), "error": {"code": -32603, "message": str(exc)}}
+
     for raw in inp:
         line = raw.strip()
         if not line:
@@ -1508,14 +1576,13 @@ def serve(server: AgentToolsServer, stdin=None, stdout=None) -> None:
             continue
         if not isinstance(msg, dict):
             continue
-        try:
-            resp = handle_message(server, msg)
-        except Exception as exc:  # noqa: BLE001 — one bad call must not kill the server
-            _log("internal error on {}: {}".format(msg.get("method"), type(exc).__name__))
-            resp = {"jsonrpc": "2.0", "id": msg.get("id"), "error": {"code": -32603, "message": str(exc)}}
+        if msg.get("method") == "tools/call" and msg.get("id") is not None:
+            calls.submit(msg, answer)
+            continue
+        resp = answer(msg)
         if resp is not None:
-            out.write((json.dumps(resp) + "\n").encode("utf-8"))
-            out.flush()
+            write(resp)
+    calls.join()
 
 
 def _pulled_model(agent_dir: str) -> str:

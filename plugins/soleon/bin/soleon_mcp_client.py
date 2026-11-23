@@ -43,6 +43,7 @@ import os
 import stat
 import subprocess
 import sys
+import threading
 import time
 import urllib.error
 import urllib.parse
@@ -400,10 +401,17 @@ class SoleonMcpClient:
         #: rejected refresh is never retried, while a long-running process (the
         #: knowledge-base loop runs for hours) renews again after every expiry.
         self._refresh_failed_for: Optional[str] = None
+        #: The agent's tool servers run a step's calls together
+        #: (soleon_parallel.py): one of them reads or renews the token at a time.
+        self._token_lock = threading.RLock()
 
     # -- token -------------------------------------------------------------
 
     def _resolve_token(self) -> str:
+        with self._token_lock:
+            return self._resolve_token_locked()
+
+    def _resolve_token_locked(self) -> str:
         if self._token:
             if not self._token_override and self._expiring():
                 # Adopt a token another process saved first; else renew it here.
@@ -436,6 +444,10 @@ class SoleonMcpClient:
         next call, 3 s later, worked). True when the store's token is new."""
         if self._token_override:
             return False
+        with self._token_lock:
+            return self._reload_from_store_locked()
+
+    def _reload_from_store_locked(self) -> bool:
         entry = self.store.find_entry(self.server_url)
         fresh = str(entry.get("accessToken") or "") if entry else ""
         if not fresh or fresh == self._token:
@@ -447,8 +459,16 @@ class SoleonMcpClient:
         self._expires_at_ms = expiry
         return True
 
-    def _try_refresh(self) -> bool:
-        """ONE refresh_token grant per token. True when a new access token is in place."""
+    def _try_refresh(self, seen: Optional[str] = None) -> bool:
+        """ONE refresh_token grant per token. True when a new access token is in place.
+        `seen`: the token a call was refused with; when another call has renewed
+        it meanwhile, that renewal is the answer (no second grant)."""
+        with self._token_lock:
+            if seen is not None and self._token and self._token != seen:
+                return True
+            return self._try_refresh_locked()
+
+    def _try_refresh_locked(self) -> bool:
         entry = self._entry
         if not entry or not entry.get("refreshToken") or not entry.get("clientId"):
             return False
@@ -540,7 +560,7 @@ class SoleonMcpClient:
                 except Exception:
                     pass
                 if code == 401:
-                    if self._try_refresh():
+                    if self._try_refresh(seen=token):
                         token = self._token or token
                         continue
                     if not reloaded and self._reload_from_store():
@@ -565,7 +585,7 @@ class SoleonMcpClient:
                 if auth_retried or not _is_auth_failure(exc):
                     raise
                 auth_retried = True
-                if self._reload_from_store() or self._try_refresh():
+                if self._reload_from_store() or self._try_refresh(seen=token):
                     token = self._token or token
                     continue
                 raise
