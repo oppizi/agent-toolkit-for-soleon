@@ -63,8 +63,16 @@ POLL_INTERVAL_S = 3.0
 ANSWER_WORKERS = 12
 
 
-def _out(line: str) -> None:
-    print(line, flush=True)
+def _out(line: str, stream=None) -> None:
+    """Print one status line. Source titles come from documents and can hold any
+    character; on Windows a redirected stdout is cp1252, and an arrow in a title
+    killed the answering loop mid-run (2026-11-22, the loop then stops answering
+    and every waiting model call fails 12 minutes later). Characters the stream
+    cannot encode are replaced, never fatal."""
+    stream = stream or sys.stdout
+    encoding = getattr(stream, "encoding", None) or "utf-8"
+    stream.write(line.encode(encoding, "replace").decode(encoding) + "\n")
+    stream.flush()
 
 
 def _checked(envelope: Any, what: str) -> Dict[str, Any]:
