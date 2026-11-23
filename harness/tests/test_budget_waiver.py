@@ -196,7 +196,7 @@ def test_an_approved_install_hands_every_daily_run_the_waiver(tmp_path, capsys):
     assert kli.budget_waived(False, KB, environ=env,                # the headless prepare-extractor
                              standing=lambda kb: mb.standing_waiver(kb, kr.STATE_DIR)) is True
     assert json.loads(kr.status_path(KB).read_text())["budgetWaived"] is True
-    assert [r["kb"] for r in kr.last_runs()] == [KB]                  # the waiver record is not a run
+    assert [r["kb"] for r in kr.last_runs(is_on=lambda _kb: True)] == [KB]  # the waiver record is not a run
 
 
 def test_an_install_whose_prompt_was_never_shown_is_refused(tmp_path):

@@ -38,6 +38,52 @@ class Runner:
         return subprocess.CompletedProcess(cmd, self.code, stdout="", stderr="")
 
 
+def _task_xml(enabled):
+    line = "" if enabled is None else "    <Enabled>{}</Enabled>\n".format(enabled)
+    return ("<Task>\n  <Triggers><CalendarTrigger><Enabled>true</Enabled></CalendarTrigger></Triggers>\n"
+            "  <Settings>\n" + line + "  </Settings>\n</Task>\n")
+
+
+class Query:
+    """A fake `schtasks /Query /XML` or `crontab -l`."""
+
+    def __init__(self, stdout="", code=0, error=None):
+        self.stdout, self.code, self.error, self.calls = stdout, code, error, []
+
+    def __call__(self, cmd, **kw):
+        self.calls.append((cmd, kw))
+        if self.error:
+            raise self.error
+        return subprocess.CompletedProcess(cmd, self.code, stdout=self.stdout, stderr="")
+
+
+def test_a_refresh_is_on_only_while_its_task_exists_and_is_enabled():
+    """Dan 2026-11-23: the freshness check must not flag a knowledge base nobody refreshes."""
+    assert kr.refresh_on(KB, runner=Query(_task_xml("true")), platform="win32") is True
+    assert kr.refresh_on(KB, runner=Query(_task_xml(None)), platform="win32") is True  # default: enabled
+    assert kr.refresh_on(KB, runner=Query(_task_xml("false")), platform="win32") is False
+    assert kr.refresh_on(KB, runner=Query(code=1), platform="win32") is False          # no such task
+    q = Query(_task_xml("true"))
+    kr.refresh_on(KB, runner=q, platform="win32")
+    (cmd, kw), = q.calls
+    assert cmd == ["schtasks", "/Query", "/TN", "Soleon KB refresh " + KB, "/XML"]
+    assert kw["creationflags"] & 0x08000000 and not kw["creationflags"] & 0x8  # hidden, never detached
+    line = '30 6 * * * "python" "/x/soleon_kb_refresh.py" "run" "--kb" "{}"'.format(KB)
+    assert kr.refresh_on(KB, runner=Query(line + "\n"), platform="linux") is True
+    assert kr.refresh_on(KB, runner=Query("# " + line + "\n"), platform="linux") is False
+    assert kr.refresh_on(KB, runner=Query(code=1), platform="linux") is False
+    # unreadable: still on, so a failure is still said rather than hidden
+    assert kr.refresh_on(KB, runner=Query(error=OSError("no schtasks")), platform="win32") is True
+
+
+def test_every_last_run_says_whether_its_refresh_is_on():
+    kr.STATE_DIR.mkdir(parents=True)
+    for kb, at in (("kb_off", 1), ("kb_on", 2)):
+        (kr.STATE_DIR / "{}.json".format(kb)).write_text(json.dumps({"kb": kb, "startedAt": at}), encoding="utf-8")
+    runs = kr.last_runs(is_on=lambda kb: kb == "kb_on")
+    assert [(r["kb"], r["on"]) for r in runs] == [("kb_on", True), ("kb_off", False)]
+
+
 def test_the_headless_run_refreshes_each_source_locally_and_never_rebuilds():
     text = kr.prompt(KB, SOURCES)
     assert 'manage_kb_source(kb_id="2ebb3c747a88", source_id=<it>, refresh=true, local=true)' in text
