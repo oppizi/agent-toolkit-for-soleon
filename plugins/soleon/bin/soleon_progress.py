@@ -67,6 +67,8 @@ FILES_MAX = 20
 ANSWER_WAIT_S = 45.0
 #: How long the end of the turn waits for a worker or a check still in flight.
 FINISH_WAIT_S = 45.0
+#: Files of one message downloaded at once.
+DOWNLOAD_PARALLEL = 4
 #: A lock older than this was left by a worker that died.
 LOCK_STALE_S = 180.0
 DOWNLOAD_MAX_BYTES = 100 * 1024 * 1024
@@ -225,19 +227,25 @@ def deliver(agent_dir: Path, state: Dict[str, Any], files: List[Dict[str, Any]],
     `delivered/` and return their paths. A newer version of a name replaces
     the older file, as the newest upload is the one a person opens."""
     handed = {h["id"]: h for h in handed_files(agent_dir, str(state.get("turn") or ""))}
-    paths: List[str] = []
-    for item in files or []:
-        if not isinstance(item, dict):
-            continue
+
+    def one(item: Dict[str, Any]) -> Optional[str]:
         if item.get("source") == "local":
             entry = handed.get(item.get("id"))
-            saved = _deliver_local(agent_dir, entry) if entry else None
-        else:
-            target = agent_dir / DELIVERED_DIR / safe_name(item.get("name") or "file")
-            saved = str(target) if _download(item.get("url") or "", target, opener) else None
-        if saved:
-            paths.append(saved)
-    return paths
+            return _deliver_local(agent_dir, entry) if entry else None
+        target = agent_dir / DELIVERED_DIR / safe_name(item.get("name") or "file")
+        return str(target) if _download(item.get("url") or "", target, opener) else None
+
+    items = [i for i in files or [] if isinstance(i, dict)]
+    # The downloads run together (a turn's four SVGs took 5 s one after another); the
+    # same name twice keeps the later file, as before, so those run in order.
+    names = [safe_name(i.get("name") or "file") for i in items]
+    if len(items) > 1 and len(set(names)) == len(names):
+        from concurrent.futures import ThreadPoolExecutor
+        with ThreadPoolExecutor(max_workers=min(DOWNLOAD_PARALLEL, len(items))) as pool:
+            saved = list(pool.map(one, items))
+    else:
+        saved = [one(i) for i in items]
+    return [p for p in saved if p]
 
 
 # ---------------------------------------------------------------------------
@@ -654,11 +662,23 @@ def work(job: Dict[str, Any], client_factory=None, now: Optional[Callable[[], fl
 def finish(agent_dir: Path, turn_id: str, conversation: str, slug: str, server_url: str, *,
            platform_tools_used: bool, client_factory=None, now: Optional[Callable[[], float]] = None,
            sleep: Optional[Callable[[float], None]] = None,
-           opener: Optional[Callable[[str], Any]] = None) -> List[str]:
+           opener: Optional[Callable[[str], Any]] = None,
+           on_checked: Optional[Callable[[], None]] = None) -> List[str]:
     """The end of a turn: show a check still in flight, then deliver every
     file the agent handed over (the final answer carries them all). Returns
-    the lines to show the person. Never raises."""
+    the lines to show the person. Never raises.
+
+    `on_checked` is called once, as soon as the platform's final check has
+    answered (or was not needed): the stop hook starts the turn's record then,
+    so it runs while the files download instead of after them."""
     from soleon_mcp_client import SoleonClientError, SoleonMcpClient
+
+    told = [False]
+
+    def checked() -> None:
+        if on_checked is not None and not told[0]:
+            told[0] = True
+            on_checked()
 
     clock, nap = now or time.time, sleep or time.sleep
     # A worker may still be waiting for its check's answer: let it finish.
@@ -686,6 +706,8 @@ def finish(agent_dir: Path, turn_id: str, conversation: str, slug: str, server_u
             newest[item["name"]] = item
         files = list(newest.values())
         paths = deliver(agent_dir, state, files, opener)
+        if not platform_tools_used:
+            checked()
         if platform_tools_used:
             try:
                 client = client or (client_factory or SoleonMcpClient)(server_url)
@@ -695,6 +717,7 @@ def finish(agent_dir: Path, turn_id: str, conversation: str, slug: str, server_u
                     nap(1.0)
                     envelope = client.call_tool("get_agent_tool_result",
                                                 {"slug": slug, "app_env": "dev", "call_id": envelope["call_id"]})
+                checked()
                 status, result = _result_of(envelope)
                 if status == "done":
                     paths += deliver(agent_dir, state,
@@ -709,6 +732,7 @@ def finish(agent_dir: Path, turn_id: str, conversation: str, slug: str, server_u
         # environment the feature has not reached) answers every turn this way.
         _stderr("soleon: the turn's platform-made files could not be fetched — {}".format(exc))
     finally:
+        checked()
         leftovers = [agent_dir / STATE_FILE, agent_dir / HANDED_FILE, agent_dir / READY_FILE, agent_dir / LOCK_FILE]
         try:
             leftovers += [q for q in agent_dir.iterdir() if q.name.startswith(JOB_PREFIX)]
