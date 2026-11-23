@@ -332,3 +332,20 @@ def test_prepare_with_the_kb_gives_the_agent_the_jobs_own_budget(tmp_path, monke
     assert client.calls[1][1] == {"kb_id": "kb1", "source_id": "src_mcp_gh"}
     assert json.loads((agent_dir / kli.EXTRACTION_FILE).read_text()) == {
         "callId": CALL, "jobId": JOB, "tokenBudget": 2_000_000}
+
+
+# --- status lines on a narrow console ----------------------------------------
+
+def test_a_title_the_console_cannot_encode_never_kills_the_loop():
+    """2026-11-22: a decision title with an arrow killed `run` on a Windows
+    stdout redirected to a file (cp1252), and the model calls it was answering
+    failed 12 minutes later. The line is printed with the character replaced."""
+    import io
+    raw = io.BytesIO()
+    stream = io.TextIOWrapper(raw, encoding="cp1252", newline="\n")
+    with pytest.raises(UnicodeEncodeError):  # the old print, on the same stream
+        stream.write("SOURCE src_x ready control \u2192 data\n")
+    stream = io.TextIOWrapper(io.BytesIO(), encoding="cp1252", newline="\n")
+    kli._out("SOURCE src_x ready control \u2192 data", stream)
+    stream.seek(0)
+    assert stream.buffer.getvalue() == b"SOURCE src_x ready control ? data\n"
