@@ -508,15 +508,21 @@ def _leave_ready(agent_dir: Path, said: Tuple[str, str]) -> None:
         fh.write(json.dumps({"shown": said[0], "note": said[1]}) + "\n")
 
 
+#: Windows flags for the worker: its own process group and a console with no window
+#: (CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW). Never DETACHED_PROCESS: Windows ignores
+#: CREATE_NO_WINDOW beside it, so anything the worker starts would open a visible window.
+WORKER_CREATIONFLAGS = 0x00000200 | 0x08000000
+
+
 def _spawn_worker(job_path: Path) -> None:
-    """Start `work` detached: the hook returns at once and the agent's next
-    step never waits for a network call."""
+    """Start `work` in the background: the hook returns at once and the
+    agent's next step never waits for a network call."""
     import subprocess
     cmd = [sys.executable, os.path.abspath(__file__), "work", str(job_path)]
     kwargs: Dict[str, Any] = {"stdin": subprocess.DEVNULL, "stdout": subprocess.DEVNULL,
                               "stderr": subprocess.DEVNULL, "close_fds": True}
     if os.name == "nt":
-        kwargs["creationflags"] = 0x00000008 | 0x00000200 | 0x08000000  # detached, own group, no window
+        kwargs["creationflags"] = WORKER_CREATIONFLAGS
     else:
         kwargs["start_new_session"] = True
     subprocess.Popen(cmd, **kwargs)  # noqa: S603 — our own script, our own interpreter
