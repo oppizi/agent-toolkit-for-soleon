@@ -219,3 +219,43 @@ def test_stop_records_a_local_extraction_turn_under_its_job(tmp_path):
     (_name, args), = _records(client)
     assert args["extraction_job_id"] == "ext_" + "2" * 32 + "_"
     assert args["extraction_call_id"] == "lc_" + "1" * 24
+
+
+def test_stop_sends_the_record_while_the_turns_files_download(tmp_path, monkeypatch):
+    """The record goes once the platform's final check has answered, beside the downloads, not after them (it was
+    the last 3 s of every turn): the hook takes about the longer of the two, and the record is still sent."""
+    import soleon_progress
+    agent_dir = _pulled(tmp_path)
+    (agent_dir / ".local-turn.json").write_text(json.dumps(
+        {"turn": "hookturn0001", "agentId": "ae6c9a15e98175395", "startedAt": time.time() - 30, "source": "hook"}))
+    events = []
+
+    class Slow(FakeClient):
+        def call_tool(self, name, arguments):
+            if name == "check_agent_progress":
+                self.calls.append((name, arguments))
+                return {"status": 200, "state": "done", "call_id": "lc_" + "e" * 24, "op": "progress_check",
+                        "result": {"enabled": False, "final": True,
+                                   "files": [{"name": "a.svg", "source": "platform", "url": "https://signed/a"}]}}
+            events.append(("record-start", time.monotonic()))
+            time.sleep(0.4)
+            return super().call_tool(name, arguments)
+
+    def download(url, target, opener=None):
+        time.sleep(0.4)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(b"svg")
+        events.append(("download-end", time.monotonic()))
+        return True
+
+    monkeypatch.setattr(soleon_progress, "_download", download)
+    FakeClient.instances.clear()
+    hook = _hook(agent_dir, hook_event_name="SubagentStop", agent_transcript_path=str(_write_transcript(tmp_path)),
+                 last_assistant_message="I found the TechCrunch newsletter. Summary: ...")
+    t0 = time.monotonic()
+    assert hooks.main(["stop"], stream=io.StringIO(json.dumps(hook)), client_factory=Slow) == 0
+    took = time.monotonic() - t0
+    (client,) = FakeClient.instances
+    assert len(_records(client)) == 1 and (agent_dir / "delivered" / "a.svg").read_bytes() == b"svg"
+    when = dict(events)
+    assert when["record-start"] < when["download-end"] and took < 0.75

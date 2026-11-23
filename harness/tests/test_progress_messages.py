@@ -408,3 +408,56 @@ def test_hooks_json_runs_the_check_after_every_tool_call_of_a_subagent_only():
     (cmd,) = entry["hooks"]
     assert cmd["command"].startswith('i=$(cat); case "$i" in *\'"agent_id"\'*) ;; *) exit 0 ;; esac; ')
     assert cmd["command"].endswith('soleon_progress.py" post-tool') and cmd["timeout"] >= 30
+
+
+def test_the_end_of_the_turn_downloads_its_files_together(tmp_path):
+    """Four platform files of one answer download at once (one after another they took 5 s of every turn)."""
+    agent_dir = _pulled(tmp_path)
+    names = ["a-front.svg", "a-back.svg", "b-front.svg", "b-back.svg"]
+    client = FakeClient({"check_agent_progress": [_done(enabled=True, final=True, files=[
+        {"name": n, "source": "platform", "url": "https://signed/" + n} for n in names])]})
+    running, peak = [0], [0]
+
+    def opener(url):
+        running[0] += 1
+        peak[0] = max(peak[0], running[0])
+        time.sleep(0.3)
+        running[0] -= 1
+        return io.BytesIO(url.encode())
+
+    t0 = time.monotonic()
+    lines = progress.finish(agent_dir, TURN, "c" * 24, SLUG, SERVER_URL, platform_tools_used=True,
+                            client_factory=client, opener=opener)
+    took = time.monotonic() - t0
+    assert peak[0] == 4 and took < 0.9
+    for n in names:
+        assert (agent_dir / "delivered" / n).read_bytes() == ("https://signed/" + n).encode()
+    assert lines[-1].count("File: ") == 4
+
+
+def test_the_end_of_the_turn_says_when_the_final_check_has_answered(tmp_path):
+    """on_checked runs once, after the final check answered and before the files download (the stop hook sends
+    the turn's record then); with no platform tools, once, with nothing asked."""
+    agent_dir = _pulled(tmp_path)
+    order = []
+    client = FakeClient({"check_agent_progress": [_done(enabled=True, final=True, files=[
+        {"name": "deck.pptx", "source": "platform", "url": "https://signed/deck"}])]})
+    real_call = client.call_tool
+
+    def call_tool(name, arguments):
+        order.append(name)
+        return real_call(name, arguments)
+
+    client.call_tool = call_tool
+
+    def opener(url):
+        order.append("download")
+        return io.BytesIO(b"deck")
+
+    progress.finish(agent_dir, TURN, "c" * 24, SLUG, SERVER_URL, platform_tools_used=True,
+                    client_factory=client, opener=opener, on_checked=lambda: order.append("checked"))
+    assert order == ["check_agent_progress", "checked", "download"]
+    told = []
+    progress.finish(agent_dir, TURN, "c" * 24, SLUG, SERVER_URL, platform_tools_used=False,
+                    client_factory=FakeClient({}), on_checked=lambda: told.append(1))
+    assert told == [1]
