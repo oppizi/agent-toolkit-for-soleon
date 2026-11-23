@@ -18,7 +18,9 @@ rewrites the documents whose content changed (agent-infra #3806).
 the machine is on, and the person's Soleon, GitHub and Jira sign-ins must be
 valid. Each run writes a log and `<kb>.json` (started, finished, exit code)
 under ~/.claude/soleon/kb-refresh/; the toolkit's freshness check reports a
-failed run on the next prompt.
+failed run on the next prompt, but only while that knowledge base's daily task
+is still on (a task turned off or removed refreshes nothing, so its last
+failure is old news).
 
 The headless session may use only: Read, Skill, Agent (the kb-extractor), the
 Soleon tools, the pulled agent's two tool servers, and `python`/`python3`
@@ -232,14 +234,51 @@ def uninstall(kb: str, runner=subprocess.run, platform: str = sys.platform) -> s
     return "Removed '{}'.".format(_task_name(kb))
 
 
-def last_runs() -> List[Dict]:
-    """Every knowledge base's last run, newest first (the freshness check reads these)."""
+#: Windows: the child gets a console with no window (the freshness worker's own
+#: console is hidden already; this keeps a terminal-run `status` quiet too).
+_NO_WINDOW = 0x08000000
+_SETTINGS_RE = re.compile(r"<Settings>(.*?)</Settings>", re.S)
+_ENABLED_RE = re.compile(r"<Enabled>\s*(true|false)\s*</Enabled>", re.I)
+
+
+def refresh_on(kb: str, runner=subprocess.run, platform: str = sys.platform) -> bool:
+    """Whether this knowledge base's daily refresh is still scheduled and turned on.
+
+    Windows: the scheduled task exists and its Settings are not `Enabled=false`
+    (read from `schtasks /Query /XML`, which reads the same in every language).
+    Elsewhere: an uncommented crontab line runs this script for the knowledge
+    base. When the answer cannot be read it is True, so a failure is still said."""
+    try:
+        if platform.startswith("win"):
+            proc = runner(["schtasks", "/Query", "/TN", _task_name(kb), "/XML"], capture_output=True,
+                          text=True, timeout=30, stdin=subprocess.DEVNULL, creationflags=_NO_WINDOW)
+            if proc.returncode != 0:
+                return False  # no such task: nothing refreshes this knowledge base
+            settings = _SETTINGS_RE.search(proc.stdout or "")
+            enabled = _ENABLED_RE.search(settings.group(1)) if settings else None
+            return not (enabled and enabled.group(1).lower() == "false")
+        proc = runner(["crontab", "-l"], capture_output=True, text=True, timeout=30, stdin=subprocess.DEVNULL)
+        if proc.returncode != 0:
+            return False  # no crontab at all
+        want = '"--kb" "{}"'.format(kb)
+        return any("soleon_kb_refresh.py" in line and want in line
+                   for line in (proc.stdout or "").splitlines() if not line.lstrip().startswith("#"))
+    except (OSError, subprocess.SubprocessError):
+        return True
+
+
+def last_runs(is_on: Callable[[str], bool] = refresh_on) -> List[Dict]:
+    """Every knowledge base's last run, newest first (the freshness check reads these).
+    Each carries `on`: whether its daily refresh is still turned on (`refresh_on`)."""
     out = []
     for path in sorted(STATE_DIR.glob("*.json")) if STATE_DIR.is_dir() else []:
         try:
             out.append(json.loads(path.read_text(encoding="utf-8")))
         except (OSError, ValueError):
             continue
+    for r in out:
+        if r.get("kb"):
+            r["on"] = is_on(str(r["kb"]))
     return sorted(out, key=lambda r: r.get("startedAt") or 0, reverse=True)
 
 

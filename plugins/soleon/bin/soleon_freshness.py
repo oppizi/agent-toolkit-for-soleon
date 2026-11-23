@@ -315,13 +315,17 @@ def refresh_runs() -> List[Dict[str, Any]]:
 
 
 def refresh_advice(state: Dict[str, Any], runs: List[Dict[str, Any]]) -> List[Tuple[str, Tuple[str, str]]]:
-    """(kb, (advice, key)) for each knowledge base whose last daily refresh failed."""
+    """(kb, (advice, key)) for each knowledge base whose last daily refresh failed,
+    while that refresh is still turned on: a knowledge base nobody refreshes any
+    more says nothing, however its last run ended (Dan, 2026-11-23)."""
     if state["plugin"]["kind"] == "generated":
         return []  # a generated copy (soleon-prod) runs these hooks too: one plugin says it
     out = []
     for r in runs:
         if r.get("running") or r.get("ok") or not r.get("kb") or not r.get("finishedAt"):
             continue
+        if r.get("on") is False:
+            continue  # its daily task is off or gone: nothing refreshes it
         when = time.strftime("%b %d %I:%M %p", time.localtime(float(r["finishedAt"])))
         out.append((str(r["kb"]), (
             "The daily refresh of knowledge base {} failed ({}), {}. Its log: {}".format(

@@ -82,6 +82,17 @@ def test_a_failed_daily_knowledge_base_refresh_is_said_once(tmp_path):
     assert _work(data, runs=[{**failed, "startedAt": NOW + 10}]) != [], "a new failure is a new change"
 
 
+def test_a_failed_refresh_whose_daily_task_is_off_says_nothing(tmp_path):
+    """Dan 2026-11-23: a paused refresh kept saying this morning's failure in every session."""
+    data = tmp_path / "data"
+    _start(data, _copy_install(tmp_path))
+    failed = {"kb": "2ebb3c747a88", "ok": False, "startedAt": NOW - 600, "finishedAt": NOW - 60,
+              "reason": "REFRESH FAILED operator access revoked", "log": "C:/logs/kb.log"}
+    assert _work(data, runs=[{**failed, "on": False}]) == []
+    (said,) = _work(data, runs=[{**failed, "on": True}])
+    assert said.startswith("The daily refresh of knowledge base 2ebb3c747a88 failed")
+
+
 def test_a_running_or_good_refresh_says_nothing(tmp_path):
     data = tmp_path / "data"
     _start(data, _copy_install(tmp_path))
