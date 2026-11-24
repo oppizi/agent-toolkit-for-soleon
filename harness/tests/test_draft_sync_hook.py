@@ -401,3 +401,49 @@ def test_a_failed_rebuild_says_the_agent_still_holds_the_old_rules(agent_dir, ca
     assert code == 0, err  # the platform save succeeded; never block on the rebuild
     message = json.loads(out)["systemMessage"]
     assert "NOT rebuilt" in message and "OLD rules" in message and "/pull-agent" in message
+
+
+
+# --- large skill files go staged (2026-11-24: a 430 KB engine made every save of the flyer builder fail) ---
+
+class _StageClient:
+    def __init__(self):
+        self.staged = []
+
+    def call_tool(self, name, args):
+        assert name == "stage_skill_file"
+        self.staged.append((args["filename"], args["size_bytes"]))
+        return {"status": 200, "body": {"staged_key": "staging/skill-files/dev/bot/%032d" % len(self.staged),
+                                        "put_url": "https://s3.example/put/%d" % len(self.staged)}}
+
+
+def test_a_file_too_large_to_ride_the_save_is_uploaded_and_named_by_its_key():
+    engine = "x = 1\n" * 20_000            # 120 KB
+    small = "# notes\n" * 100
+    skills = [{"id": "s", "files": [{"path": "engine/big.py", "content": engine, "enabled": True},
+                                    {"path": "references/a.md", "content": small}]}]
+    client, puts = _StageClient(), []
+    n = hook.stage_large_files(skills, client, "bot", "dev", put=lambda url, data, headers=None: puts.append((url, data)))
+    assert n == 1 and client.staged == [("big.py", len(engine.encode()))]
+    big, ref = skills[0]["files"]
+    assert "content" not in big and big["staged"] == {"key": "staging/skill-files/dev/bot/%032d" % 1,
+                                                       "size": len(engine.encode())}
+    assert big["enabled"] is True and big["path"] == "engine/big.py"
+    assert ref["content"] == small and puts == [("https://s3.example/put/1", engine.encode())]
+
+
+def test_the_largest_files_go_staged_while_the_inline_total_is_over_the_cap():
+    files = [{"path": "r/%d.md" % i, "content": "y" * 50_000} for i in range(4)]   # 200 KB inline in all
+    client = _StageClient()
+    hook.stage_large_files([{"id": "s", "files": files}], client, "bot", "dev", put=lambda *a, **k: None)
+    inline = sum(len(f["content"]) for f in files if "content" in f)
+    assert inline <= hook.STAGE_TOTAL_BYTES and len(client.staged) == 2
+
+
+def test_a_failed_upload_refuses_the_save_instead_of_sending_half(tmp_path):
+    skills = [{"id": "s", "files": [{"path": "engine/big.py", "content": "z" * 70_000}]}]
+
+    def fail(url, data, headers=None):
+        raise OSError("connection reset")
+    with pytest.raises(hook.StageError):
+        hook.stage_large_files(skills, _StageClient(), "bot", "dev", put=fail)

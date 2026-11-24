@@ -32,6 +32,7 @@ logged).
 """
 from __future__ import annotations
 
+import http.client
 import json
 import os
 import subprocess
@@ -54,6 +55,68 @@ from soleon_mcp_client import (  # noqa: E402
 
 EXIT_OK = 0
 EXIT_BLOCK = 2
+
+#: The platform carries at most 64 KB of text per skill package file and 128 KB per agent inline
+#: (put_agent_skill / patch_agent_draft); a larger file is uploaded first (stage_skill_file) and named by
+#: its staged key. A file goes staged above STAGE_FILE_BYTES, and the largest go staged while the inline
+#: total is above STAGE_TOTAL_BYTES (both under the caps, for headroom). The whole draft document is also
+#: capped (256 KB), which a skill's 430 KB engine alone broke: every save of the flyer builder failed with
+#: "draft too large" (2026-11-24).
+STAGE_FILE_BYTES = 60_000
+STAGE_TOTAL_BYTES = 120_000
+
+
+class StageError(Exception):
+    """A package file could not be uploaded: the save is refused, never sent half."""
+
+
+def _put(url: str, data: bytes, headers: Optional[Dict[str, str]] = None) -> None:
+    import urllib.request
+    req = urllib.request.Request(url, data=data, method="PUT", headers=dict(headers or {}))
+    with urllib.request.urlopen(req, timeout=300) as resp:
+        if resp.status >= 300:
+            raise StageError("upload answered HTTP {}".format(resp.status))
+
+
+def stage_large_files(skills: Any, client, slug: str, app_env: str, put=_put) -> int:
+    """Upload every inline package file too large to ride the save, and name it by its staged key instead.
+    Returns how many files were staged."""
+    entries = []
+    for skill in skills if isinstance(skills, list) else []:
+        for f in (skill.get("files") or []) if isinstance(skill, dict) else []:
+            if isinstance(f, dict) and isinstance(f.get("content"), str):
+                entries.append(f)
+    sizes = {id(f): len(f["content"].encode("utf-8")) for f in entries}
+    stage = {id(f) for f in entries if sizes[id(f)] > STAGE_FILE_BYTES}
+    total = sum(n for k, n in sizes.items() if k not in stage)
+    for f in sorted((f for f in entries if id(f) not in stage), key=lambda f: -sizes[id(f)]):
+        if total <= STAGE_TOTAL_BYTES:
+            break
+        stage.add(id(f))
+        total -= sizes[id(f)]
+    count = 0
+    for f in entries:
+        if id(f) not in stage:
+            continue
+        data = f["content"].encode("utf-8")
+        try:
+            env = client.call_tool("stage_skill_file", {"slug": slug, "app_env": app_env,
+                                                        "filename": os.path.basename(str(f["path"])),
+                                                        "size_bytes": len(data)})
+        except (ToolError, SoleonClientError) as exc:
+            raise StageError("stage_skill_file for {}: {}".format(f["path"], exc)) from exc
+        body = doc.unwrap(env)
+        if is_platform_error(env) or not isinstance(body, dict) or not body.get("put_url") or not body.get("staged_key"):
+            raise StageError("stage_skill_file for {}: {}".format(
+                f["path"], describe_error(env) if is_platform_error(env) else json.dumps(env)[:300]))
+        try:
+            put(body["put_url"], data, body.get("headers"))
+        except (OSError, ValueError, http.client.HTTPException) as exc:
+            raise StageError("upload of {}: {}".format(f["path"], exc)) from exc
+        f.pop("content")
+        f["staged"] = {"key": body["staged_key"], "size": len(data)}
+        count += 1
+    return count
 
 
 def _stderr(msg: str) -> None:
@@ -189,6 +252,14 @@ def sync(agent_dir: Path, kind: str, detail: str, client_factory=SoleonMcpClient
         return EXIT_OK
 
     client = client_factory(server_url)
+    if kind == "skill":
+        try:
+            staged = stage_large_files(changes.get("skills"), client, slug, app_env)
+        except StageError as exc:
+            _stderr("Soleon draft save failed: a skill file could not be uploaded ({})".format(exc))
+            return EXIT_BLOCK
+        if staged:
+            _stderr("uploaded {} large skill file(s) before the save".format(staged))
     arguments: Dict[str, Any] = {"slug": slug, "app_env": app_env, "changes": changes}
     expected = doc.etag_to_int(pull.get("draftEtag"))
     if expected is not None:
