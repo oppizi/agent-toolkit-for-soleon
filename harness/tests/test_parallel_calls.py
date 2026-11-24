@@ -465,3 +465,71 @@ def test_the_broker_serves_only_the_token_holder(tmp_path):
         assert out["error"]["type"] == "PermissionError" and host.calls == []
     finally:
         broker.close()
+
+
+# --- review fixes (2026-11-24) ---
+
+def test_two_servers_starting_a_conversation_together_settle_on_one_id(tmp_path):
+    """A conversation's first step runs a write and a fetch at once, in the two servers: both must send the
+    same conversation id, or one local conversation becomes two platform sessions."""
+    path = str(tmp_path / ".local-conversation.json")
+    trackers = [shim.ConversationTracker(path) for _ in range(6)]
+    ids, barrier = [None] * 6, threading.Barrier(6)
+
+    def go(i):
+        barrier.wait()
+        ids[i] = trackers[i].current()
+    threads = [threading.Thread(target=go, args=(i,)) for i in range(6)]
+    for th in threads:
+        th.start()
+    for th in threads:
+        th.join(10)
+    assert len(set(ids)) == 1 and ids[0]
+    assert json.load(open(path))["conversation"] == ids[0]
+    assert not os.path.exists(path + ".lock")
+
+
+def test_a_batch_stops_below_the_platforms_size_cap():
+    big = "x" * 120_000
+    slots = [{"call": _call("write_file", args={"content": big})}, {"call": _call("write_file", args={"content": big})},
+             {"call": _call("read_file")}]
+    chunks = par.PlatformBatcher._chunks(slots)
+    assert [len(c) for c in chunks] == [1, 2]
+    many = [{"call": _call("read_file")} for _ in range(20)]
+    assert [len(c) for c in par.PlatformBatcher._chunks(many)] == [16, 4]
+
+
+@pytest.mark.parametrize("text, refused", [
+    ("Unknown tool: call_agent_tools", True),
+    ('{"error": "op must be one of [...]", "code": "BAD_OP"}', True),
+    ("local_control.op must be one of ('tool_list', 'tool_call', 'system_prompt', 'turn_record')", True),
+    ("local_control.op must be one of ('tool_list', 'tool_call', 'tool_calls', 'system_prompt')", False),
+    ("web_fetch failed: page not found", False),
+])
+def test_batch_refused_reads_every_older_platform_answer(text, refused):
+    assert par.batch_refused(text) is refused
+
+
+def test_an_older_container_makes_the_calls_go_one_by_one(monkeypatch):
+    srv = shim.AgentToolsServer("bot", [], object(), app_env="dev")
+    old = {"status": 200, "state": "error", "error": "internal_error",
+           "detail": "local_control.op must be one of ('tool_list', 'tool_call', 'system_prompt', 'turn_record')"}
+    monkeypatch.setattr(srv, "client", type("C", (), {"call_tool": lambda self, name, body: old})())
+    monkeypatch.setattr(srv, "_follow", lambda env, what: env)
+    with pytest.raises(par.BatchUnsupported):
+        srv._send_batch([_call("a"), _call("b")])
+
+
+def test_more_than_32_model_answers_go_in_chunks(monkeypatch):
+    sent = []
+
+    class C:
+        def call_tool(self, name, body):
+            sent.append(len(body.get("model_answers") or []))
+            return {"state": "done", "result": {}}
+        _sleep = staticmethod(lambda s: None)
+    reqs = [{"request_id": "r%d" % i} for i in range(70)]
+    env = {"state": "pending", "call_id": "lc_x", "model_requests": reqs}
+    client_mod.await_control(C(), "bot", env, answer_models=lambda rs: [{"request_id": r["request_id"],
+                                                                        "completion": {}} for r in rs])
+    assert sent == [32, 32, 6]

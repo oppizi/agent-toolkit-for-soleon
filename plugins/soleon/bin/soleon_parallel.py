@@ -139,6 +139,9 @@ def line_writer(out) -> Callable[[Dict[str, Any]], None]:
 BATCH_WINDOW_S = 0.05
 #: The platform's cap on one batch (agent-infra local_control TOOL_CALLS_MAX).
 BATCH_MAX = 16
+#: The platform caps a batch's calls at 200,000 characters in all (the same cap
+#: as ONE call's args, call_agent_tool): a batch stops below it, with headroom.
+BATCH_MAX_CHARS = 180_000
 
 _BATCH_DEFAULT_NEXT = ("Read error/detail; fix the call (or ask the person, for "
                        "approval_required) and retry.")
@@ -219,19 +222,45 @@ class PlatformBatcher:
             raise slot["error"]
         return slot["answer"]
 
+    @staticmethod
+    def _chunks(slots: List[Dict[str, Any]]) -> List[List[Dict[str, Any]]]:
+        """The step's calls in batches the platform accepts: at most BATCH_MAX calls and BATCH_MAX_CHARS of
+        arguments each (two 120 KB writes pass alone and must not fail together)."""
+        out: List[List[Dict[str, Any]]] = []
+        cur: List[Dict[str, Any]] = []
+        size = 0
+        for s in slots:
+            n = len(json.dumps(s["call"].get("args"), default=str))
+            if cur and (len(cur) >= BATCH_MAX or size + n > BATCH_MAX_CHARS):
+                out.append(cur)
+                cur, size = [], 0
+            cur.append(s)
+            size += n
+        if cur:
+            out.append(cur)
+        return out
+
     def _flush(self, group: List[Dict[str, Any]]) -> None:
-        by_key: Dict[tuple, List[Dict[str, Any]]] = {}
-        for s in group:
-            by_key.setdefault(self._key(s["call"]), []).append(s)
         threads = []
-        for slots in by_key.values():
-            for i in range(0, len(slots), BATCH_MAX):
-                chunk = slots[i:i + BATCH_MAX]
-                t = threading.Thread(target=self._send, args=(chunk,), daemon=True, name="batch")
-                t.start()
-                threads.append(t)
-        for t in threads:
-            t.join()
+        started: set = set()
+        try:
+            by_key: Dict[tuple, List[Dict[str, Any]]] = {}
+            for s in group:
+                by_key.setdefault(self._key(s["call"]), []).append(s)
+            for slots in by_key.values():
+                for chunk in self._chunks(slots):
+                    t = threading.Thread(target=self._send, args=(chunk,), daemon=True, name="batch")
+                    t.start()
+                    threads.append(t)
+                    started.update(id(s) for s in chunk)
+        except Exception as exc:  # noqa: BLE001 — every waiting call must get an answer
+            for s in group:
+                if id(s) not in started:
+                    s["error"] = exc
+                    s["done"].set()
+        finally:
+            for t in threads:
+                t.join()
 
     def _send(self, slots: List[Dict[str, Any]]) -> None:
         try:
@@ -277,6 +306,15 @@ class PlatformBatcher:
 
 class BatchUnsupported(Exception):
     """The platform has no `call_agent_tools` / `tool_calls` op (an older Soleon)."""
+
+
+def batch_refused(text: str) -> bool:
+    """A platform answer saying it runs no batches: the MCP server has no `call_agent_tools`, a control route
+    or the data verb refuses the op (`BAD_OP`), or the agent's container predates it ("local_control.op
+    must be one of ...")."""
+    t = text or ""
+    return ("call_agent_tools" in t and ("nknown tool" in t or "Tool not found" in t or "no such tool" in t)) \
+        or "BAD_OP" in t or ("local_control.op must be one of" in t and "tool_calls" not in t.split("one of", 1)[-1])
 
 
 # --- One batch for the agent's two servers -----------------------------------------------------------------
@@ -347,18 +385,28 @@ class BatchBroker:
 
     def _serve(self, conn) -> None:
         with conn:
+            def send(obj) -> None:
+                conn.sendall((json.dumps(obj, default=str) + "\n").encode("utf-8"))
             try:
-                req = json.loads(_read_line(conn))
+                conn.settimeout(BROKER_HANDSHAKE_S)  # a caller that never sends its line holds nothing
+                req = json.loads(conn.makefile("rb").readline().decode("utf-8") or "{}")
+                conn.settimeout(None)
                 if req.get("token") != self._token:
                     raise PermissionError("wrong broker token")
+                send({"accepted": True})
                 out = {"answer": self._batcher.run(req["call"])}
             except Exception as exc:  # noqa: BLE001 — the caller re-raises it as the same class
                 out = {"error": {"type": type(exc).__name__, "message": str(exc),
                                  "payload": getattr(exc, "payload", None)}}
             try:
-                conn.sendall((json.dumps(out, default=str) + "\n").encode("utf-8"))
+                send(out)
             except OSError as exc:
                 self._log("batch broker: could not answer a call ({})".format(exc))
+
+
+#: How long either side waits for the other's first line: a caller that reaches a port the broker no longer
+#: holds (a stale announcement, the port reused by something else) falls back instead of waiting forever.
+BROKER_HANDSHAKE_S = 5.0
 
 
 def _read_line(conn) -> str:
@@ -399,9 +447,19 @@ class RemoteBatcher:
             self._log("batch broker unreachable ({}); this server batches alone".format(exc))
             return self._local.run(call)
         with conn:
-            conn.settimeout(None)  # a call runs as long as the platform takes
-            conn.sendall((json.dumps({"token": b["token"], "call": call}) + "\n").encode("utf-8"))
-            out = json.loads(_read_line(conn) or "{}")
+            reader = conn.makefile("rb")
+            try:
+                conn.sendall((json.dumps({"token": b["token"], "call": call}) + "\n").encode("utf-8"))
+                conn.settimeout(BROKER_HANDSHAKE_S)
+                first = json.loads(reader.readline().decode("utf-8") or "{}")
+            except (OSError, ValueError) as exc:
+                self._log("batch broker gave no answer ({}); this server batches alone".format(exc))
+                return self._local.run(call)
+            if first.get("accepted") is not True:
+                out = first  # refused before the call ran (a wrong token): its error below
+            else:
+                conn.settimeout(None)  # the call runs as long as the platform takes
+                out = json.loads(reader.readline().decode("utf-8") or "{}")
         if "answer" in out:
             return out["answer"]
         err = out.get("error") or {"type": "RuntimeError", "message": "the batch broker answered nothing"}

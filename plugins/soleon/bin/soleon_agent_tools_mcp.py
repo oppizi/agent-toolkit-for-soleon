@@ -311,6 +311,9 @@ class ConversationTracker:
         self.idle_s = idle_s
         self._now = now or __import__("time").time
         self._id: Optional[str] = None
+        #: A step's calls run together, in this process and in the agent's other
+        #: server: only one of them settles the id (see `current`).
+        self._lock = threading.Lock()
 
     def _load(self) -> Optional[Dict[str, Any]]:
         if not self.path or not os.path.isfile(self.path):
@@ -324,21 +327,29 @@ class ConversationTracker:
 
     def current(self) -> str:
         """The id to send with the NEXT call (touching the last-call time).
-        Calls that ask together (soleon_parallel.py) settle on one id: the
-        check of `_id` follows the file read with nothing between it and the
-        assignment, and each save replaces the file whole."""
-        now = self._now()
-        data = self._load() or {}
-        cid = data.get("conversation") if isinstance(data.get("conversation"), str) else None
-        last = data.get("lastCallAt") if isinstance(data.get("lastCallAt"), (int, float)) else None
+        The first calls of a conversation run together, in this process and in
+        the agent's other server (soleon_parallel.py), so the id is settled
+        under a lock held across both processes (`_file_lock`): the first to
+        take it mints the id and saves it, the others read that id. Two ids
+        would split one local conversation into two platform sessions, and a
+        file the sandbox writes in one would not be the file read_file opens
+        in the other."""
         if self._id is None:
-            if cid and last is not None and (now - last) < self.idle_s:
-                self._id = cid
-                _log("continuing conversation {} ({:.0f}s since its last call)".format(cid, now - last))
-            else:
-                self._id = __import__("uuid").uuid4().hex[:24]
-                _log("new conversation {} → a new platform session".format(self._id))
-        self._save({"conversation": self._id, "lastCallAt": now})
+            with self._lock, _file_lock((self.path + ".lock") if self.path else None):
+                if self._id is None:
+                    now = self._now()
+                    data = self._load() or {}
+                    cid = data.get("conversation") if isinstance(data.get("conversation"), str) else None
+                    last = data.get("lastCallAt") if isinstance(data.get("lastCallAt"), (int, float)) else None
+                    if cid and last is not None and (now - last) < self.idle_s:
+                        self._id = cid
+                        _log("continuing conversation {} ({:.0f}s since its last call)".format(cid, now - last))
+                    else:
+                        self._id = __import__("uuid").uuid4().hex[:24]
+                        _log("new conversation {} → a new platform session".format(self._id))
+                    self._save({"conversation": self._id, "lastCallAt": now})
+                    return self._id
+        self._save({"conversation": self._id, "lastCallAt": self._now()})
         return self._id
 
     def _save(self, data: Dict[str, Any]) -> None:
@@ -348,6 +359,49 @@ class ConversationTracker:
             _write_json_atomic(self.path, data)
         except OSError as exc:
             _log("could not persist the conversation id: {}".format(exc))
+
+
+class _file_lock:
+    """A lock shared by the agent's processes: a lock file created exclusively,
+    held for milliseconds. One left behind by a killed process is taken over
+    after `stale_s`. `None` path: no lock."""
+
+    def __init__(self, path: Optional[str], timeout_s: float = 5.0, stale_s: float = 10.0):
+        self.path, self.timeout_s, self.stale_s = path, timeout_s, stale_s
+        self._held = False
+
+    def __enter__(self):
+        if not self.path:
+            return self
+        deadline = time.time() + self.timeout_s
+        while True:
+            try:
+                os.close(os.open(self.path, os.O_CREAT | os.O_EXCL | os.O_WRONLY))
+                self._held = True
+                return self
+            except FileExistsError:
+                try:
+                    if time.time() - os.path.getmtime(self.path) > self.stale_s:
+                        os.remove(self.path)
+                        continue
+                except OSError:
+                    continue
+                if time.time() > deadline:
+                    _log("could not take {} in {:.0f}s; going on without it".format(self.path, self.timeout_s))
+                    return self
+                time.sleep(0.01)
+            except OSError as exc:
+                _log("no lock file {} ({}); going on without it".format(self.path, exc))
+                return self
+
+    def __exit__(self, *exc):
+        if self._held:
+            try:
+                os.remove(self.path)
+            except OSError:
+                pass
+            self._held = False
+        return False
 
 
 def _write_json_atomic(path: str, data: Dict[str, Any]) -> None:
@@ -1295,12 +1349,19 @@ class AgentToolsServer:
         try:
             envelope = self.client.call_tool("call_agent_tools", body)
         except ToolError as exc:
-            payload = exc.payload or {}
-            text = "{} {}".format(exc, json.dumps(payload, default=str))
-            if "call_agent_tools" in text and ("nknown" in text or "not found" in text) or "BAD_OP" in text:
+            text = "{} {}".format(exc, json.dumps(exc.payload or {}, default=str))
+            if soleon_parallel.batch_refused(text):
                 raise soleon_parallel.BatchUnsupported(str(exc)[:200]) from exc
             raise
-        return self._follow(envelope, ", ".join(str(c.get("name")) for c in calls))
+        if isinstance(envelope, dict) and envelope.get("state") not in ("pending", "done") and soleon_parallel.batch_refused(
+                json.dumps(envelope, default=str)[:4000]):
+            raise soleon_parallel.BatchUnsupported(str(envelope.get("detail") or envelope.get("error"))[:200])
+        envelope = self._follow(envelope, ", ".join(str(c.get("name")) for c in calls))
+        if isinstance(envelope, dict) and envelope.get("state") == "error" and soleon_parallel.batch_refused(
+                "{} {}".format(envelope.get("error"), envelope.get("detail"))):
+            # The agent's container predates the op: the calls go one by one.
+            raise soleon_parallel.BatchUnsupported(str(envelope.get("detail"))[:200])
+        return envelope
 
     def listed(self) -> List[Dict[str, Any]]:
         """`tools/list`: every tool marked to run alongside the step's other

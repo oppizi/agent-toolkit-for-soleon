@@ -595,6 +595,11 @@ class SoleonMcpClient:
 # Local-control await helper (spec D14 — no client-side timeout)
 # ---------------------------------------------------------------------------
 
+#: The platform's cap on model answers in one get_agent_tool_result (agent-infra
+#: local_emulation._MODEL_ANSWERS_MAX).
+MODEL_ANSWERS_MAX = 32
+
+
 def await_control(
     client: SoleonMcpClient,
     slug: str,
@@ -623,15 +628,21 @@ def await_control(
             answers = answer_models(requests) if answer_models else [
                 {"request_id": r.get("request_id"),
                  "error": "this local caller cannot answer model calls"} for r in requests]
-            sent = {"slug": slug, "app_env": app_env, "call_id": envelope["call_id"],
-                    "model_answers": answers}
-            try:
-                envelope = client.call_tool("get_agent_tool_result", sent)
-            except TransportError:
-                # The answers cost local model time: send them once more
-                # before giving up (an already-stored answer counts as stale).
-                do_sleep(interval_s)
-                envelope = client.call_tool("get_agent_tool_result", sent)
+            # The platform takes at most MODEL_ANSWERS_MAX answers per call; a
+            # batch of code runs (call_agent_tools) can wait on more. Every
+            # chunk goes before the next poll is read, so an answer already
+            # sent is never asked of the local model again.
+            call_id = envelope["call_id"]
+            for i in range(0, max(1, len(answers)), MODEL_ANSWERS_MAX):
+                sent = {"slug": slug, "app_env": app_env, "call_id": call_id,
+                        "model_answers": answers[i:i + MODEL_ANSWERS_MAX]}
+                try:
+                    envelope = client.call_tool("get_agent_tool_result", sent)
+                except TransportError:
+                    # The answers cost local model time: send them once more
+                    # before giving up (an already-stored answer counts as stale).
+                    do_sleep(interval_s)
+                    envelope = client.call_tool("get_agent_tool_result", sent)
             continue
         if on_wait:
             on_wait(envelope)
