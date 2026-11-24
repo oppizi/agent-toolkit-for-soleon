@@ -33,6 +33,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+import threading
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -311,24 +312,15 @@ def stop(hook: Dict[str, Any], client_factory=SoleonMcpClient, now=None) -> int:
     local_names = {s["name"] for s in turn["steps"]}
     shown: List[str] = []
     clients: List[Any] = []
+    clients_lock = threading.Lock()
 
     def shared_client(url: str = server_url):
         # One client (one token read) for the turn's files and its record.
-        if not clients:
-            clients.append(client_factory(url))
-        return clients[0]
+        with clients_lock:
+            if not clients:
+                clients.append(client_factory(url))
+            return clients[0]
 
-    try:
-        import soleon_progress
-        shown = soleon_progress.finish(
-            agent_dir, turn_id, conversation, slug, server_url,
-            # An extraction job's calls ran on the job's own session, which has
-            # no files to hand to a person.
-            platform_tools_used=(any(name not in local_names for name in turn["tools_used"])
-                                 and not (agent_dir / EXTRACTION_FILE).exists()),
-            client_factory=shared_client, now=now)
-    except Exception as exc:  # noqa: BLE001 — never block the turn's record
-        _stderr("soleon: could not finish the turn's progress messages and files: {}".format(exc))
     payload = {
         "slug": slug, "app_env": "dev", "conversation": conversation, "turn": turn_id,
         "prompt": turn["prompt"], "response": turn["response"], "status": turn["status"],
@@ -341,12 +333,42 @@ def stop(hook: Dict[str, Any], client_factory=SoleonMcpClient, now=None) -> int:
     # Under a LOCAL extraction job the turn's calls ran on the job's session;
     # the record goes there too.
     payload.update(extraction_args(str(agent_dir / EXTRACTION_FILE)))
+    # The record goes as soon as the platform's final check has answered, and
+    # runs while the turn's files download (soleon_progress.finish on_checked):
+    # it was the last 3 s of every turn, after the downloads.
+    recorded: Dict[str, Any] = {}
+
+    def record() -> None:
+        try:
+            client = shared_client()
+            envelope = client.call_tool("record_agent_turn", payload)
+            recorded["envelope"] = await_control(client, slug, envelope, app_env="dev", interval_s=1.0)
+        except SoleonClientError as exc:
+            recorded["error"] = str(exc)
+        except Exception as exc:  # noqa: BLE001 — reported as not recorded, never raised into the hook
+            recorded["error"] = "{}: {}".format(type(exc).__name__, exc)
+
+    recorder = threading.Thread(target=record, name="soleon-record-turn")
     try:
-        client = shared_client()
-        envelope = client.call_tool("record_agent_turn", payload)
-        envelope = await_control(client, slug, envelope, app_env="dev", interval_s=1.0)
-    except SoleonClientError as exc:
-        return _not_recorded(str(exc), shown)
+        import soleon_progress
+        shown = soleon_progress.finish(
+            agent_dir, turn_id, conversation, slug, server_url,
+            # An extraction job's calls ran on the job's own session, which has
+            # no files to hand to a person.
+            platform_tools_used=(any(name not in local_names for name in turn["tools_used"])
+                                 and not (agent_dir / EXTRACTION_FILE).exists()),
+            client_factory=shared_client, now=now, on_checked=recorder.start)
+    except Exception as exc:  # noqa: BLE001 — never block the turn's record
+        _stderr("soleon: could not finish the turn's progress messages and files: {}".format(exc))
+    if not recorder.is_alive() and not recorded:
+        try:
+            recorder.start()
+        except RuntimeError:  # already started and already done
+            pass
+    recorder.join()
+    if "error" in recorded:
+        return _not_recorded(recorded["error"], shown)
+    envelope = recorded.get("envelope")
     if not isinstance(envelope, dict) or is_platform_error(envelope) or envelope.get("state") != "done":
         detail = describe_error(envelope) if isinstance(envelope, dict) else str(envelope)
         return _not_recorded(detail, shown)
