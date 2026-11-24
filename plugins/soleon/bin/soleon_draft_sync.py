@@ -32,6 +32,7 @@ logged).
 """
 from __future__ import annotations
 
+import http.client
 import json
 import os
 import subprocess
@@ -110,7 +111,7 @@ def stage_large_files(skills: Any, client, slug: str, app_env: str, put=_put) ->
                 f["path"], describe_error(env) if is_platform_error(env) else json.dumps(env)[:300]))
         try:
             put(body["put_url"], data, body.get("headers"))
-        except OSError as exc:
+        except (OSError, ValueError, http.client.HTTPException) as exc:
             raise StageError("upload of {}: {}".format(f["path"], exc)) from exc
         f.pop("content")
         f["staged"] = {"key": body["staged_key"], "size": len(data)}
