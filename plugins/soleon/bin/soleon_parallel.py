@@ -23,7 +23,8 @@ from __future__ import annotations
 import json
 import os
 import threading
-from typing import Any, Callable, Dict, Optional
+import time
+from typing import Any, Callable, Dict, List, Optional
 
 #: The platform's fan-out per effort stop (effort.py STOPS / _TOOL_FANOUT_LIMIT).
 FANOUT = {"swift": 2, "balanced": 4, "thorough": 6, "exhaustive": 8}
@@ -131,3 +132,148 @@ def line_writer(out) -> Callable[[Dict[str, Any]], None]:
             out.write(data)
             out.flush()
     return write
+
+
+#: How long the first platform call of a step waits for the step's other calls
+#: before it goes: Claude Code sends a step's calls within a few milliseconds.
+BATCH_WINDOW_S = 0.05
+#: The platform's cap on one batch (agent-infra local_control TOOL_CALLS_MAX).
+BATCH_MAX = 16
+
+_BATCH_DEFAULT_NEXT = ("Read error/detail; fix the call (or ask the person, for "
+                       "approval_required) and retry.")
+
+
+def split_batch(envelope: Any, count: int) -> List[Any]:
+    """The answer of each call of a finished `call_agent_tools`, shaped exactly
+    as `call_agent_tool` answers that call alone. A batch that failed as a whole
+    is every call's answer."""
+    if not isinstance(envelope, dict) or envelope.get("state") != "done":
+        return [envelope] * count
+    result = envelope.get("result") if isinstance(envelope.get("result"), dict) else {}
+    results = result.get("results")
+    if not isinstance(results, list) or len(results) != count:
+        bad = {"status": 200, "state": "error", "call_id": envelope.get("call_id"), "op": "tool_call",
+               "error": "batch_result_malformed",
+               "detail": "Soleon answered the step's calls without one answer per call.",
+               "next_action": "Retry the call."}
+        return [bad] * count
+    common = {"call_id": envelope.get("call_id"), "op": "tool_call", "session_id": envelope.get("session_id")}
+    if envelope.get("turn_id"):
+        common["turn_id"] = envelope["turn_id"]
+    out = []
+    for r in results:
+        r = r if isinstance(r, dict) else {"error": "batch_result_malformed", "detail": str(r)[:200]}
+        if r.get("error"):
+            out.append({"status": 200, "state": "error", **common, "error": r["error"],
+                        "detail": r.get("detail") or "", "next_action": r.get("next_action") or _BATCH_DEFAULT_NEXT,
+                        **{k: v for k, v in r.items() if k in ("tool", "missing", "preview", "elapsed_ms")}})
+        else:
+            out.append({"status": 200, "state": "done", **common, "result": r})
+    return out
+
+
+class PlatformBatcher:
+    """A step's platform calls go to Soleon as ONE `call_agent_tools` request,
+    which runs them together in one turn, as the agent's own loop runs a step's
+    calls on the platform. A call alone goes as `call_agent_tool`, as before.
+
+    `run(call)` blocks until that call's answer is in. `call` is the
+    `call_agent_tool` arguments of one call (slug, app_env, name, args,
+    approved, conversation, turn, ...). `send_one(call)` and
+    `send_batch(calls)` make the request and follow it to its end (polling
+    included); `send_batch` raises `BatchUnsupported` when the platform has no
+    such op, and the calls then go one by one from then on."""
+
+    def __init__(self, send_one: Callable[[Dict[str, Any]], Any],
+                 send_batch: Callable[[List[Dict[str, Any]]], Any],
+                 window_s: float = BATCH_WINDOW_S, log: Callable[[str], None] = lambda _m: None):
+        self._send_one = send_one
+        self._send_batch = send_batch
+        self._window_s = window_s
+        self._log = log
+        self._lock = threading.Lock()
+        self._pending: List[Dict[str, Any]] = []
+        self._supported = True
+
+    @staticmethod
+    def _key(call: Dict[str, Any]) -> tuple:
+        return tuple(call.get(k) for k in ("slug", "app_env", "conversation", "turn"))
+
+    def run(self, call: Dict[str, Any]) -> Any:
+        # An approved call, or one made under an extraction job, is the
+        # person's yes or a job's own op: it goes alone, as before.
+        if not self._supported or call.get("approved") or any(k.startswith("extraction") for k in call):
+            return self._send_one(call)
+        slot = {"call": call, "done": threading.Event(), "answer": None, "error": None}
+        with self._lock:
+            self._pending.append(slot)
+            leader = len(self._pending) == 1
+        if leader:
+            time.sleep(self._window_s)
+            with self._lock:
+                group, self._pending = self._pending, []
+            self._flush(group)
+        slot["done"].wait()
+        if slot["error"] is not None:
+            raise slot["error"]
+        return slot["answer"]
+
+    def _flush(self, group: List[Dict[str, Any]]) -> None:
+        by_key: Dict[tuple, List[Dict[str, Any]]] = {}
+        for s in group:
+            by_key.setdefault(self._key(s["call"]), []).append(s)
+        threads = []
+        for slots in by_key.values():
+            for i in range(0, len(slots), BATCH_MAX):
+                chunk = slots[i:i + BATCH_MAX]
+                t = threading.Thread(target=self._send, args=(chunk,), daemon=True, name="batch")
+                t.start()
+                threads.append(t)
+        for t in threads:
+            t.join()
+
+    def _send(self, slots: List[Dict[str, Any]]) -> None:
+        try:
+            if len(slots) == 1 or not self._supported:
+                for s in slots:
+                    self._deliver(s, lambda c=s["call"]: self._send_one(c))
+                return
+            try:
+                envelope = self._send_batch([s["call"] for s in slots])
+            except BatchUnsupported as exc:
+                self._log("the platform runs no batches ({}); calls go one by one".format(exc))
+                self._supported = False
+                threads = [threading.Thread(target=self._deliver, args=(s, lambda c=s["call"]: self._send_one(c)),
+                                            daemon=True) for s in slots]
+                for t in threads:
+                    t.start()
+                for t in threads:
+                    t.join()
+                return
+            except Exception as exc:  # noqa: BLE001 — every call of the batch gets the batch's failure
+                for s in slots:
+                    s["error"] = exc
+                    s["done"].set()
+                return
+            self._log("{} calls ran together ({})".format(
+                len(slots), ", ".join(str(s["call"].get("name")) for s in slots)))
+            for s, answer in zip(slots, split_batch(envelope, len(slots))):
+                s["answer"] = answer
+                s["done"].set()
+        finally:
+            for s in slots:
+                s["done"].set()
+
+    @staticmethod
+    def _deliver(slot: Dict[str, Any], send: Callable[[], Any]) -> None:
+        try:
+            slot["answer"] = send()
+        except Exception as exc:  # noqa: BLE001 — raised in the caller's thread
+            slot["error"] = exc
+        finally:
+            slot["done"].set()
+
+
+class BatchUnsupported(Exception):
+    """The platform has no `call_agent_tools` / `tool_calls` op (an older Soleon)."""

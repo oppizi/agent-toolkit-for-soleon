@@ -306,3 +306,103 @@ def test_two_refused_calls_renew_the_token_once():
     for t in threads:
         t.join(10)
     assert grants[0] == 1 and len(results) == 2
+
+
+# --- PlatformBatcher: a step's platform calls as ONE Soleon request (2026-11-24) ---
+
+def _call(name, **over):
+    return dict({"slug": "bot", "app_env": "dev", "name": name, "args": {"q": name}, "approved": False,
+                 "conversation": "c1", "turn": "t1"}, **over)
+
+
+def _done(results):
+    return {"status": 200, "state": "done", "call_id": "lc_b", "op": "tool_calls", "session_id": "s",
+            "result": {"results": results}}
+
+
+def _run_together(batcher, calls):
+    answers = [None] * len(calls)
+
+    def go(i, c):
+        answers[i] = batcher.run(c)
+    threads = [threading.Thread(target=go, args=(i, c)) for i, c in enumerate(calls)]
+    for th in threads:
+        th.start()
+    for th in threads:
+        th.join(5)
+    return answers
+
+
+def test_a_steps_calls_go_as_one_batch_and_each_gets_its_own_answer():
+    sent = {"one": [], "batch": []}
+
+    def batch(calls):
+        sent["batch"].append([c["name"] for c in calls])
+        return _done([{"tool": c["name"], "result": "r-" + c["name"]} if c["name"] != "bad"
+                      else {"error": "tool_error", "tool": "bad", "detail": "boom"} for c in calls])
+    b = par.PlatformBatcher(lambda c: sent["one"].append(c["name"]), batch, window_s=0.05)
+    answers = _run_together(b, [_call("web_search"), _call("bad"), _call("web_fetch")])
+    assert sent["one"] == [] and len(sent["batch"]) == 1
+    assert sorted(sent["batch"][0]) == ["bad", "web_fetch", "web_search"]
+    by_tool = {a.get("result", {}).get("tool") or a.get("tool"): a for a in answers}
+    assert by_tool["web_search"] == {"status": 200, "state": "done", "call_id": "lc_b", "op": "tool_call",
+                                     "session_id": "s", "result": {"tool": "web_search", "result": "r-web_search"}}
+    assert by_tool["bad"]["state"] == "error" and by_tool["bad"]["error"] == "tool_error"
+    assert by_tool["bad"]["detail"] == "boom" and by_tool["bad"]["op"] == "tool_call"
+
+
+def test_a_call_alone_goes_as_before():
+    sent = []
+    b = par.PlatformBatcher(lambda c: sent.append(c["name"]) or {"state": "done"},
+                            lambda calls: pytest.fail("no batch for one call"), window_s=0.01)
+    assert b.run(_call("web_search")) == {"state": "done"} and sent == ["web_search"]
+
+
+def test_an_approved_call_and_another_turns_call_never_join_a_batch():
+    sent = {"one": [], "batch": []}
+    b = par.PlatformBatcher(lambda c: sent["one"].append(c["name"]) or {"state": "done"},
+                            lambda calls: sent["batch"].append([c["name"] for c in calls]) or _done(
+                                [{"tool": c["name"]} for c in calls]), window_s=0.05)
+    _run_together(b, [_call("a"), _call("b"), _call("ok", approved=True), _call("other", turn="t2")])
+    assert sorted(sent["one"]) == ["ok", "other"]
+    assert [sorted(x) for x in sent["batch"]] == [["a", "b"]]
+
+
+def test_an_older_platform_without_batches_falls_back_to_one_by_one_for_good():
+    sent = {"one": [], "batch": 0}
+
+    def batch(calls):
+        sent["batch"] += 1
+        raise par.BatchUnsupported("no call_agent_tools")
+    b = par.PlatformBatcher(lambda c: sent["one"].append(c["name"]) or {"state": "done", "n": c["name"]},
+                            batch, window_s=0.05)
+    answers = _run_together(b, [_call("a"), _call("b")])
+    assert sorted(a["n"] for a in answers) == ["a", "b"] and sent["batch"] == 1
+    _run_together(b, [_call("c"), _call("d")])
+    assert sent["batch"] == 1 and sorted(sent["one"]) == ["a", "b", "c", "d"]
+
+
+def test_a_failed_batch_fails_every_call_of_it():
+    def batch(calls):
+        raise client_mod.TransportError("down")
+    b = par.PlatformBatcher(lambda c: pytest.fail("not alone"), batch, window_s=0.05)
+    errors = []
+
+    def go(c):
+        try:
+            b.run(c)
+        except client_mod.TransportError as exc:
+            errors.append(str(exc))
+    threads = [threading.Thread(target=go, args=(c,)) for c in (_call("a"), _call("b"))]
+    for th in threads:
+        th.start()
+    for th in threads:
+        th.join(5)
+    assert errors == ["down", "down"]
+
+
+def test_split_batch_answers_a_whole_batch_failure_to_every_call():
+    err = {"status": 200, "state": "error", "error": "internal_error", "detail": "x"}
+    assert par.split_batch(err, 3) == [err, err, err]
+    bad = par.split_batch(_done([{"tool": "a"}]), 2)
+    assert [a["error"] for a in bad] == ["batch_result_malformed"] * 2

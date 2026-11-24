@@ -1269,6 +1269,37 @@ class AgentToolsServer:
         #: stack dump) is changed under this lock.
         self._state_lock = threading.RLock()
         self._slow_calls = 0
+        #: The step's platform calls go to Soleon as one request, which runs
+        #: them together in one turn (soleon_parallel.PlatformBatcher).
+        self._batcher = soleon_parallel.PlatformBatcher(self._send_one, self._send_batch, log=_log)
+
+    def _follow(self, envelope: Any, what: str) -> Any:
+        """A platform answer followed to its end (pending -> done / error)."""
+        return await_control(
+            self.client, self.slug, envelope, app_env=self.app_env,
+            interval_s=self.poll_interval_s,
+            on_wait=lambda env: _log("{} still running on the platform (call_id {})".format(
+                what, env.get("call_id"))),
+            answer_models=self.local_model.answer if self.local_model is not None else None,
+        )
+
+    def _send_one(self, call: Dict[str, Any]) -> Any:
+        return self._follow(self.client.call_tool("call_agent_tool", call), str(call.get("name")))
+
+    def _send_batch(self, calls: List[Dict[str, Any]]) -> Any:
+        first = calls[0]
+        body = {"slug": first["slug"], "app_env": first["app_env"],
+                "calls": [{"name": c["name"], "args": c["args"], "approved": bool(c.get("approved"))} for c in calls],
+                "conversation": first.get("conversation"), "turn": first.get("turn")}
+        try:
+            envelope = self.client.call_tool("call_agent_tools", body)
+        except ToolError as exc:
+            payload = exc.payload or {}
+            text = "{} {}".format(exc, json.dumps(payload, default=str))
+            if "call_agent_tools" in text and ("nknown" in text or "not found" in text) or "BAD_OP" in text:
+                raise soleon_parallel.BatchUnsupported(str(exc)[:200]) from exc
+            raise
+        return self._follow(envelope, ", ".join(str(c.get("name")) for c in calls))
 
     def listed(self) -> List[Dict[str, Any]]:
         """`tools/list`: every tool marked to run alongside the step's other
@@ -1432,20 +1463,13 @@ class AgentToolsServer:
         # SLOW_CALL_DUMP_S every thread's stack goes to stderr, which Claude Code keeps in its MCP log.
         self._slow_watch(True)
         try:
-            envelope = self.client.call_tool("call_agent_tool", {
+            envelope = self._batcher.run({
                 "slug": self.slug, "app_env": self.app_env,
                 "name": platform_name, "args": args, "approved": approved,
                 "conversation": self.conversation.current(),
                 "turn": self.turn.current(),
                 **extraction_args(self.extraction_path),
             })
-            envelope = await_control(
-                self.client, self.slug, envelope, app_env=self.app_env,
-                interval_s=self.poll_interval_s,
-                on_wait=lambda env: _log("{} still running on the platform (call_id {})".format(
-                    name, env.get("call_id"))),
-                answer_models=self.local_model.answer if self.local_model is not None else None,
-            )
         except MissingTokenError as exc:
             return _text_result(str(exc), True)
         except AuthError as exc:
