@@ -583,11 +583,17 @@ def _platform_file_tools(args: Any):
                for t in TOOLS for n in [t["name"]]]
     turn = (tools_mcp.TurnTracker(None, fixed=args.turn) if args.turn
             else tools_mcp.TurnTracker(os.path.join(agent_dir, tools_mcp.TURN_FILE_NAME)))
-    return tools_mcp.AgentToolsServer(
+    server = tools_mcp.AgentToolsServer(
         args.slug, entries, SoleonMcpClient(args.server_url, credentials_path=args.credentials),
         app_env=args.app_env,
         conversation=tools_mcp.ConversationTracker(os.path.join(agent_dir, ".local-conversation.json")),
         turn=turn)
+    if not args.turn:
+        # The agent's own file server: its platform calls join the agent-tools server's batch through the
+        # session's broker, so a step that writes a note and fetches a page is one request (soleon_parallel.py).
+        import soleon_parallel
+        server._batcher = soleon_parallel.RemoteBatcher(agent_dir, server._batcher, log=_log)
+    return server
 
 
 if __name__ == "__main__":

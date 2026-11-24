@@ -277,3 +277,139 @@ class PlatformBatcher:
 
 class BatchUnsupported(Exception):
     """The platform has no `call_agent_tools` / `tool_calls` op (an older Soleon)."""
+
+
+# --- One batch for the agent's two servers -----------------------------------------------------------------
+# The file tools (soleon-workspace) and the other tools (soleon-agent-tools) are two processes, so a step that
+# writes a note and fetches a page made two requests, and Soleon's queue ran them one after the other. The
+# agent-tools server hosts a broker on 127.0.0.1; the workspace server hands its platform calls to it, so the
+# step's calls from both servers join one batch. Without a broker (an older server, a worker) each server
+# batches its own calls, as before.
+
+def broker_file(agent_dir: str, parent: Optional[int] = None) -> str:
+    """Where the broker of THIS Claude Code session (the servers' common parent) is announced."""
+    return os.path.join(agent_dir, ".batch-broker-{}.json".format(os.getppid() if parent is None else parent))
+
+
+#: The exception classes a broker call may raise, by name, re-raised as the same class on the other side.
+_ERRORS: Dict[str, Any] = {}
+
+
+def register_errors(*classes: Any) -> None:
+    for c in classes:
+        _ERRORS[c.__name__] = c
+
+
+class BatchBroker:
+    """Serves `PlatformBatcher.run` to the session's other server: one JSON line in ({token, call}), one out
+    ({answer} or {error: {type, message, payload}}). Only callers holding the token in the announcement file
+    (readable by this user only) are served."""
+
+    def __init__(self, agent_dir: str, batcher: "PlatformBatcher", log: Callable[[str], None] = lambda _m: None):
+        import socket
+        self._batcher = batcher
+        self._log = log
+        self._token = os.urandom(16).hex()
+        self._sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self._sock.bind(("127.0.0.1", 0))
+        self._sock.listen(32)
+        self.port = self._sock.getsockname()[1]
+        self.path = broker_file(agent_dir)
+        tmp = "{}.{}.tmp".format(self.path, os.getpid())
+        with open(tmp, "w", encoding="utf-8") as fh:
+            json.dump({"port": self.port, "token": self._token, "pid": os.getpid()}, fh)
+        try:
+            os.chmod(tmp, 0o600)
+        except OSError:
+            pass
+        os.replace(tmp, self.path)
+
+    def start(self) -> "BatchBroker":
+        threading.Thread(target=self._accept, daemon=True, name="batch-broker").start()
+        return self
+
+    def close(self) -> None:
+        try:
+            self._sock.close()
+        finally:
+            try:
+                os.remove(self.path)
+            except OSError:
+                pass
+
+    def _accept(self) -> None:
+        while True:
+            try:
+                conn, _ = self._sock.accept()
+            except OSError:
+                return
+            threading.Thread(target=self._serve, args=(conn,), daemon=True, name="batch-broker-call").start()
+
+    def _serve(self, conn) -> None:
+        with conn:
+            try:
+                req = json.loads(_read_line(conn))
+                if req.get("token") != self._token:
+                    raise PermissionError("wrong broker token")
+                out = {"answer": self._batcher.run(req["call"])}
+            except Exception as exc:  # noqa: BLE001 — the caller re-raises it as the same class
+                out = {"error": {"type": type(exc).__name__, "message": str(exc),
+                                 "payload": getattr(exc, "payload", None)}}
+            try:
+                conn.sendall((json.dumps(out, default=str) + "\n").encode("utf-8"))
+            except OSError as exc:
+                self._log("batch broker: could not answer a call ({})".format(exc))
+
+
+def _read_line(conn) -> str:
+    buf = b""
+    while not buf.endswith(b"\n"):
+        chunk = conn.recv(65536)
+        if not chunk:
+            break
+        buf += chunk
+    return buf.decode("utf-8")
+
+
+class RemoteBatcher:
+    """`run(call)` through the session's broker, so this server's calls join the other server's batch; the
+    local batcher when there is no broker (or it cannot be reached)."""
+
+    def __init__(self, agent_dir: str, local: "PlatformBatcher", log: Callable[[str], None] = lambda _m: None):
+        self._agent_dir = agent_dir
+        self._local = local
+        self._log = log
+
+    def _broker(self) -> Optional[Dict[str, Any]]:
+        try:
+            with open(broker_file(self._agent_dir), "r", encoding="utf-8") as fh:
+                data = json.load(fh)
+            return data if isinstance(data, dict) and data.get("port") and data.get("token") else None
+        except (OSError, ValueError):
+            return None
+
+    def run(self, call: Dict[str, Any]) -> Any:
+        import socket
+        b = self._broker()
+        if b is None:
+            return self._local.run(call)
+        try:
+            conn = socket.create_connection(("127.0.0.1", int(b["port"])), timeout=2)
+        except OSError as exc:
+            self._log("batch broker unreachable ({}); this server batches alone".format(exc))
+            return self._local.run(call)
+        with conn:
+            conn.settimeout(None)  # a call runs as long as the platform takes
+            conn.sendall((json.dumps({"token": b["token"], "call": call}) + "\n").encode("utf-8"))
+            out = json.loads(_read_line(conn) or "{}")
+        if "answer" in out:
+            return out["answer"]
+        err = out.get("error") or {"type": "RuntimeError", "message": "the batch broker answered nothing"}
+        cls = _ERRORS.get(err.get("type"))
+        if cls is None:
+            raise RuntimeError("{}: {}".format(err.get("type"), err.get("message")))
+        try:
+            exc = cls(err.get("message"), err.get("payload")) if err.get("payload") is not None else cls(err.get("message"))
+        except TypeError:
+            exc = cls(err.get("message"))
+        raise exc

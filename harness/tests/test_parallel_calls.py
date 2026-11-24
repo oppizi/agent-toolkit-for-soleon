@@ -406,3 +406,62 @@ def test_split_batch_answers_a_whole_batch_failure_to_every_call():
     assert par.split_batch(err, 3) == [err, err, err]
     bad = par.split_batch(_done([{"tool": "a"}]), 2)
     assert [a["error"] for a in bad] == ["batch_result_malformed"] * 2
+
+
+# --- the session's broker: the file server's calls join the agent server's batch ---
+
+class _FakeBatcher:
+    def __init__(self, answer=None, error=None):
+        self.calls, self.answer, self.error = [], answer, error
+
+    def run(self, call):
+        self.calls.append(call)
+        if self.error is not None:
+            raise self.error
+        return dict(self.answer or {}, name=call["name"])
+
+
+def test_the_file_servers_calls_reach_the_agent_servers_batcher(tmp_path):
+    host = _FakeBatcher(answer={"state": "done"})
+    broker = par.BatchBroker(str(tmp_path), host).start()
+    try:
+        local = _FakeBatcher(answer={"state": "local"})
+        remote = par.RemoteBatcher(str(tmp_path), local)
+        assert remote.run(_call("write_file")) == {"state": "done", "name": "write_file"}
+        assert [c["name"] for c in host.calls] == ["write_file"] and local.calls == []
+    finally:
+        broker.close()
+    assert not os.path.exists(par.broker_file(str(tmp_path)))
+
+
+def test_a_broker_error_is_raised_as_the_same_kind_on_the_file_server(tmp_path):
+    par.register_errors(client_mod.ToolError, client_mod.TransportError)
+    broker = par.BatchBroker(str(tmp_path), _FakeBatcher(error=client_mod.ToolError("refused", {"error": "x"}))).start()
+    try:
+        with pytest.raises(client_mod.ToolError) as exc:
+            par.RemoteBatcher(str(tmp_path), _FakeBatcher()).run(_call("write_file"))
+        assert "refused" in str(exc.value) and exc.value.payload == {"error": "x"}
+    finally:
+        broker.close()
+
+
+def test_without_a_broker_the_file_server_batches_alone(tmp_path):
+    local = _FakeBatcher(answer={"state": "local"})
+    assert par.RemoteBatcher(str(tmp_path), local).run(_call("read_file"))["state"] == "local"
+    # an announcement left by a server that is gone: the call still runs, here
+    with open(par.broker_file(str(tmp_path)), "w") as fh:
+        json.dump({"port": 1, "token": "x"}, fh)
+    assert par.RemoteBatcher(str(tmp_path), local).run(_call("read_file"))["state"] == "local"
+
+
+def test_the_broker_serves_only_the_token_holder(tmp_path):
+    import socket
+    host = _FakeBatcher(answer={"state": "done"})
+    broker = par.BatchBroker(str(tmp_path), host).start()
+    try:
+        with socket.create_connection(("127.0.0.1", broker.port), timeout=2) as conn:
+            conn.sendall((json.dumps({"token": "wrong", "call": _call("write_file")}) + "\n").encode())
+            out = json.loads(par._read_line(conn))
+        assert out["error"]["type"] == "PermissionError" and host.calls == []
+    finally:
+        broker.close()

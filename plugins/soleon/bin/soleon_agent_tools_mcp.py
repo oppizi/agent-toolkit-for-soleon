@@ -1272,6 +1272,7 @@ class AgentToolsServer:
         #: The step's platform calls go to Soleon as one request, which runs
         #: them together in one turn (soleon_parallel.PlatformBatcher).
         self._batcher = soleon_parallel.PlatformBatcher(self._send_one, self._send_batch, log=_log)
+        soleon_parallel.register_errors(MissingTokenError, AuthError, ToolError, TransportError)
 
     def _follow(self, envelope: Any, what: str) -> Any:
         """A platform answer followed to its end (pending -> done / error)."""
@@ -1726,9 +1727,19 @@ def main(argv: Optional[List[str]] = None) -> int:
                               extraction_path=os.path.join(agent_dir, EXTRACTION_FILE),
                               agent_dir=agent_dir, background=background)
     _log("serving {} external tool(s) for {} via {}".format(len(server.published), args.slug, client.server_url))
+    # The agent's own server hosts the session's batch broker: the workspace server's platform calls join
+    # this server's batch, so one step's calls from both servers are one request (soleon_parallel.py).
+    broker = None
+    if own_server:
+        try:
+            broker = soleon_parallel.BatchBroker(agent_dir, server._batcher, log=_log).start()
+        except OSError as exc:
+            _log("no batch broker ({}); the workspace server batches its own calls".format(exc))
     try:
         serve(server)
     finally:
+        if broker is not None:
+            broker.close()
         if background is not None:
             background.close()  # nothing outlives the server
     return 0
