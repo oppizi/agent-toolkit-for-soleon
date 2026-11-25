@@ -131,8 +131,11 @@ soleon-plugins/
 │       └── skills/          the skills listed above
 ├── preflight/               frozen correctness oracle (schema fixture + contract doc)
 ├── harness/                 validator, tests and generators; never ships
-├── samples/, transcripts/,  identity files and recorded runs from the deploy-agent
-│   runs/                    prototype, kept as test fixtures
+├── samples/, transcripts/,  experiment records from the deploy-agent prototype
+│   runs/, runs.jsonl        (identity files, elicit answers, logged runs); the
+│                            plugin may not reference them
+├── .agents/, skills-lock.json  three skills from mattpocock/skills installed for
+│                            working on this repo, and their lock file
 └── docs/                    the public docs page (GitHub Pages)
 ```
 
