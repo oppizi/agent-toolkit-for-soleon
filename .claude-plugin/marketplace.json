@@ -1,7 +1,7 @@
 {
   "name": "agent-toolkit-for-soleon",
   "owner": {
-    "name": "Oppizi — Soleon Headless Toolkit"
+    "name": "Soleon"
   },
   "plugins": [
     {
