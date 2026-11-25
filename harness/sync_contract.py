@@ -175,7 +175,7 @@ def extract(repo_root: Path) -> dict:
         "contract_version": CONTRACT_VERSION,
         "engine_version": ENGINE_VERSION,
         "source": {
-            "repo": "oppizi/agent-infra",
+            "repo": "soleon-ai/soleon",
             "files": [
                 "lambda/ui_admin/index.py",
                 "lambda/ui_admin_agents/index.py",

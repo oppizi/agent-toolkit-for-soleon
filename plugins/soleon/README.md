@@ -374,11 +374,11 @@ from your keychain and can be deleted.
 From the GitHub marketplace:
 
 ```
-/plugin marketplace add oppizi/agent-toolkit-for-soleon
+/plugin marketplace add soleon-ai/agent-toolkit-for-soleon
 /plugin install soleon@agent-toolkit-for-soleon
 ```
 
-Or from a local checkout of [oppizi/agent-toolkit-for-soleon](https://github.com/oppizi/agent-toolkit-for-soleon):
+Or from a local checkout of [soleon-ai/agent-toolkit-for-soleon](https://github.com/soleon-ai/agent-toolkit-for-soleon):
 
 ```
 /plugin marketplace add ./agent-toolkit-for-soleon

@@ -129,14 +129,14 @@ made by hand with the same token is refused.
 From the GitHub marketplace (recommended):
 
 ```
-/plugin marketplace add oppizi/agent-toolkit-for-soleon
+/plugin marketplace add soleon-ai/agent-toolkit-for-soleon
 /plugin install soleon@agent-toolkit-for-soleon
 ```
 
 Or from a local clone:
 
 ```
-git clone https://github.com/oppizi/agent-toolkit-for-soleon.git
+git clone https://github.com/soleon-ai/agent-toolkit-for-soleon.git
 /plugin marketplace add ./agent-toolkit-for-soleon
 /plugin install soleon@agent-toolkit-for-soleon
 ```
