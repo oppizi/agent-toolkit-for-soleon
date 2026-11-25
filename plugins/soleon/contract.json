@@ -129,7 +129,7 @@
       "scripts/agent_manager/registry.py",
       "shared_keys.py"
     ],
-    "repo": "oppizi/agent-infra"
+    "repo": "soleon-ai/soleon"
   },
   "tool_upstream_override_types": [
     "read",

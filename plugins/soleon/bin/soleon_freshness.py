@@ -48,7 +48,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 #: The published plugin manifest (the repo is public: no token is sent).
-LATEST_URL = ("https://raw.githubusercontent.com/oppizi/agent-toolkit-for-soleon/"
+LATEST_URL = ("https://raw.githubusercontent.com/soleon-ai/agent-toolkit-for-soleon/"
               "main/plugins/soleon/.claude-plugin/plugin.json")
 MARKETPLACE = "agent-toolkit-for-soleon"
 LATEST_CACHE_S = 3600.0
