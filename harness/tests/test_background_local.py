@@ -138,6 +138,26 @@ def test_run_in_background_refuses_an_unknown_tool(tmp_path):
     bg.close()
 
 
+def test_run_in_background_takes_the_prefixed_name_claude_code_calls_the_tool_by(tmp_path):
+    """The routing section tells the agent this server's tools are `mcp__soleon-agent-tools__<name>`, and
+    run_in_background's own description says "exactly as you would call it". Refusing the prefixed name made
+    the agent write its first background build out twice (flyer-builder r42/r43, 2026-11-25)."""
+    code_tool = {"name": "write_and_run_code", "description": "Run code.", "kind": "external",
+                 "inputSchema": {"type": "object", "properties": {"code": {"type": "string"}}}}
+    server, bg, _, _ = _server(tmp_path, tools=[code_tool])
+    ran = []
+    server._call = lambda n, a: (ran.append((n, a)), {"content": [{"type": "text", "text": "built"}]})[1]
+    out = server.call(bgm.RUN_TOOL, {"tool": "mcp__soleon-agent-tools__write_and_run_code",
+                                     "arguments": {"code": "print(1)"}})
+    assert not out.get("isError") and _text(out).startswith("Started in the background as bg_1")
+    assert _until(lambda: bg._calls["bg_1"].done)
+    assert ran == [("write_and_run_code", {"code": "print(1)"})]
+    # Another server's prefix is not this server's tool.
+    other = server.call(bgm.RUN_TOOL, {"tool": "mcp__soleon-workspace__read_file", "arguments": {}})
+    assert other.get("isError") and "is not one of your tools" in _text(other)
+    bg.close()
+
+
 def test_the_open_calls_are_written_for_the_stop_hook_and_removed_on_close(tmp_path):
     server, bg, gate, _ = _server(tmp_path)
     server.call("subagent_research", {"task": "x"})

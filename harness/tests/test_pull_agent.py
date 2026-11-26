@@ -189,6 +189,22 @@ def test_spawn_worker_is_routed_locally_when_the_workers_dial_is_on(tmp_path, di
     assert "`mcp__soleon-agent-tools__write_and_run_code`" in routing
 
 
+def test_the_background_tools_are_routed_locally_never_listed_as_missing(tmp_path):
+    """The platform's prompt names run_in_background, wait_for_background and stop_background, and the
+    agent's own local tool server always serves them. Listing them under "Not available locally" contradicted
+    the skill's "every build in the background" and the agent built in the foreground (flyer-builder r41/r44,
+    2026-11-25)."""
+    (tmp_path / "config.json").write_text(json.dumps({"loop": {}}))
+    names = ["web_search", "run_in_background", "wait_for_background", "stop_background", "emit_plan"]
+    routing = pull_agent.routing_section("Demo", SLUG, [{"name": "web_search", "kind": "external"}], tmp_path,
+                                         names, [], [])
+    ext_line = next(l for l in routing.splitlines() if "**External tools**" in l)
+    missing_line = next((l for l in routing.splitlines() if "**Not available locally**" in l), "")
+    for name in ("run_in_background", "wait_for_background", "stop_background"):
+        assert f"`{name}`" in ext_line and f"`{name}`" not in missing_line
+    assert "`emit_plan`" in missing_line  # a tool the local server does not serve stays listed
+
+
 def test_helper_subagents_and_workflows(pulled):
     root, agent_dir, summary = pulled
     agents = root / ".claude" / "agents"
