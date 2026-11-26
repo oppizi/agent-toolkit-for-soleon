@@ -215,7 +215,7 @@ def test_plugin_manifest_and_discovery_surface():
 
 def test_root_marketplace_lists_the_plugin():
     """The ROOT manifest is the distribution surface — `/plugin marketplace add
-    soleon-ai/soleon-plugins` resolves it.
+    soleon-ai/agent-toolkit-for-soleon` resolves it.
 
     A nested `plugins/*/.claude-plugin/marketplace.json` must stay deleted: it would
     declare the SAME marketplace name as this one.
