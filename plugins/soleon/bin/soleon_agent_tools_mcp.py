@@ -1421,6 +1421,12 @@ class AgentToolsServer:
                                 "for {}, call {}.".format(args["background_id"], soleon_background.WAIT_TOOL), True)
         if mine and name == soleon_background.RUN_TOOL:
             inner, inner_args = args.get("tool"), args.get("arguments")
+            # Claude Code names this server's tools `mcp__soleon-agent-tools__<name>`, and the routing section
+            # tells the agent to call them so; a prefixed name here is the same tool. Refusing it made the agent
+            # write its first background build out twice (flyer-builder r42/r43, 2026-11-25: 10-17 s lost).
+            prefix = "mcp__{}__".format(SERVER_INFO["name"])
+            if isinstance(inner, str) and inner.startswith(prefix):
+                inner = inner[len(prefix):]
             usable = sorted(t["name"] for t in self.published if t["name"] not in soleon_background.TOOL_NAMES
                             and t["name"] != READ_RESULT_PAGE_TOOL["name"])
             if not isinstance(inner, str) or inner not in usable:

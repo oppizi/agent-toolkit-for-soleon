@@ -413,6 +413,13 @@ def routing_section(display_name: str, slug: str, tools: List[Dict[str, Any]], a
     if workers_enabled(str(agent_dir)):
         known.add("spawn_worker")
         external = sorted(set(external) | {"spawn_worker"})
+    # run_in_background, wait_for_background and stop_background are loop tools as well: the platform's prompt
+    # names them and the agent's own local tool server always serves them (soleon_background.py). Listing them
+    # as "not available locally" contradicted a skill that says to build in the background, and the agent
+    # built in the foreground (flyer-builder r41/r44, 2026-11-25).
+    import soleon_background  # bin/ is on sys.path, as above
+    known |= soleon_background.TOOL_NAMES
+    external = sorted(set(external) | soleon_background.TOOL_NAMES)
     known_sanitized = {_sanitized_tool_name(n) for n in known}
     missing = sorted(n for n in (prompt_tool_names or [])
                      if n not in known and _sanitized_tool_name(n) not in known_sanitized)

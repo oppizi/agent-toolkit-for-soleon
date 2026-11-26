@@ -354,7 +354,9 @@ TOOLS = [
         "background id; the result comes with a later tool call. Helpers and workflows always run in the "
         "background already, so do not use this for them."),
      "inputSchema": {"type": "object", "properties": {
-         "tool": {"type": "string", "description": "The tool's name, exactly as you would call it."},
+         "tool": {"type": "string", "description": (
+             "The tool's name, exactly as you would call it (with or without its mcp__soleon-agent-tools__ "
+             "prefix).")},
          "arguments": {"type": "object", "description": "The tool's arguments."}},
          "required": ["tool", "arguments"]}},
 ]
