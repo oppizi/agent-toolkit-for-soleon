@@ -1,4 +1,4 @@
-# Soleon plugins
+# agent-toolkit-for-soleon
 
 Bring Soleon into your coding agent. This repository publishes
 the `soleon` plugin: a connection to the Soleon server plus a set of skills for
@@ -20,22 +20,17 @@ that write Claude Code subagents) is not here yet.
 From GitHub:
 
 ```
-/plugin marketplace add soleon-ai/soleon-plugins
+/plugin marketplace add soleon-ai/agent-toolkit-for-soleon
 /plugin install soleon@agent-toolkit-for-soleon
 ```
 
 Or from a local clone:
 
 ```
-git clone https://github.com/soleon-ai/soleon-plugins.git
-/plugin marketplace add ./soleon-plugins
+git clone https://github.com/soleon-ai/agent-toolkit-for-soleon.git
+/plugin marketplace add ./agent-toolkit-for-soleon
 /plugin install soleon@agent-toolkit-for-soleon
 ```
-
-`agent-toolkit-for-soleon` is the marketplace's name. It is the repository's
-earlier name, kept on purpose: it is part of every installed plugin's id
-(`soleon@agent-toolkit-for-soleon`), so changing it would make everyone reinstall
-and sign in again.
 
 Sign-in is OAuth: the first request opens the flow in your browser (or run
 `claude mcp login`). There is no token to paste.
@@ -113,7 +108,7 @@ Full usage, escape hatches and troubleshooting:
 ## Repository layout
 
 ```
-soleon-plugins/
+agent-toolkit-for-soleon/
 ├── .claude-plugin/          marketplace manifest (lists the one plugin)
 ├── plugins/
 │   ├── scope_pin.json       generated scope pin + sha256, vendored from the platform
