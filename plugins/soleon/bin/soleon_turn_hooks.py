@@ -104,7 +104,17 @@ def agent_dir_of(hook: Dict[str, Any]) -> Optional[Path]:
 # start
 # ---------------------------------------------------------------------------
 
-def start(hook: Dict[str, Any], now=None) -> int:
+def sent_at_line(when: Optional[datetime] = None) -> str:
+    """The platform's ``Sent at:`` line, exactly as maverick writes it at the top of every user message
+    (`maverick/utils/helpers.py::current_time_str`): local time, weekday, zone and UTC offset."""
+    now = (when or datetime.now(timezone.utc)).astimezone()
+    offset = now.strftime("%z")
+    offset_fmt = "{}:{}".format(offset[:3], offset[3:]) if len(offset) == 5 else offset
+    tz_name = time.strftime("%Z") or "UTC"
+    return "Sent at: {} ({}, UTC{})".format(now.strftime("%Y-%m-%d %H:%M (%A)"), tz_name, offset_fmt)
+
+
+def start(hook: Dict[str, Any], now=None, out=None) -> int:
     agent_dir = agent_dir_of(hook)
     if agent_dir is None:
         return EXIT_OK
@@ -114,6 +124,14 @@ def start(hook: Dict[str, Any], now=None) -> int:
         (agent_dir / TURN_FILE_NAME).write_text(json.dumps(record), encoding="utf-8")
     except OSError as exc:
         _stderr("soleon: could not write the turn file: {}".format(exc))
+    # On Soleon every user message opens with a "Sent at:" line, and agents rely on it: the code tool's
+    # request_id takes its time, a skill names a job's folder by it. A local run had no such line, so the agent
+    # guessed a time or made digits up, which repeat from one run to the next (flyer-builder 2026-11-27: three
+    # builds refused as "Request ID already belongs to different code or scope"). Give the subagent the same
+    # line before its first prompt (SubagentStart additionalContext reaches the subagent's own context).
+    (out or sys.stdout).write(json.dumps({"hookSpecificOutput": {
+        "hookEventName": "SubagentStart",
+        "additionalContext": sent_at_line(datetime.fromtimestamp(now(), timezone.utc))}}) + "\n")
     return EXIT_OK
 
 

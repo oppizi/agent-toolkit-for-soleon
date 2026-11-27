@@ -141,6 +141,19 @@ def test_start_writes_the_turn_file_only_for_a_pulled_agent(tmp_path):
     assert hooks.main(["bogus"], stream=io.StringIO("{}")) == 2
 
 
+def test_start_gives_a_pulled_agent_the_platforms_sent_at_line(tmp_path, capsys):
+    """On Soleon every user message opens with "Sent at: <time>"; the code tool's request_id and skills rely on it.
+    A local run without it made times and digits up, and its builds were refused as reused ids (flyer-builder,
+    2026-11-27). The SubagentStart hook gives the subagent the same line; any other subagent gets nothing."""
+    agent_dir = _pulled(tmp_path)
+    assert hooks.main(["start"], stream=io.StringIO(json.dumps(_hook(agent_dir)))) == 0
+    out = json.loads(capsys.readouterr().out.strip().splitlines()[-1])["hookSpecificOutput"]
+    assert out["hookEventName"] == "SubagentStart"
+    assert re.fullmatch(r"Sent at: \d{4}-\d{2}-\d{2} \d{2}:\d{2} \(\w+day\) \(.+, UTC[+-]\d{2}:\d{2}\)", out["additionalContext"])
+    assert hooks.main(["start"], stream=io.StringIO(json.dumps(_hook(agent_dir, agent_type="code-reviewer")))) == 0
+    assert capsys.readouterr().out == ""
+
+
 def test_stop_records_the_turn_under_the_hooks_turn_id_and_conversation(tmp_path, capsys):
     agent_dir = _pulled(tmp_path)
     (agent_dir / ".local-turn.json").write_text(json.dumps(
