@@ -1565,7 +1565,7 @@ class AgentToolsServer:
             feed = soleon_activity.current()
             if feed is None or not isinstance(envelope, dict) or envelope.get("state") not in ("done", "error"):
                 return
-            if soleon_activity.live_activity_of(envelope) is None:
+            if soleon_activity.live_activity_of(envelope) == "off":
                 return
             feed.add(platform_name, entry, soleon_activity.saved_files_of(envelope), self.turn.current() or "",
                      args=args)
