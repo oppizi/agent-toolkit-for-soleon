@@ -153,6 +153,7 @@ _PLAIN_DETAIL = {
     "web_search": "Searching the web",
     "web_fetch": "Reading a site",
     "browser_navigate": "Opening a page",
+    "browser_screenshot": "Taking a screenshot of the page",
     "read_file": "Reading a file",
     "read_skill": "Reading a skill",
     "write_file": "Saving a file",

@@ -222,6 +222,10 @@ def test_a_calls_detail_follows_the_platforms_rules(tool, args, expected):
     assert activity.detail_for(tool, args) == expected
 
 
+def test_every_detail_tool_has_its_plain_line():
+    assert set(activity._PLAIN_DETAIL) == set(activity.DETAIL_TOOLS)
+
+
 @pytest.mark.parametrize("tool,url,expected", [
     # The platform's security cases (agent-infra #3832): no path secret, no login.
     ("web_fetch", "https://hooks.slack.com/" + "/".join(["services", "T0FAKETEAM", "B0FAKEHOOK", "x" * 24]),
