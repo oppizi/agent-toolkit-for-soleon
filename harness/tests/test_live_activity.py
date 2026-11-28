@@ -205,7 +205,15 @@ def test_without_a_feed_a_call_is_unchanged(tmp_path, monkeypatch):
     ("run_code_file", {"path": "skills/x/engine/flyer_builder.py"}, "Running flyer_builder.py"),
     # A saved script runs by its id, which nobody may see (the platform's rule, 2026-11-28).
     ("run_code_file", {"file": "scr_f996423e0d74fb90094ee04e"}, "Running a saved script"),
+    ("run_code_file", {"path": "C:\\work\\scripts\\scr_f996423e0d74fb90094ee04e"}, "Running a saved script"),
     ("run_code_file", {"file": "scr_f996"}, "Running scr_f996"),
+    # Any other line holding an id-shaped token says the tool's plain line, as on the platform.
+    ("run_code_file", {"file": "scr_f996423e0d74fb90094ee04e.py"}, "Running a script"),
+    ("run_code_file", {"path": "engine/build_deadbeef.py"}, "Running a script"),
+    ("write_file", {"path": "out/out_20261128.json"}, "Saving a file"),
+    ("attach_file", {"path": "x/img_a1b2c3d4.png"}, "Handing over a file"),
+    ("read_file", {"name": "scr_f996423e0d74fb90094ee04e"}, "Reading a file"),
+    ("web_search", {"query": "status of job_0123456789ab"}, "Searching the web"),
     ("attach_file", {"path": "out/a-front.svg", "filename": "a-front.svg"}, "Handing over a-front.svg"),
     ("spawn_worker", {"task": "secret plan"}, None),
     ("web_search", {}, None),

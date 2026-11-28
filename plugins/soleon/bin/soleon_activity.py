@@ -142,8 +142,25 @@ _IMAGE_EXT = re.compile(r"\.(jpe?g|png|webp|gif|avif|svg)$")
 _FONT_EXT = re.compile(r"\.(ttf|otf|woff2?)$")
 _HOST_RE = re.compile(r"^[a-z0-9.-]{1,80}(:\d{1,5})?$")
 _PLAIN_SEGMENT = re.compile(r"^[A-Za-z0-9._~-]{1,40}$")
-#: A saved script's id on the platform (``scr_`` + 24 hex).
-_SAVED_SCRIPT_ID = re.compile(r"^scr_[0-9a-f]{24}$")
+#: A saved script's id on the platform (``scr_`` + 24 hex; mirrors agent-infra's
+#: ``saved_scripts.SCRIPT_ID_RE``).
+_SAVED_SCRIPT_ID = re.compile(r"^scr_[0-9a-f]{24}\Z")
+#: An id-shaped token (mirrors agent-infra's ``live_activity._ID_IN_TEXT``, which
+#: is the router's ``_SERVER_ID_IN_TEXT_RE``). The platform never shows a line
+#: holding one, so a detail that would hold one says the tool's plain line.
+_ID_IN_TEXT = re.compile(r"\b([a-z]{1,6}_[0-9a-f]{6,32})(_read|_write)?\b")
+_PLAIN_DETAIL = {
+    "web_search": "Searching the web",
+    "web_fetch": "Reading a site",
+    "browser_navigate": "Opening a page",
+    "read_file": "Reading a file",
+    "read_skill": "Reading a skill",
+    "write_file": "Saving a file",
+    "edit_file": "Saving a file",
+    "write_and_run_code": "Running code",
+    "run_code_file": "Running a script",
+    "attach_file": "Handing over a file",
+}
 DETAIL_MAX = 100
 #: The built-in tools these rules were written for (their arguments' meaning
 #: is the platform's own). An integration's tool never gets a detail, even
@@ -255,7 +272,10 @@ def detail_for(tool: str, args: dict) -> str | None:
         out = f"Handing over {_leaf(a.get('filename') or a['path'])}"
     if not out:
         return None
-    return re.sub(r"\s+", " ", _clean(out)).strip()[:DETAIL_MAX] or None
+    out = re.sub(r"\s+", " ", _clean(out)).strip()[:DETAIL_MAX]
+    if _ID_IN_TEXT.search(out):
+        out = _PLAIN_DETAIL.get(t, "")
+    return out or None
 
 
 def _safe(name: str) -> str:
