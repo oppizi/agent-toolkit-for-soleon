@@ -203,6 +203,9 @@ def test_without_a_feed_a_call_is_unchanged(tmp_path, monkeypatch):
     ("write_and_run_code", {"request_id": "flyer/build-two-options", "code": "print(1)"},
      "Running code: build two options"),
     ("run_code_file", {"path": "skills/x/engine/flyer_builder.py"}, "Running flyer_builder.py"),
+    # A saved script runs by its id, which nobody may see (the platform's rule, 2026-11-28).
+    ("run_code_file", {"file": "scr_f996423e0d74fb90094ee04e"}, "Running a saved script"),
+    ("run_code_file", {"file": "scr_f996"}, "Running scr_f996"),
     ("attach_file", {"path": "out/a-front.svg", "filename": "a-front.svg"}, "Handing over a-front.svg"),
     ("spawn_worker", {"task": "secret plan"}, None),
     ("web_search", {}, None),

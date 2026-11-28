@@ -142,6 +142,8 @@ _IMAGE_EXT = re.compile(r"\.(jpe?g|png|webp|gif|avif|svg)$")
 _FONT_EXT = re.compile(r"\.(ttf|otf|woff2?)$")
 _HOST_RE = re.compile(r"^[a-z0-9.-]{1,80}(:\d{1,5})?$")
 _PLAIN_SEGMENT = re.compile(r"^[A-Za-z0-9._~-]{1,40}$")
+#: A saved script's id on the platform (``scr_`` + 24 hex).
+_SAVED_SCRIPT_ID = re.compile(r"^scr_[0-9a-f]{24}$")
 DETAIL_MAX = 100
 #: The built-in tools these rules were written for (their arguments' meaning
 #: is the platform's own). An integration's tool never gets a detail, even
@@ -245,7 +247,10 @@ def detail_for(tool: str, args: dict) -> str | None:
         what = _leaf(a.get("request_id")).replace("-", " ").replace("_", " ").strip()
         out = f"Running code: {what}" if what else "Running code"
     elif t == "run_code_file" and (a.get("path") or a.get("file")):
-        out = f"Running {_leaf(a.get('path') or a.get('file'))}"
+        leaf = _leaf(a.get("path") or a.get("file"))
+        # A saved script is named by its id (``scr_`` + 24 hex), which no person
+        # may see; the platform's line is "Running a saved script" too.
+        out = "Running a saved script" if _SAVED_SCRIPT_ID.match(leaf) else f"Running {leaf}"
     elif t == "attach_file" and a.get("path"):
         out = f"Handing over {_leaf(a.get('filename') or a['path'])}"
     if not out:
