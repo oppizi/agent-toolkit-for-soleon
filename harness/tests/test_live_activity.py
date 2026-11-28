@@ -117,7 +117,7 @@ def test_a_platform_call_adds_its_entry_without_waiting(tmp_path, monkeypatch):
     feed = activity.Feed(s, opener=_opener())
     monkeypatch.setattr(activity, "current", lambda: feed)
     tools = [{"name": "write_file", "kind": "external", "description": "", "inputSchema": {"type": "object"}}]
-    envelope = {"state": "done", "result": {"tool": "write_file", "result": "ok",
+    envelope = {"state": "done", "result": {"tool": "write_file", "result": "ok", "liveActivity": "steps_and_files",
                                             "savedFiles": [_saved("studio/t1/001.json", ctype="application/json")]}}
     server = shim.AgentToolsServer(SLUG, tools, _Client(envelope))
     out = server.call("write_file", {"path": "studio/t1/001.json", "content": "{}"})
@@ -125,6 +125,58 @@ def test_a_platform_call_adds_its_entry_without_waiting(tmp_path, monkeypatch):
     feed.flush()
     (line,) = [json.loads(x) for x in Path(s["feed"]).read_text(encoding="utf-8").splitlines()]
     assert line["tool"] == "write_file" and [f["path"] for f in line["files"]] == ["studio/t1/001.json"]
+
+
+def test_with_the_agents_live_activity_off_the_feed_gets_nothing(tmp_path, monkeypatch):
+    """The setting is the agent's: Soleon names it on the reply, and a reply
+    that says Off writes no line, whatever the app asked for."""
+    s = _spec(tmp_path)
+    feed = activity.Feed(s, opener=_opener())
+    monkeypatch.setattr(activity, "current", lambda: feed)
+    tools = [{"name": "write_file", "kind": "external", "description": "", "inputSchema": {"type": "object"}}]
+    envelope = {"state": "done", "result": {"tool": "write_file", "result": "ok", "liveActivity": "off",
+                                            "savedFiles": [_saved("a.json", ctype="application/json")]}}
+    shim.AgentToolsServer(SLUG, tools, _Client(envelope)).call("write_file", {"path": "a", "content": "x"})
+    feed.flush()
+    assert not Path(s["feed"]).exists()
+
+
+def test_a_platform_that_predates_the_setting_still_gets_its_line(tmp_path, monkeypatch):
+    """A reply that does not name the setting comes from a platform without it
+    (every call got a line there): unchanged until that platform takes it."""
+    s = _spec(tmp_path)
+    feed = activity.Feed(s, opener=_opener())
+    monkeypatch.setattr(activity, "current", lambda: feed)
+    tools = [{"name": "write_file", "kind": "external", "description": "", "inputSchema": {"type": "object"}}]
+    envelope = {"state": "done", "result": {"tool": "write_file", "result": "ok"}}
+    shim.AgentToolsServer(SLUG, tools, _Client(envelope)).call("write_file", {"path": "a", "content": "x"})
+    feed.flush()
+    assert len(Path(s["feed"]).read_text(encoding="utf-8").splitlines()) == 1
+
+
+def test_steps_writes_the_line_without_files(tmp_path, monkeypatch):
+    s = _spec(tmp_path)
+    feed = activity.Feed(s, opener=_opener())
+    monkeypatch.setattr(activity, "current", lambda: feed)
+    tools = [{"name": "web_search", "kind": "external", "description": "", "inputSchema": {"type": "object"}}]
+    envelope = {"state": "done", "result": {"tool": "web_search", "result": "ok", "liveActivity": "steps"}}
+    shim.AgentToolsServer(SLUG, tools, _Client(envelope)).call("web_search", {"query": "car wash"})
+    feed.flush()
+    (line,) = [json.loads(x) for x in Path(s["feed"]).read_text(encoding="utf-8").splitlines()]
+    assert line["files"] == [] and line["detail"] == "Searching “car wash”"
+
+
+@pytest.mark.parametrize("envelope,expected", [
+    ({"state": "done", "result": {"liveActivity": "steps"}}, "steps"),
+    ({"state": "done", "result": {"liveActivity": "steps_and_files"}}, "steps_and_files"),
+    ({"state": "done", "liveActivity": "steps"}, "steps"),
+    ({"state": "done", "result": {"liveActivity": "off"}}, "off"),
+    ({"state": "done", "result": {"liveActivity": "loud"}}, "off"),
+    ({"state": "done", "result": {"result": 1}}, None),
+    ("text", None),
+])
+def test_the_setting_is_read_from_the_reply(envelope, expected):
+    assert activity.live_activity_of(envelope) == expected
 
 
 def test_without_a_feed_a_call_is_unchanged(tmp_path, monkeypatch):

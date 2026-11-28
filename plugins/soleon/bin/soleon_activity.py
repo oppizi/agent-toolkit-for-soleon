@@ -21,10 +21,16 @@ feed instead of linked:
      "files": [{"filename": "001.json", "path": "studio/t1/001.json", "mime_type": "application/json",
                 "size": 120, "local_path": "/path/run-1-files/0001/001.json"}]}
 
-The files are the ones the platform says the call saved (`savedFiles` on its
-reply, each with a short download link). Nothing runs on the agent's path:
-the reply goes back to the agent at once and a background thread writes the
-feed. Without SOLEON_ACTIVITY nothing is written.
+Whether a call gets a line is the AGENT's Live activity setting, which
+Soleon reports on each reply (`liveActivity`); with it Off nothing is
+written, as on Soleon, where the setting decides on every channel (a
+platform that predates the setting names none, and every call gets a line
+there, as before). The files
+are the ones the platform says the call saved that the setting shows
+(`savedFiles` on its reply, each with a short download link). Nothing runs on
+the agent's path: the reply goes back to the agent at once and a background
+thread writes the feed. Without SOLEON_ACTIVITY nothing is written: the
+variable names where the app reads the feed, and may narrow the file types.
 """
 from __future__ import annotations
 
@@ -371,6 +377,25 @@ def current() -> Optional[Feed]:
                 return None
             _feed = Feed(s)
         return _feed
+
+
+def live_activity_of(envelope: Any) -> Optional[str]:
+    """The agent's Live activity setting as Soleon reports it on a
+    `call_agent_tool` reply (`liveActivity`: `off`, `steps` or
+    `steps_and_files`; an unknown value reads as `off`), or None when the
+    reply does not name it: a platform that predates the setting, where every
+    call got a line (it lists only the files the app asked for). The setting
+    is the agent's, the same on every channel: with it Off, the app's feed
+    gets nothing, as on Soleon."""
+    if not isinstance(envelope, dict):
+        return None
+    result = envelope.get("result")
+    mode = result.get("liveActivity") if isinstance(result, dict) else None
+    if mode is None:
+        mode = envelope.get("liveActivity")
+    if mode is None:
+        return None
+    return mode if mode in ("steps", "steps_and_files") else "off"
 
 
 def saved_files_of(envelope: Any) -> List[Dict[str, Any]]:

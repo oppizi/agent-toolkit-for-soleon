@@ -1556,12 +1556,16 @@ class AgentToolsServer:
     def _record_activity(self, platform_name: str, entry: Dict[str, Any], envelope: Any,
                          args: Optional[Dict[str, Any]] = None) -> None:
         """Live activity (soleon_activity.py): when the app that started this
-        run asked for it, the finished call and the files it saved go to the
-        app's feed, on a background thread. Never fails or slows the call."""
+        run names a feed and the agent's Live activity setting is on (Soleon
+        says so on the reply), the finished call and the files it saved that
+        the setting shows go to the app's feed, on a background thread. Never
+        fails or slows the call."""
         import soleon_activity
         try:
             feed = soleon_activity.current()
             if feed is None or not isinstance(envelope, dict) or envelope.get("state") not in ("done", "error"):
+                return
+            if soleon_activity.live_activity_of(envelope) == "off":
                 return
             feed.add(platform_name, entry, soleon_activity.saved_files_of(envelope), self.turn.current() or "",
                      args=args)
